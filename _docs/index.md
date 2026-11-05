@@ -40,6 +40,7 @@ By file. Add project manifests here.
 | `AGENTS.md` | Instructions agents read first | Current |
 | `_docs/specs.md` | The product specification (problem, users, journeys, requirements, scope, invariants) | Current |
 | `_docs/planning/spec-readiness.md` | The gate the spec must pass before a backlog is built from it | Current |
+| `_docs/planning/lovable-guidance.md` | How to generate and import the frontend base with Lovable | Current |
 | `pyproject.toml` | Python project metadata and dependencies | Current |
 | `uv.lock` | Resolved dependency versions | Current |
 | `Makefile` | Project commands | Current |
