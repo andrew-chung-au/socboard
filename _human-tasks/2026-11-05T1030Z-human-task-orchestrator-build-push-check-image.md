@@ -45,13 +45,13 @@ AGENT_PUSH_CHECK_PLAN=1 git push
 
 Expected: the push check prints what it would check and runs nothing.
 
-## Record the result
+## Record the result (Recorded: 05/11/2026)
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | | |
-| 2 | | |
-| 3 | | |
+| 1 | Pass | |
+| 2 | Pass | |
+| 3 | Pass | |
 
 ## Risk
 

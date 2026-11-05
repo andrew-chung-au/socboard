@@ -20,3 +20,8 @@ The record format for permission requests an agent tool asks the human to approv
 **Tested against:** written from the type declarations of `@opencode-ai/plugin` 1.19.0; no real session has run it yet (the human's OpenCode is 2.2.5). Open: do subagent prompts appear (extra `sessionID` values), and does the log show which session is a subagent? Answer here after the first real session.
 
 **Hand check at each OpenCode upgrade** (the kit has no Node check): allow one command (one `ask`, one `reply` with `once`); reject one (`reject`); run one holding an API-key-shaped string (the line holds none of it). The prompt must still appear, the decision unchanged.
+
+e.g.:
+- Allow once: touch .scratch/hand-check-allowed
+- Key-shaped: echo sk-testtesttesttesttesttest — the sk- + 20+ alphanumerics matches sk-[A-Za-z0-9]{20,} in _docs/agent-kit/scripts/secret-patterns.txt. Use a fake string like this, never a real credential.
+- Reject: touch .scratch/hand-check-rejected
