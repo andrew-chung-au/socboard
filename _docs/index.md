@@ -38,6 +38,8 @@ By file. Add project manifests here.
 |---|---|---|
 | `README.md` | What SOCBoard is and how to run it | Current |
 | `AGENTS.md` | Instructions agents read first | Current |
+| `_docs/specs.md` | The product specification (problem, users, journeys, requirements, scope, invariants) | Current |
+| `_docs/planning/spec-readiness.md` | The gate the spec must pass before a backlog is built from it | Current |
 | `pyproject.toml` | Python project metadata and dependencies | Current |
 | `uv.lock` | Resolved dependency versions | Current |
 | `Makefile` | Project commands | Current |
