@@ -45,6 +45,18 @@ Blocked transitions, such as closing a New alert without investigating it, retur
 - The audit trail for a case can be read in order, start to finish.
 - Alert text is untrusted input: it is escaped when shown and never treated as instructions.
 
+## Development
+
+Requires Python 3.12, uv and make. From the project folder:
+
+```sh
+make install   # create the virtual environment and install dependencies
+make test      # run the pytest suite
+make verify    # run tests, whitespace and weakened-test checks
+```
+
+The web application is not built yet, so there is no `make run` target.
+
 ## Currently Out of Scope
 
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
