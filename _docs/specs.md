@@ -59,7 +59,7 @@ Each story is a tracker issue; acceptance criteria are written on the issue. Pri
 
 These are the product invariants; agents must keep them (they also appear in `AGENTS.md`):
 
-- A new alert appears in the queue within the target latency with a severity. *(Target: set and record the number N when the queue is built; default 5s.)*
+- A new alert appears in the queue within **5 seconds (N = 5s)** with a severity. The client polls the queue every **3 seconds** (configurable via env var); with ingest + rule scoring taking milliseconds, worst-case visible latency is the poll interval plus processing, comfortably under N. N = 5s is both the product SLO and the threshold the observability alert fires on, so it is chosen with headroom rather than as a best case.
 - An alert has **at most one owner** at a time.
 - Closing a case **requires a reason**.
 - The audit trail for a case can be read **in order**, start to finish.
