@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 .scratch/
+.agent-kit/logs/
 .venv/
 __pycache__/
 *.py[cod]
