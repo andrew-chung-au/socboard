@@ -12,8 +12,9 @@ This file exists because the sandbox can't create issues directly. Once issues a
 **Acceptance criteria:**
 - [ ] Human has approved `_docs/decisions/20261105T133030Z-stack-choice.md` (or recorded a different choice).
 - [ ] `backend/` (FastAPI) and `frontend/` (React+TS) skeletons exist; backend serves a health endpoint.
+- [ ] The `frontend/` base is the Lovable output, imported per `_docs/planning/lovable-guidance.md` (cloned from Lovable's own repo and copied in without its `.git`), with backend calls behind one mock service layer and no Supabase/Lovable-Cloud backend.
 - [ ] `make run` starts the stack locally; `make test` runs an empty-but-green suite.
-**Constraints:** No business logic yet. Stay inside the approved stack. Don't add a DB engine beyond SQLite without a new decision.
+**Constraints:** No business logic yet. Stay inside the approved stack. Don't add a DB engine beyond SQLite without a new decision. Follow `_docs/planning/lovable-guidance.md` for generating and importing the frontend.
 
 ## 2. Data model + migrations
 **Why:** Every later feature reads/writes the same entities; the audit trail and single-owner rule depend on the shape being right first.
@@ -59,7 +60,8 @@ This file exists because the sandbox can't create issues directly. Once issues a
 **Goal:** A sorted, polling queue of open alerts.
 **Acceptance criteria:**
 - [ ] `GET /queue` returns open cases sorted by severity (highest first) then age (oldest first).
-- [ ] The UI lists the queue and refreshes by polling; a newly ingested alert appears within the target latency N (set N here and in the spec; default 5s).
+- [ ] The UI lists the queue and refreshes by polling every 3s (interval configurable via env var); a newly ingested alert appears within N = 5s (see spec §5).
+- [ ] Ingest-to-visible latency is measurable in-app (timestamp at ingest and at queue serve) so it can be charted and alerted on later, not inferred from poll timing.
 - [ ] Alert text renders escaped/inert (closes the XSS case from #4).
 - [ ] Each row shows severity, type, asset, age, and owner (or unclaimed).
 **Constraints:** Polling, not WebSockets (see decision record). Keep the poll interval configurable.
