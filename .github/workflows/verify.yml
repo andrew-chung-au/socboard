@@ -1,49 +1,24 @@
-# Blueprint: CI backstop that runs the verification gate on every push.
-# The only layer an agent can't bypass with --no-verify. Optional; add when the
-# human asks for it (see blueprints.md).
-#
-# Where it goes: <repo root>/.github/workflows/<project>-verify.yml.
-# GitHub only reads workflows from .github/ at the repository root, never from a
-# project subfolder.
-#
-# Fill in the placeholders. For a standalone repo (project at the root), delete
-# the two `paths:` filters and set working-directory to "."
-# Untested until its first run on GitHub: check the Actions tab after pushing.
+# CI backstop: runs the verification gate on every push. Standalone repo.
+name: socboard verify
 
-name: <project> verify
-
-# Keep both safety settings: the job's token can only read the repo, and the
-# job uses no secrets (never add ${{ secrets.... }}), so a malicious test has
-# nothing useful to take.
 permissions:
   contents: read
 
 on:
   push:
-    paths: ['<project folder>/**']
   pull_request:
-    paths: ['<project folder>/**']
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: <project folder>
     steps:
-      - uses: actions/checkout@v4 # check for the current major version
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history, so verify can diff against the pushed range
+          fetch-depth: 0
 
-      # <Stack setup steps for this project, for example:>
-      # - uses: astral-sh/setup-uv@v6
-      #   with:
-      #     version: "0.13.6" # same uv as the dev container recipe's setup.sh
-      # - uses: oven-sh/setup-bun@v2
-      # - uses: actions/setup-node@v4
-      #   with:
-      #     node-version: "24.22.0" # same Node as the dev container recipe's feature
-      # The pins and the action majors are unverified: check them before use.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
 
       - run: make install
 
