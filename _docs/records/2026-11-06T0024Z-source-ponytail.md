@@ -7,7 +7,8 @@ One file per external input: a dataset, third-party API, vendor doc, standard or
 - **Why included or excluded:** Included as the subject of the trial in `_docs/decisions/2026-11-06T0024Z-ponytail-trial.md`. Only its skill files are to be vendored, at this pin. Its plugins are excluded.
 - **Known quirks:**
   - *Read directly:* README, INSTALL.md, `docs/agent-portability.md`, `skills/ponytail/SKILL.md`, `.kiro/steering/ponytail.md`, `hooks/claude-codex-hooks.json`.
-  - *Not read:* the `ponytail-review`, `-audit`, `-debt`, `-gain` and `-help` skill files, the OpenCode plugin code, the Node hook scripts, and the benchmark method files. Check that `ponytail-review` is self-contained before vendoring it.
+  - *Not read:* the `-audit`, `-debt`, `-gain` and `-help` skill files, the OpenCode plugin code, the Node hook scripts, and the benchmark method files.
+  - *`ponytail-review`:* its description and opening sections were read, and its folder was checked: one self-contained file with no references to other files. Its description matches requests such as "code review", so, like the core skill, it must not sit in a folder tools discover while control issues run.
   - *Benchmark figures* (roughly half the code, more risky logic tested) are the vendor's own, from Claude Code on one model family. They are unverified here and not assumed to transfer.
   - *Auto-trigger:* the core skill's description invites loading on any coding task. We vendor it verbatim, so scoping relies on our own rule, not on editing the file.
   - *Kiro:* upstream ships an always-on steering file with no commands or levels. We use a skill, or manual-inclusion steering as a fallback.
