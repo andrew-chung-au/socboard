@@ -101,4 +101,4 @@ Outline: the question; the method as registered; what happened, with deviations 
 
 ## Amendments
 
-None.
+1. **2026-11-06, before any data.** The `trial:ponytail` label in section 9 must not be put on control issues. Labels are visible to the Engineer, so it would prime them and defeat the unprimed-control rule in section 3. Apply it only to plumbing issues and treated issues, or not at all. Nothing else changes.

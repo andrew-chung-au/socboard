@@ -95,3 +95,6 @@ permission-logs-prune: ## Delete permission logs older than DAYS days (the human
 	@python3 -B _docs/agent-kit/scripts/permission-logs-prune.py "$$DAYS"
 
 # --- Project targets (this project's own; add below) -------------------------
+
+decisions: ## List the decision records with their Status word (proposed, approved or superseded)
+	@for f in _docs/decisions/*.md; do s=$$(grep -m1 -i -o 'status: [a-z]*' "$$f" | cut -d' ' -f2); printf '%-11s %s  (%s)\n' "$${s:-MISSING}" "$$(head -n 1 "$$f" | sed 's/^# //')" "$$(basename "$$f")"; done
