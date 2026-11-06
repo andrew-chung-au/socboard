@@ -129,7 +129,7 @@ To change the body after approval, the human confirms it in this session, record
 ## Commits and pushes
 
 - Small, focused commits at logical milestones; messages say what changed and why.
-- Attribution comes from the tool's settings (see Commit attribution in `blueprints.md`). Agents don't add their own co-author lines.
+- Every agent commit ends with one `Assisted-by: <Tool>` line (see Commit attribution in `blueprints.md`). Agents add no co-author line with an email address and no model name. <!-- local deviation: _docs/decisions/2026-11-06T0111Z-commit-attribution.md -->
 - Staging, protected files and hooks follow `_docs/agent-kit/team/software-engineer.md#commits` and the hook line in `AGENTS.md`.
 - **Only the human pushes.** Before pushing, the human reads `git diff origin/main --stat -- .`, then the full diff, and asks about any changed file outside the issue's Constraints. A clean QA report is not proof of a clean diff. The pre-push hook then runs **Verify**. In the local sandbox profile, the human does all of this from the clean clone, and the push check runs **Verify** instead (`environments.md`).
 

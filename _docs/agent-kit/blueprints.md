@@ -67,7 +67,7 @@ What a project using this kit should have, when each piece applies, and how to c
 | Tool-native enforcement for other tools | The human wants hard enforcement in a tool without a layer | That tool's own config folder | Not in the kit; see README |
 | Tool permission allow-list | The human's tool asks for approval on routine commands | That tool's own settings file | See Tool permissions below |
 | Role definitions | The human's tool can define named subagents, and the orchestrator launches roles as subagents | That tool's agents folder, for example `.claude/agents/` | See Role definitions below |
-| Commit attribution | The human's tool adds attribution to commits or pull requests | That tool's own settings file | See Commit attribution below |
+| Commit attribution | An AI agent commits to the project | The agent's commit message; optionally the tool's settings file | See Commit attribution below |
 | Known environment issues | An environment problem (firewall, disk, Docker, ports) needed the human's fix in an earlier issue | A "Known environment issues" section in the project README | See below |
 
 ## Notes on specific blueprints
@@ -145,7 +145,7 @@ For Claude Code and OpenCode, the layers provide all three: see `claude-code/STA
 
 ## Commit attribution
 
-Mark AI-assisted commits with one plain line naming the tool, for example "Generated with Claude Code". Leave out co-author lines with an email address and model versions: the address may not be one you'd choose, and both go stale.
+Mark AI-assisted commits with one plain line naming the tool, so a commit's tool can be read from git. The agent writes it as the last line of the commit message: `Assisted-by: <Tool>`, for example `Assisted-by: OpenCode`. Leave out co-author lines with an email address and model versions: the address may not be one you'd choose, and both go stale. Record the model in the session summary's launch usage line instead. A tool setting may add a line of its own as well, such as the Claude Code block below; an extra line is harmless. <!-- local deviation: _docs/decisions/2026-11-06T0111Z-commit-attribution.md -->
 
 In Claude Code, the layer's `settings.json` already includes this block. To apply it to every project instead, put it in the human's user settings:
 
@@ -159,4 +159,4 @@ In Claude Code, the layer's `settings.json` already includes this block. To appl
 }
 ```
 
-`"pr": ""` adds nothing to pull request descriptions, and `"sessionUrl": false` leaves out the session link. For other tools, check their documentation for an equivalent setting, and create it only for tools the human uses.
+`"pr": ""` adds nothing to pull request descriptions, and `"sessionUrl": false` leaves out the session link. For other tools a setting is optional, because the agent writes the line itself; add one only if the human wants the tool to add its own as well.
