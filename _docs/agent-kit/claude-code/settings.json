@@ -77,7 +77,7 @@
     ]
   },
   "attribution": {
-    "commit": "Generated with Claude Code",
+    "commit": "Assisted-by: Claude Code",
     "pr": "",
     "sessionUrl": false
   }

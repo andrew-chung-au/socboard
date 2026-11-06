@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-git-trailers"],
   "permission": {
     "read": {
       "*": "allow",
