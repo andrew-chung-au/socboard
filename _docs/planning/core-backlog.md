@@ -59,7 +59,7 @@ This file exists because the sandbox can't create issues directly. Once issues a
 **Why:** The queue is the analyst's main surface and the "appears within N seconds" behavior lives here.
 **Goal:** A sorted, polling queue of open alerts.
 **Acceptance criteria:**
-- [ ] `GET /queue` returns open cases sorted by severity (highest first) then age (oldest first).
+- [ ] `GET /queue` returns open cases sorted by severity (highest first) then age (oldest first), then case id as an explicit tiebreak, so SQLite and Postgres return the same order.
 - [ ] The UI lists the queue and refreshes by polling every 3s (interval configurable via env var); a newly ingested alert appears within N = 5s (see spec §5).
 - [ ] Ingest-to-visible latency is measurable in-app (timestamp at ingest and at queue serve) so it can be charted and alerted on later, not inferred from poll timing.
 - [ ] Alert text renders escaped/inert (closes the XSS case from #4).
@@ -71,6 +71,7 @@ This file exists because the sandbox can't create issues directly. Once issues a
 **Goal:** An analyst claims an open case and becomes its sole owner.
 **Acceptance criteria:**
 - [ ] `POST /cases/{id}/claim` sets `current_owner` to the caller only if currently unowned; a second claim is refused with a clear error.
+- [ ] The claim is one conditional update (`... WHERE current_owner IS NULL`), not a read then a write; a test with two concurrent claims shows exactly one wins, so the rule holds on Postgres as well as SQLite.
 - [ ] Claiming writes an assignment row and an audit entry (`claimed`).
 - [ ] The queue/case view reflects the owner immediately after the next poll.
 **Constraints:** One owner at a time is enforced server-side, not just in the UI.

@@ -39,7 +39,7 @@ Blocked transitions, such as closing a New alert without investigating it, retur
 
 ## Expected behavior
 
-- A new alert appears in the queue within [N] seconds with a severity.
+- A new alert appears in the queue within 5 seconds with a severity.
 - An alert can have only one owner at a time.
 - Closing a case requires a reason.
 - The audit trail for a case can be read in order, start to finish.
