@@ -25,7 +25,7 @@ Write Pass once decided, and name the option in the note.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Decide | | |
+| Decide | Pass | Option 1: `_docs/vendor/ponytail/`, with one row added to `_docs/index.md` when the file is vendored. Human approved the recommendation 2026-11-09. |
 
 ## Risk
 

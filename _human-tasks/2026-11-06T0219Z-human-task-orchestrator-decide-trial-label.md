@@ -23,7 +23,7 @@ Write Pass once decided, and name the option in the note. If you choose option 1
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Decide | | |
+| Decide | Pass | Option 2: no label. Human decided 2026-11-09: simpler, and control issues stay unprimed. |
 
 ## Risk
 
