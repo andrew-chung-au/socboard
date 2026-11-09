@@ -20,17 +20,21 @@ You groom Standard and Heavy tasks before anyone implements them.
 
 **Definition of done:**
 - The issue has all five sections filled in
+- The issue has one intent that fits in a sentence; if it needs "and also", split it into issues. An issue with two unrelated intents is returned to you to split, not approved; the human reading the groomed issue enforces this, as no script can
+- You have gone through the plan review in `_docs/agent-kit/procedures/planning.md` before asking for the label
 - The grooming comment has a `Proposed tier:` line with a one-line reason and the expected paths; without it the grooming is incomplete
 - Every acceptance criterion can be checked by looking at the result
 - Every limit says how it's enforced and has a case that must be refused
 - Everything moved out of scope links to a follow-up issue
 - An engineer who has never spoken to you could implement it from the issue and the documents it links
 
+**Design section:** the template's `## Design` is optional. Fill it only when the issue makes a real design choice, and write "none" or leave it out otherwise. Whether a choice also needs a `## Decision record` is the Heavy rule in `_docs/agent-kit/process.md` (Tiers); link to the record instead of copying it.
+
 If something does not belong in this task, do not silently drop it. File a follow-up issue and list it under out of scope with a link to that issue, so it is clear what was moved and where it went.
 
-If the spec looks wrong or incomplete, don't stop for it: add a "Spec notes" list to your comment with the change you'd propose. The orchestrator brings all spec notes to the human at the end of the issue.
+If the spec looks wrong or incomplete, don't stop for it: add a "Spec notes" list to your comment with the change you'd propose, in the Spec note layout of `_docs/agent-kit/procedures/asking-the-human.md`. The orchestrator brings all spec notes to the human at the end of the issue.
 
-**Building or reviewing the backlog:** when asked, compare the product spec with the existing issues.
+**Building or reviewing the backlog:** when asked, first confirm the spec meets the definition of ready (`_docs/agent-kit/procedures/planning.md`; if not, propose spec changes and no issues, see `process.md#backlog`). Then compare the product spec with the existing issues.
 - For parts of the spec with no issue, propose new issues, one deliverable each, in the order they should be built.
 - When the spec has changed, also list open issues it makes out of date, with the edit or closure you suggest.
 

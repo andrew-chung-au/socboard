@@ -50,7 +50,7 @@ issue-hash: ## Print an issue body's sha256, author and owner check: make issue-
 issue-dump: ## Write an issue as JSON to .scratch/issue-<N>.json: make issue-dump N=<issue number>
 	$(if $(call issue-number-ok,$(value N)),,$(error Usage: make issue-dump N=<issue number>))
 	@mkdir -p .scratch
-	@if gh issue view "$(N)" --json number,title,body,state,labels,author,comments > ".scratch/issue-$(N).json.tmp" 2>/dev/null && python3 -B -m json.tool ".scratch/issue-$(N).json.tmp" > /dev/null 2>&1; then mv ".scratch/issue-$(N).json.tmp" ".scratch/issue-$(N).json" && echo ".scratch/issue-$(N).json"; else rm -f ".scratch/issue-$(N).json.tmp"; echo "issue-dump: gh could not return valid JSON for issue $(N)" >&2; exit 1; fi
+	@if python3 -B _docs/agent-kit/scripts/github_api.py dump "$(N)" > ".scratch/issue-$(N).json.tmp" 2>/dev/null && python3 -B -m json.tool ".scratch/issue-$(N).json.tmp" > /dev/null 2>&1; then mv ".scratch/issue-$(N).json.tmp" ".scratch/issue-$(N).json" && echo ".scratch/issue-$(N).json"; else rm -f ".scratch/issue-$(N).json.tmp"; echo "issue-dump: gh could not return valid JSON for issue $(N)" >&2; exit 1; fi
 
 sweep-due: ## Say whether a sweep is due (read-only; the sweep interval is set in the script)
 	@python3 -B _docs/agent-kit/scripts/sweep-due.py
@@ -73,6 +73,11 @@ kit-compare: ## List how one kit folder differs from another (read-only, no defa
 	$(if $(call kit-root-ok,$(value KIT_A)),,$(error Usage: make kit-compare KIT_A=<folder> KIT_B=<folder> - each one word, a relative path with letters digits . _ / - only))
 	$(if $(call kit-root-ok,$(value KIT_B)),,$(error Usage: make kit-compare KIT_A=<folder> KIT_B=<folder> - each one word, a relative path with letters digits . _ / - only))
 	@python3 -B _docs/agent-kit/scripts/kit-compare.py "$$KIT_A" "$$KIT_B"
+
+kit-baseline: ## Find the commit of a clone of the kit repo that a live kit with no manifest was copied from (read-only): make kit-baseline KIT=<live kit folder> SOURCE=<clone folder>
+	$(if $(call kit-root-ok,$(value KIT)),,$(error Usage: make kit-baseline KIT=<live kit folder> SOURCE=<clone folder> - each one word, a relative path with letters digits . _ / - only))
+	$(if $(call kit-root-ok,$(value SOURCE)),,$(error Usage: make kit-baseline KIT=<live kit folder> SOURCE=<clone folder> - each one word, a relative path with letters digits . _ / - only))
+	@python3 -B _docs/agent-kit/scripts/kit-baseline.py "$$KIT" "$$SOURCE"
 
 # A plain relative path: one word of letters, digits, . _ / - only, no $ and no "..".
 # Reuses kit-other-chars and kit-other-strip above (no .scratch/ requirement here).

@@ -1,4 +1,4 @@
-// Permission log: an observe-only OpenCode plugin from the agent kit.
+// Permission log: an observe-only OpenCode 2.x (V2 plugin API) plugin from the agent kit. Not for OpenCode 1.x.
 // It appends one JSON line per permission request and reply to
 // .agent-kit/logs/permissions/YYYY-MM-DD.jsonl in the project folder.
 // Record format, limits and what is never logged: procedures/permission-log.md.
@@ -11,6 +11,8 @@ import path from "node:path"
 const CAP = 1048576 // bytes per daily file
 const MAX_PATTERN = 200 // characters, after redaction
 const NO_PATTERNS = "[redacted: no patterns]"
+const MIN_WAIT = 1000 // ms before resubscribing after the event stream ends
+const MAX_WAIT = 300000 // ms: the cap while streams keep ending with nothing
 const NEAR = 4096 // bytes: a marker can only follow a file this close to CAP (a record is far smaller)
 const capped = new Set() // files that hold the truncated marker
 const looked = new Set() // files whose tail this process has already checked for the marker
@@ -49,24 +51,21 @@ function redact(root, value) {
 }
 
 // Only whitelisted fields are ever copied. Returns null for events that are not permission events.
+// A V2 event is an envelope { id, created, type, location, data }; the payload is in `data`.
 function toRecord(event) {
   const name = event && event.type
   if (typeof name !== "string" || !name.startsWith("permission.")) return null
-  const p = event.properties || {}
+  const data = event.data || {}
   const time = new Date().toISOString()
-  const asked = name === "permission.asked" // permission.updated is the older shape of the same request
-  if (asked || name === "permission.updated") {
-    const kind = asked ? p.permission : p.type
-    const patterns = [].concat((asked ? p.patterns : p.pattern) ?? []).filter((x) => typeof x === "string")
-    if (typeof p.id === "string" && typeof p.sessionID === "string" && typeof kind === "string") {
-      return { event: "ask", tool: "opencode", time, sessionID: text(p.sessionID), id: text(p.id), type: text(kind), pattern: patterns.join(" "), source: name }
+  if (name === "permission.asked") {
+    const resources = [].concat(data.resources ?? []).filter((x) => typeof x === "string")
+    if (typeof data.id === "string" && typeof data.sessionID === "string" && typeof data.action === "string") {
+      return { event: "ask", tool: "opencode", time, sessionID: text(data.sessionID), id: text(data.id), type: text(data.action), pattern: resources.join(" "), source: name }
     }
   }
   if (name === "permission.replied") {
-    const id = p.requestID ?? p.permissionID
-    const response = p.reply ?? p.response
-    if (typeof p.sessionID === "string" && typeof id === "string" && typeof response === "string") {
-      return { event: "reply", tool: "opencode", time, sessionID: text(p.sessionID), id: text(id), response: text(response, 20), source: name }
+    if (typeof data.sessionID === "string" && typeof data.requestID === "string" && typeof data.reply === "string") {
+      return { event: "reply", tool: "opencode", time, sessionID: text(data.sessionID), id: text(data.requestID), response: text(data.reply, 20), source: name }
     }
   }
   return { event: "unknown", tool: "opencode", time, source: text(name) } // the name only, never the payload
@@ -102,30 +101,48 @@ function append(root, record) {
   }
 }
 
-export const PermissionLog = async ({ client, directory }) => {
-  const root = directory || process.cwd()
-  let warned = false
-  const warn = (message) =>
-    Promise.resolve()
-      .then(() => client.app.log({ body: { service: "permission-log", level: "warn", message } }))
-      .catch(() => {})
-  return {
-    event: async ({ event }) => {
+export default {
+  id: "agent-kit.permission-log",
+  setup(ctx) {
+    const root = (ctx.location && ctx.location.directory) || process.cwd()
+    const controller = new AbortController()
+    const handle = (event) => {
       try {
         const record = toRecord(event)
         if (!record) return
         if (record.event === "ask") {
           const clean = redact(root, record.pattern)
           record.pattern = clean === null ? NO_PATTERNS : clean
-          if (clean === null && !warned) {
-            warned = true
-            await warn("secret-patterns.txt could not be read, so patterns are logged as redacted")
-          }
         }
         append(root, record)
-      } catch (error) {
-        await warn("permission-log failed: " + text(String((error && error.message) || error)))
+      } catch {
+        // observe-only: never affect the session. V2 has no log sink for plugins, so a failure drops the record silently.
       }
-    },
-  }
+    }
+    const wait = (ms) => new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); controller.signal.removeEventListener("abort", done); resolve() }
+      const timer = setTimeout(done, ms)
+      controller.signal.addEventListener("abort", done, { once: true })
+    })
+    // Resubscribe when the stream ends, one attempt per wait; the wait doubles while streams bring nothing.
+    void (async () => {
+      let delay = MIN_WAIT
+      while (!controller.signal.aborted) {
+        let got = false
+        try {
+          for await (const event of ctx.event.subscribe({ types: ["permission.asked", "permission.replied"], signal: controller.signal })) {
+            got = true
+            handle(event)
+          }
+        } catch {
+          // the stream failed; try again below unless the plugin is unloading
+        }
+        if (controller.signal.aborted) break
+        if (got) delay = MIN_WAIT
+        await wait(delay)
+        delay = Math.min(delay * 2, MAX_WAIT)
+      }
+    })()
+    return () => controller.abort()
+  },
 }

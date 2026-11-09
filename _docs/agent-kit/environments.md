@@ -28,7 +28,18 @@ The codespace's own token can push to the repo, so nothing technical stops an ag
 
 ## Local sandbox
 
-The agent works in a dev container with a GitHub token that can't push, in its own clone of the repo. You review its commits from a second, clean clone that is never opened in the container, and push from there. The guide that sets this up lives outside the kit. The kit supplies reference copies of its files in `environments/local-sandbox/`:
+The agent works in a dev container with a GitHub token that can't push, in its own clone of the repo. You review its commits from a second, clean clone that is never opened in the container, and push from there. The guide that sets this up lives outside the kit.
+
+One script does the local part of the setup for you. Run it on your machine from a plain folder (one that is not inside any git work tree, for example `~/projects`), using a clean clone of the kit:
+
+```
+cd ~/projects
+bash ~/projects/agent-kit/agent-kit/scripts/bootstrap-project.sh https://github.com/<you>/<your-repo>.git
+```
+
+It creates `<repo>` and `<repo>-sandbox` side by side in that folder, adds the `sandbox` remote, installs the push check to `~/.agent-hooks/pre-push` and the clean clone's `.git/hooks/pre-push` (unsetting `core.hooksPath` first if it is set), and copies the kit to `_docs/agent-kit/`, `devcontainer.json` and `setup.sh` to `.devcontainer/`, and the CI template to `.github/workflows/verify.yml`. A sandbox is an ordinary clone with no marker of its own, so the script refuses to run anywhere inside a git work tree, which covers every sandbox and clean clone. It also refuses a kit that is not a git clone, has uncommitted changes, or whose `HEAD` is on no reviewed remote branch, so neither an agent's unsaved edits nor its committed but unpushed sandbox commits are copied. Branches of the `sandbox` remote never count, because `git fetch sandbox` is the review flow and brings unreviewed agent commits into the clean clone; nor does any remote whose URL is a local working clone (a folder with a `.git` inside), whatever its name. The check reads the refs from your last fetch: if your own clean clone is refused, check out the reviewed commit (for example `origin/main`), or run `git fetch` in it and retry. It can't tell a pushed but unreviewed commit from a reviewed one; your review before pushing is that gate. Only the kit's git-tracked files are copied, so an ignored file in the kit clone (a stray `.env`, caches) never lands in the project. A non-git folder that already has the clean or sandbox name is refused before anything is cloned. It prints each file it writes and stops at local files: it never pushes, and it leaves the git identity in `setup.sh` as a placeholder for you to fill in. A re-run changes nothing, and files you edited since (the identity in `setup.sh`, the CI placeholders, the copied kit) are kept, with a `kept` line and a diff hint; `--force` replaces them. The push check is always brought back in step with the kit. It is not a make target: at bootstrap time there is no Makefile, and `make` in a clean clone is forbidden. The rest of this section is what it does and why; to set a repo up by hand, do these steps yourself, always from a clean clone.
+
+The kit supplies reference copies of its files in `environments/local-sandbox/`:
 
 | File | Installed as | Notes |
 |---|---|---|
@@ -36,7 +47,7 @@ The agent works in a dev container with a GitHub token that can't push, in its o
 | `devcontainer.json`, `setup.sh` | `.devcontainer/` at the repo root | The container recipe for Python plus frontend projects: installs Node and uv at pinned versions, names the container after its folder, and `setup.sh` refuses to run in a clean clone. Fill in your name and noreply email in `setup.sh`. |
 | `templates/ci-verify.yml.template` | `.github/workflows/` at the repo root | CI with `permissions: contents: read` and no secrets |
 
-The recipe's Node, nvm and uv versions are pins nobody has verified against the release pages yet (Node `24.22.0`, nvm `0.40.8`, uv `0.13.6`, and the setup actions in the CI template). Keep uv at 0.13.4 or later: earlier versions bundle a TLS root that was withdrawn (GHSA-hq85-5cpj-mr62). Your first rebuild creates `.devcontainer/devcontainer-lock.json` with an entry for the Node feature; you commit that file in the project. An agent never writes it. A project with no frontend deletes the Node feature and the Node lines in `setup.sh`.
+The recipe's Node, nvm, uv and OpenCode versions are pins nobody has verified against the release pages yet (Node `24.22.0`, nvm `0.40.8`, uv `0.13.6`, OpenCode `2.2.5`, and the setup actions in the CI template). Keep uv at 0.13.4 or later: earlier versions bundle a TLS root that was withdrawn (GHSA-hq85-5cpj-mr62). OpenCode is pinned to the `2.x` version this project's sessions use. It installs from the v2 endpoint (`https://opencode.ai/v2/install`, which takes `--version`); the v1 installer at `https://opencode.ai/install` refuses 2.x. The OpenCode pin stays unverified until the first rebuild reports `opencode v2.2.5`. To bump any of these pins, edit the value in `setup.sh` next to the others (OpenCode in `opencode_version`); the recipe re-installs only when the running version differs. Your first rebuild creates `.devcontainer/devcontainer-lock.json` with an entry for the Node feature; you commit that file in the project. An agent never writes it. A project with no frontend deletes the Node feature and the Node lines in `setup.sh`.
 
 **Copy these files only from a clean clone, never from a sandbox.** An agent can change anything in its sandbox, including the kit.
 
@@ -80,6 +91,16 @@ With `AGENT_PUSH_CHECK_PLAN=1` the push check prints what it would check, runs n
 - **Open the clean clone in VS Code's Restricted Mode,** and don't let direnv or mise load settings there. `.vscode/tasks.json`, `.envrc` and `mise.toml` can run commands when a folder opens. The pre-commit hook asks for approval when an agent changes `.vscode/`, `.envrc` or `.gitmodules` at the repo root, but your review is what catches them.
 - **One Claude login volume per repo is safer.** The reference recipe shares one `claude-config` volume across all sandboxes, so an agent in one sandbox could change Claude settings that every other sandbox uses. Naming the volume `claude-config-${devcontainerId}` gives each repo its own; you then log in once per repo.
 - **Docker isn't available in the container.** A project whose checks need Docker can't run them there, and running them from Ubuntu would run agent code outside the sandbox. Either put that project in a codespace, or give it a Compose-based container recipe, so its services run as separate containers that the agent can reach but can't control (see "The Compose variant" below).
+- **Reopening fails with a `vscode-wayland` mount error (WSL 2 + Docker Desktop).** `docker start` fails before any build with `error mounting ... /tmp/vscode-wayland-<id>.sock ... no such file or directory`. Dev Containers baked a mount of the Wayland socket into the container, and that socket no longer exists (WSLg isn't running, or WSL restarted), so every reopen fails. This is VS Code and Docker Desktop behaviour, not a recipe defect, so the recipe is unchanged. Check, then fix, in the WSL shell:
+
+  ```
+  ls -l /run/user/$(id -u)/wayland-0              # "No such file or directory" confirms it
+  unset WAYLAND_DISPLAY && code --quit
+  docker ps -a --filter label=devcontainer.local_folder --format '{{.ID}}  {{.Label "devcontainer.local_folder"}}'
+  docker rm -f <ID>                               # the ID whose folder ends in <repo>-sandbox
+  ```
+
+  Docker names the container itself, so find it by the folder label rather than by name. Remove only the dev container, not a Compose service such as `db`. Nothing of yours is lost: the repo is a bind mount and the named volumes (the Claude login, and a Compose project's database volume) are separate and unaffected. Only tool installs inside the container go, and `setup.sh` reinstalls them when you reopen the sandbox. To stop it recurring, add `unset WAYLAND_DISPLAY` to `~/.bashrc`, or turn off `Dev > Containers: Mount Wayland Socket` where your VS Code version offers it; undo by removing the line or turning the setting back on. First reported 2026-11-05 (Docker Desktop 29.8.2, Dev Containers 0.469.0).
 
 ### The Compose variant (an app plus a database)
 
