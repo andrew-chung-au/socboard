@@ -66,7 +66,7 @@ Hooks and tool settings block broad staging, `--no-verify`, pushes, the tool's o
 - Before testing an injection or bypass attempt -> `_docs/agent-kit/process.md#lifecycle`.
 - Before calling work done or handing it over -> `_docs/agent-kit/process.md#definition-of-done`.
 - Before looking for any other project doc -> `_docs/index.md`.
-- Before building or reviewing the backlog from the spec -> `_docs/planning/spec-readiness.md`.
+- Before building or reviewing the backlog from the spec -> `_docs/agent-kit/procedures/planning.md#definition-of-ready`.
 
 <!-- SHARED END -->
 
@@ -77,4 +77,4 @@ Hooks and tool settings block broad staging, `--no-verify`, pushes, the tool's o
 - An alert has at most one owner at a time, and closing a case requires a closing reason.
 - The stack is decided in `_docs/decisions/20261105T133030Z-stack-choice.md`: FastAPI, SQLAlchemy on SQLite (Postgres for deployment) and a React + TypeScript frontend. Don't add a different framework or database without a new decision record.
 - `_docs/specs.md` is the product description; check it before changing severity rules or the case workflow. The README is the short public summary of it.
-- Don't build a backlog from the spec until it passes the readiness gate in `_docs/planning/spec-readiness.md`; if it fails, propose the spec changes first.
+- Don't build a backlog from the spec until it passes the definition of ready in `_docs/agent-kit/procedures/planning.md`; if it fails, propose the spec changes first.
