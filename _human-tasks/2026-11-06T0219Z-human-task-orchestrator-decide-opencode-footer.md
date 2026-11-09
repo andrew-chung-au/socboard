@@ -24,7 +24,7 @@ Write Pass once decided, and name the option in the note.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Decide | | |
+| Decide | Pass | Option 1: keep both lines. Human decided 2026-11-09: OpenCode's own footer is accepted on purpose and not suppressed. The opencode-git-trailers plugin was tried and dropped (it only appends trailers, it cannot remove the default footer); its line was removed from the kit config in 4f5365e. Step 2 of the commit-lines check still confirms what OpenCode really writes. |
 
 ## Risk
 
