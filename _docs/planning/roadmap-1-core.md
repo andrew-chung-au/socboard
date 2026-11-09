@@ -6,6 +6,7 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
 - **Goal:** A full-stack SOCBoard that ingests alerts, scores them by fixed rules, shows a live-updating queue, runs the claim→investigate→close workflow, and records an audit trail — running locally with one command.
 - **Tasks, in order** (file as tracker issues; numbers filled in when created):
   1. Approve stack choice (decision record) and scaffold backend + frontend skeleton.
+  1b. Complete the frontend base after the Lovable import: mock rule enforcement, hostile fixtures, frontend tests, `make` targets.
   2. Data model + migrations: alert, case/status, assignment, note, audit entry, users.
   3. Seeded minimal auth: Analyst and Lead accounts, bearer token.
   4. Ingest API: POST alert (source, type, asset, timestamp); escape untrusted text.
