@@ -136,6 +136,9 @@ Dense, calm operations-console UI; light and dark mode. Severity badges use text
 colour alone). Readable at laptop width; usable on a narrow screen. Clear empty, loading and error states.
 
 Spec excerpts follow (users, journeys, requirements, invariants):
+
+<<< REPLACE THIS LINE: paste §2 Users, §3 Primary journeys, §4 Requirements and §5 Expected
+behavior & invariants from _docs/specs.md here, then send the whole prompt. >>>
 ```
 
 ## After generating
