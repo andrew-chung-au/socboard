@@ -17,7 +17,7 @@ The core assumption to prove: a shared queue with consistent, rule-based severit
 ## 2. Users
 
 - **Analyst** — works the queue: claims alerts, adds notes, moves cases through the workflow.
-- **Lead** — reviews the queue, reassigns cases, and reads the audit trail.
+- **Lead** — reviews the queue, reassigns cases, and reads the audit trail; can also claim and work a case like an Analyst.
 
 Authentication is minimal: the system is seeded with two Analyst accounts and one Lead account (hashed passwords, bearer token). Two Analysts are needed to show single ownership (a second claim is refused) and reassignment. Source systems are not users: they authenticate ingest with a separate API key set by environment variable, so the public ingest endpoint cannot be filled by anyone. Identity matters because single-ownership, reassignment, and the audit trail ("who decided what") are only meaningful when the system knows who is acting.
 
@@ -43,14 +43,15 @@ Each story is a tracker issue; acceptance criteria are written on the issue. Pri
 - (Must) As an analyst, the queue reflects a new alert within the target latency (polling is acceptable).
 
 **Triage workflow**
-- (Must) As an analyst, I claim an open alert so I own it; an alert has at most one owner at a time. Claiming sets the owner only; moving the status is a separate, explicit step.
-- (Must) As an analyst, I add notes to a case I am working.
-- (Must) As an analyst, I move a case `New → Investigating → Closed`; closing requires a reason (true positive, false positive, or duplicate).
+- (Must) As an analyst or Lead, I claim an open alert so I own it; an alert has at most one owner at a time. Claiming sets the owner only; moving the status is a separate, explicit step.
+- (Must) As an analyst or Lead, I add notes to any open case, owned by me or not, so the team can share context; a note on a `Closed` case is refused.
+- (Must) As the case owner (or a Lead), I move a case `New → Investigating → Closed`; closing requires a reason (true positive, false positive, or duplicate). Anyone else's status change is refused.
 - (Must) As the system, I reject blocked transitions (e.g. closing a `New` alert) with a clear error — never silently allowed.
 - (Should) As a Lead, I reassign a claimed case to another analyst.
 
 **Audit**
 - (Must) As a Lead, I read a case's audit trail in order, start to finish: every status change, assignment, and note records who, what, and when.
+- (Must) As a Lead, I list closed cases (with their closing reason) separately from the open queue and open any of them, so a closed case's audit trail stays reachable.
 
 **Cross-cutting**
 - (Must, DevOps phase) As an operator, one key journey emits metrics, traces, and structured logs sharing a trace id, with no synthetic PII or credentials in telemetry. Detailed when that phase starts (Section 6).
