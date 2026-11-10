@@ -3,7 +3,7 @@
 <!-- PROJECT: specific to this folder. Protected: changes need human approval. -->
 
 SOCBoard: a web-based alert triage case manager for a security operations centre (SOC), built in Python 3.12 with uv and pytest.
-Layout: `socboard/` (application package), `tests/` (pytest), `pyproject.toml` and `uv.lock` (project metadata and locked dependencies), `Makefile` (commands), `_docs/` (project docs and the agent kit), `.devcontainer/` and `.github/` (local sandbox recipe and CI).
+Layout: `socboard/` (application package), `frontend/` (React + TypeScript frontend, imported from Lovable), `scripts/` (project scripts), `tests/` (pytest), `pyproject.toml` and `uv.lock` (project metadata and locked dependencies), `Makefile` (commands), `_docs/` (project docs and the agent kit), `.devcontainer/` and `.github/` (local sandbox recipe and CI).
 
 ## Commands
 
