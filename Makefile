@@ -130,3 +130,16 @@ kit-feedback: ## Write a read-only feedback bundle under .scratch/ from a projec
 
 decisions: ## List the decision records with their Status word (proposed, approved or superseded)
 	@for f in _docs/decisions/*.md; do s=$$(grep -m1 -i -o 'status: [a-z]*' "$$f" | cut -d' ' -f2); printf '%-11s %s  (%s)\n' "$${s:-MISSING}" "$$(head -n 1 "$$f" | sed 's/^# //')" "$$(basename "$$f")"; done
+
+# --- Frontend (issue #27) ----------------------------------------------------
+
+frontend-install: ## Install the frontend packages from frontend/bun.lock; fails if the lockfile would change
+	cd frontend && bun install --frozen-lockfile
+
+frontend-build: ## Build the frontend to static files in frontend/dist (mock off) and check the output
+	cd frontend && VITE_USE_MOCK=false bun run build
+	@test -f frontend/dist/index.html || { echo "frontend-build: frontend/dist/index.html is missing"; exit 1; }
+	@if [ -e frontend/.output ] || [ -e frontend/.wrangler ] || [ -n "$$(find frontend/dist \( -name server -o -name wrangler.json -o -name nitro.json -o -name '_worker.js' -o -name '*.mjs' \) -print -quit)" ]; then echo "frontend-build: server, worker or Nitro output found (a stale frontend/.output or frontend/.wrangler counts: remove it)"; exit 1; fi
+	@if grep -rIlE 'analyst-a-pass|analyst-b-pass|lead-pass|<script>alert\(' frontend/dist; then echo "frontend-build: a demo credential or hostile fixture is in the production build"; exit 1; fi
+	@if grep -rIlE 'fonts\.googleapis\.com|fonts\.gstatic\.com' frontend/dist; then echo "frontend-build: the build still mentions a Google fonts host"; exit 1; fi
+	@echo "frontend-build: frontend/dist has index.html, no server output, no demo data, no Google fonts host"
