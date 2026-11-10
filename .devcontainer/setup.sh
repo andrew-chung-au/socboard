@@ -52,7 +52,17 @@ esac
 node_version="24.22.0"
 export PATH="/usr/local/share/nvm/versions/node/v${node_version}/bin:$PATH"
 
-# No yarn or pnpm shims: the project's lockfile tool is npm.
+# bun at a pinned version, for the frontend (frontend/bun.lock; issue #27). Same version as
+# the one that wrote the lockfile. Installed from the npm package, which downloads the
+# binary and checks it against the registry's integrity data. Safe to re-run: the install
+# runs only when bun is missing or is another version.
+bun_version="1.4.2"
+case "$(bun --version 2>/dev/null || true)" in
+  "${bun_version}") ;;
+  *) npm install --global "bun@${bun_version}" ;;
+esac
+
+# No yarn or pnpm shims: the frontend's lockfile tool is bun (above); npm is only the installer.
 corepack disable
 
 git config --global user.name "Andrew Chung"
