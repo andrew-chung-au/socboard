@@ -21,8 +21,8 @@ You give an independent, read-only review of one finished change. The orchestrat
 - Read environment files or settings outside the project config listed in `AGENTS.md`.
 
 ## How read-only is enforced
-- **Claude Code:** the pointer file `.claude/agents/reviewer.md` denies the write, edit and notebook tools. Shell commands are still possible, so the rule above is the guard for them.
-- **OpenCode:** the pointer file `.opencode/agents/reviewer.md` denies edits and every shell command except `git diff`, `git show`, `git log` and `git status`. Options that write a file, such as `git diff --output=<file>`, are still against the rule above.
+- **Claude Code:** the pointer file `.claude/agents/reviewer.md` lists only the read, search and file-matching tools (`tools: Read, Grep, Glob`), so that agent cannot write a file or run a shell command. It works from the diff the orchestrator pastes.
+- **OpenCode:** the pointer file `.opencode/agents/reviewer.md` denies edits and every shell command, so that agent also works from the pasted diff.
 - **Kiro (IDE or CLI):** Kiro's documentation describes project agent files (read from search summaries, not checked against Kiro itself). `.kiro/agents/reviewer.json` lists only the read tool, so that agent can read and search but cannot write or run commands. It cannot run `git`, so it works from the diff the orchestrator pastes. The file has not been run in Kiro, and the read tool is not limited to particular paths, so the rule about environment files above is the only guard for those.
 - **Kiro Web:** there is no kit layer and no tool setting the project knows of, and it is not confirmed that Kiro Web loads `.kiro/agents/`. Only this file and the launch message hold you to read-only.
 - **In every tool,** the orchestrator runs `make assert-clean` after you finish and discards your report if anything changed. The human's diff review is the final check.
