@@ -22,6 +22,7 @@ One file per repeatable check of quality or cost. This one fixes the starting po
     - `.claude/agents/reviewer.md` `1851c97`, `.opencode/agents/reviewer.md` `30c8693` (both dbde225); `.kiro/agents/reviewer.json` `5e91127`, 5fc032c
   - **Excluded issues:** #7 and #27, the Lovable scaffold (protocol section 3). #23, #24 and #25 are trial plumbing.
   - **First counted issue:** #8 (human decision 2026-11-10), as a control issue: its Constraints carry no `ponytail` line.
+- **Moved (sweep 1, 2026-11-10):** the epoch start is now `17e725e`, which changed `_docs/agent-kit/team/pm.md` (blob `17a442c`) and `_docs/agent-kit/team/software-engineer.md` (blob `8e79bf1`). `_docs/agent-kit/procedures/orchestrator-comments.md` also changed but is not on the list. No data was lost: nothing had been measured. The blobs in the list above for those two files are superseded by these. See `_docs/records/2026-11-10T1518Z-measure-pm-sweep.md`.
 - **Caveats:**
   - **Provisional until #8's first Engineer launch.** If a change to a file above lands before then (for example from the first sweep, or #8's re-grooming touching `AGENTS.md`), the epoch start moves to that commit. Nothing has been measured yet, so moving it loses no data. Record the move in the next session summary.
   - #8 was groomed on 2026-11-09, before this start. The handoff recommends re-grooming it, which also puts its grooming after the start.
