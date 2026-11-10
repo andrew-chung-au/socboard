@@ -17,16 +17,33 @@ Figures:
   - the QA PASS commit: the `QA PASS commit:` line of the latest owner `Orchestrator:`
     comment. If it is missing no commit is guessed and the git figures are unavailable.
   - lines changed: added plus deleted lines in non-test, non-generated files, over the
-    non-merge commits reachable from the QA PASS commit whose message names `#<issue>`.
-    The commits counted are listed so a person can check them. Commits listed in
-    GENERATED_COMMITS (the imported Lovable base) are left out even if they name the issue.
+    non-merge commits reachable from the QA PASS commit that belong to the issue (the
+    "belongs" rule below). The commits counted are listed so a person can check them.
+    Commits listed in GENERATED_COMMITS (the imported Lovable base) are left out even if
+    they belong to the issue.
   - tests added: added lines that start a test function or case in test files.
   - Engineer and QA elapsed time: GitHub comment timestamps only, so they include idle time.
 
+The "belongs" rule. A non-merge commit reachable from the QA PASS commit belongs to issue N
+when the first line of its message (the subject) ends with `(#N)` and the subject names no
+other issue number. The message body is never read for the rule.
+  - Mention only: a commit that names `#N` anywhere in its message (subject or body) but
+    does not belong, for example `refs #N` in the body, `... for issue #N` in the subject,
+    or a `Revert "... (#N)"` subject, is not counted. It is listed on the `mention only` line.
+  - Shared: a subject that names `#N` and another issue, such as `(#N, #M)` or `Fix #N (#M)`,
+    is counted for none of the issues. It is listed on the `shared with other issues` line.
+  - The number match is exact: `(#90)` and `(#19)` are not `(#9)`.
+Nothing in git or a hook checks a commit subject at commit time, and no written role rule
+requires the `(#N)` ending; the rule and its tests are the only check. The two lists make a
+commit that was left out visible, so a person can see that a figure may be understated.
+
 Only comments by the repository owner count, as in the kit's other checks.
 
-Exit codes: 0 every figure computed; 1 some figure unavailable (the rest are printed);
-2 bad command line (nothing ran).
+Exit codes: 0 every figure computed, or the only figure that cannot be computed is an
+Engineer or QA elapsed time (printed as `unknown`); 1 some other figure unavailable (the rest
+are printed): no QA PASS commit line, a QA PASS commit not in the repository, no commit
+counted, zero acceptance criteria, or an unreadable agent-kit.conf; 2 bad command line
+(nothing ran).
 
 Test options for fixtures: --issue-json FILE --owner LOGIN [--conf FILE] [--git-dir DIR].
 """
@@ -162,21 +179,44 @@ def git(git_dir: str, *args: str) -> str:
     return done.stdout
 
 
-def issue_commits(git_dir: str, head: str, number: str) -> list:
-    """Non-merge commits reachable from head whose message names #<number>, oldest first."""
+ISSUE_REF = re.compile(r"(?<![A-Za-z0-9])#([0-9]+)")
+
+
+def classify(message: str, number: str) -> str:
+    """'counted', 'shared', 'mention' or '' for one commit message, by the belongs rule.
+
+    Only text is compared; the message is never evaluated or passed to a shell.
+    """
+    subject = message.split("\n", 1)[0].rstrip()
+    in_subject = set(ISSUE_REF.findall(subject))
+    if number in in_subject and in_subject != {number}:
+        return "shared"
+    if in_subject == {number} and subject.endswith(f"(#{number})"):
+        return "counted"
+    if number in ISSUE_REF.findall(message):
+        return "mention"
+    return ""
+
+
+def issue_commits(git_dir: str, head: str, number: str) -> dict:
+    """Non-merge commits reachable from head sorted by the belongs rule, oldest first.
+
+    Returns {'counted': [...], 'mention': [...], 'shared': [...]} of full commit ids.
+    """
     if not HEX.fullmatch(head):
         raise Unavailable("the QA PASS commit is not a hex commit id")
     full = git(git_dir, "rev-parse", "--verify", "--quiet", head + "^{commit}").strip()
     if not full:
         raise Unavailable("the QA PASS commit is not in this repository")
-    pattern = re.compile(r"(?<![A-Za-z0-9])#" + re.escape(number) + r"(?![0-9])")
     out = git(git_dir, "log", "--no-merges", "--reverse", "--format=%H%x1f%B%x1e", full)
-    commits = []
+    found = {"counted": [], "mention": [], "shared": []}
     for record in out.split("\x1e"):
         sha, _, message = record.strip("\n").partition("\x1f")
-        if re.fullmatch(r"[0-9a-f]{40}", sha) and pattern.search(message):
-            commits.append(sha)
-    return commits
+        if re.fullmatch(r"[0-9a-f]{40}", sha):
+            kind = classify(message, number)
+            if kind:
+                found[kind].append(sha)
+    return found
 
 
 def measure_commits(git_dir: str, commits, patterns) -> dict:
@@ -216,13 +256,22 @@ def report(number: str, issue: dict, owner: str, git_dir: str, patterns) -> tupl
         complete = False
     try:
         head = qa_pass_commit(issue.get("comments", []), owner)
-        commits = [sha for sha in issue_commits(git_dir, head, number)
-                   if not sha.startswith(GENERATED_COMMITS)]
+        found = {kind: [sha for sha in shas if not sha.startswith(GENERATED_COMMITS)]
+                 for kind, shas in issue_commits(git_dir, head, number).items()}
+        commits = found["counted"]
+
+        def short(shas):
+            return f"({len(shas)}): " + (" ".join(sha[:9] for sha in shas) or "none")
         if not commits:
-            raise Unavailable(f"no commit reachable from {head} names #{number}")
+            out.append(f"commits counted {short(commits)}")
+            out.append(f"mention only {short(found['mention'])}")
+            out.append(f"shared with other issues {short(found['shared'])}")
+            raise Unavailable(f"no commit reachable from {head} belongs to #{number}")
         figures = measure_commits(git_dir, commits, patterns)
         out.append(f"qa pass commit: {head}")
-        out.append(f"commits counted ({len(commits)}): " + " ".join(sha[:9] for sha in commits))
+        out.append(f"commits counted {short(commits)}")
+        out.append(f"mention only {short(found['mention'])}")
+        out.append(f"shared with other issues {short(found['shared'])}")
         out.append(f"non-test non-generated lines changed: {figures['lines']}")
         out.append(f"lines changed per criterion: {per(figures['lines'], criteria)}")
         out.append(f"test lines changed: {figures['test_lines']}")
@@ -234,8 +283,7 @@ def report(number: str, issue: dict, owner: str, git_dir: str, patterns) -> tupl
     times = elapsed(issue.get("comments", []), owner)
     for label, key in (("engineer", "engineer"), ("qa", "qa")):
         if times[key] is None:
-            complete = False
-            out.append(f"{label} elapsed (coarse, includes idle time): unavailable")
+            out.append(f"{label} elapsed (coarse, includes idle time): unknown")
         else:
             out.append(f"{label} elapsed (coarse, includes idle time): {times[key]}")
     out.append("generated files left out of the line count: " + ", ".join(GENERATED_NAMES))
