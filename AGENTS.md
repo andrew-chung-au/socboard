@@ -10,6 +10,8 @@ Layout: `socboard/` (application package), `frontend/` (React + TypeScript front
 <!-- Every slot is a make target or "none". -->
 
 - **Install:** `make install`
+- **Frontend install:** `make frontend-install`: installs the frontend packages from `frontend/bun.lock`; fails if the lockfile would change.
+- **Frontend build:** `make frontend-build`: builds `frontend/` to static files in `frontend/dist` with the mock off; fails if `index.html` is missing, server or worker output appears, a demo credential or hostile fixture is in the bundle, or a Google fonts host is mentioned.
 - **Run:** none
 - **Test (all):** `make test`
 - **Test (one file):** `make test-one FILE=tests/test_socboard.py`
