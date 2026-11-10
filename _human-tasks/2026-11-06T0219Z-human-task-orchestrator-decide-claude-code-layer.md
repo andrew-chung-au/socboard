@@ -24,7 +24,7 @@ Write Pass once decided, and name the option in the note.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Decide | | |
+| Decide | Pass | Option 1: installed, in 9b69b14 ("install Claude Code layer"). `.claude/settings.json` has the git guard and permission-log hooks and `Assisted-by: Claude Code` attribution; `.claude/agents/software-engineer.md` has the verify-on-stop hook. It differs from the kit's reference `settings.json` only by extra ask rules (`Makefile`, `pyproject.toml`, `opencode.json`, `.opencode/`, `.github/`, `.devcontainer/`). Recorded 2026-11-10 by the orchestrator from the repo, confirmed by the human, before the ponytail epoch start. |
 
 ## Risk
 

@@ -23,7 +23,7 @@ Write Pass once decided, and name the option in the note.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Decide | | |
+| Decide | Pass | Option 2: leave the name. Human decided 2026-11-10. By then the name was used 8 times in 7 files and in issue text (for example #27), so renaming would break links in history for a cosmetic gain, and an `AGENTS.md` edit after the ponytail epoch start would start a new epoch. |
 
 ## Risk
 

@@ -24,7 +24,7 @@ Write Pass once decided, and name the option in the note.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Decide | | |
+| Decide | Pass | Option 1, done: planning summaries exist from `2026-11-09T1141Z-planning-orchestrator-kit-import-1-10.md` onward. Recorded 2026-11-10. |
 
 ## Risk
 

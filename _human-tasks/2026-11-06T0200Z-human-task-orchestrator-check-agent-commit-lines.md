@@ -59,9 +59,11 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 Kiro | | |
-| 2 OpenCode | | |
-| 3 Claude Code | | |
+| 1 Kiro | Pass | Read from history on 2026-11-10: Kiro commits on approved issues (#25, #27), for example 9f4993a, are authored `Kiro Agent` and end with `Assisted-by: Kiro`; no co-author line. |
+| 2 OpenCode | Not run | No commit in the history was made by OpenCode yet. Run this step at OpenCode's first commit on an approved issue. Reading commit messages does not change agent behaviour, so this does not block the ponytail epoch. |
+| 3 Claude Code | Pass, with a caveat | 4f5365e, 58be61b and 818f89b end with `Assisted-by: Claude Code` and have no "Generated with" or co-author line. Caveat: they were orchestrator commits, not commits on an approved issue. |
+
+Note (2026-11-10): 8e514a0 and f34b65e on #27 were committed by the human by hand but carry `Assisted-by: Kiro`, because the orchestrator's instructions said so. That attribution is wrong; a commit the human makes carries no `Assisted-by` line. #27 is excluded from the ponytail trial, so no counted figure is affected.
 
 ## Risk
 
