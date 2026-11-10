@@ -2,6 +2,8 @@
 
 Pre-issue drafts for Roadmap 1: Core. Each becomes one tracker issue via the PM/grooming process; acceptance criteria then live on the issue (this file is the source the PM works from, not the canonical home). Shape follows `_docs/agent-kit/templates/task-template.md`. Requirements and invariants: `_docs/specs.md`.
 
+**Status 2026-11-10: superseded.** The issues are filed as #7 to #22 and #27, groomed on the tracker, and `roadmap-1-core.md` carries the live order and the numbers. The drafts below are kept for reference only and are out of date in places: the backend lives in `socboard/` (not `backend/`), scoring comes before ingest, tests are criteria of each issue, and the OpenAPI contract, the closed-cases list, the real-API wiring and the static-build issue are new. Read the issues, not this file.
+
 This file exists because the sandbox can't create issues directly. Once issues are filed, the roadmap's numbered list carries the live order and this file can be archived.
 
 ---
