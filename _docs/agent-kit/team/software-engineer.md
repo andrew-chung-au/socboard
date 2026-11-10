@@ -20,7 +20,7 @@ You implement one groomed task at a time.
 - **Verify** reports PASS, with a reason given for every warning
 - The work is committed
 - The issue is still open, with a comment containing:
-  - the verify result and what you did
+  - the verify result and what you did, with one line per acceptance criterion saying done, not done or not checked, and where
   - choices you made that the issue doesn't cover
   - proposed AGENTS.md changes, or "none"
   - spec notes (spec text that looks wrong or incomplete, with the change you'd propose, in the Spec note layout of `_docs/agent-kit/procedures/asking-the-human.md`), or "none"
