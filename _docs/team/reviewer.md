@@ -22,7 +22,7 @@ You give an independent, read-only review of one finished change. The orchestrat
 
 ## How read-only is enforced
 - **Claude Code:** the pointer file `.claude/agents/reviewer.md` denies the write, edit and notebook tools. Shell commands are still possible, so the rule above is the guard for them.
-- **OpenCode:** the pointer file `.opencode/agents/reviewer.md` denies edits and every shell command.
+- **OpenCode:** the pointer file `.opencode/agents/reviewer.md` denies edits and every shell command except `git diff`, `git show`, `git log` and `git status`. Options that write a file, such as `git diff --output=<file>`, are still against the rule above.
 - **Kiro Web:** there is no kit layer and no tool setting. Only this file and the launch message hold you to read-only.
 - **In every tool,** the orchestrator runs `make assert-clean` after you finish and discards your report if anything changed. The human's diff review is the final check.
 
