@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/soc/AppShell";
 import { useSession } from "@/lib/auth";
-import { api, ApiError, config, session } from "@/services";
+import { api, ApiError, session } from "@/services";
 import { MOCK_CREDENTIALS } from "@/services/mockService";
 
 export const Route = createFileRoute("/login")({
@@ -72,7 +72,7 @@ function LoginPage() {
             {busy ? "Signing in…" : "Sign in"}
           </Button>
         </form>
-        {config.useMock && (
+        {import.meta.env.VITE_USE_MOCK !== "false" && (
           <div className="mt-4 rounded-md border border-dashed p-3 text-xs">
             <div className="mb-1.5 font-medium text-muted-foreground">Mock mode — test accounts</div>
             <ul className="space-y-1 font-mono">

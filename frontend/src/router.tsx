@@ -3,7 +3,6 @@ import { createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 
 export const getRouter = () => {
-  // One client per request: a module-level QueryClient leaks cached data between SSR requests.
   const queryClient = new QueryClient();
 
   const router = createRouter({
@@ -16,3 +15,9 @@ export const getRouter = () => {
 
   return router;
 };
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: ReturnType<typeof getRouter>;
+  }
+}
