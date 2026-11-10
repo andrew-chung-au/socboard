@@ -23,7 +23,7 @@ Expected: a version number.
 ### Step 1: Build the image
 
 ```
-docker build -t agent-push-check:node24-uv0.13.6 - < agent-kit/environments/local-sandbox/push-check.Dockerfile
+docker build -t agent-push-check:node24-uv0.13.6 - < _docs/agent-kit/environments/local-sandbox/push-check.Dockerfile
 ```
 
 Expected: a successful build.
@@ -49,7 +49,7 @@ Expected: the push check prints what it would check and runs nothing.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | Pass | |
+| 1 | Pass | 29.9.2 |
 | 2 | Pass | |
 | 3 | Pass | |
 
