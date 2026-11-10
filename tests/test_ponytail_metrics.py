@@ -55,7 +55,7 @@ def repo(tmp_path):
         "uv.lock": "\n".join(f"line {i}" for i in range(10)) + "\n",
     })
     commit(root, "unrelated work for #90", {"src/b.py": "b1\nb2\nb3\nb4\n"})
-    c3 = commit(root, "fix the thing, refs #9", {"src/a.py": "one\nTWO\nthree\n"})
+    c3 = commit(root, "fix the thing (#9)", {"src/a.py": "one\nTWO\nthree\n"})
     return {"root": root, "base": c0, "first": c1, "qa": c3}
 
 
@@ -160,6 +160,14 @@ def test_hostile_text_is_counted_never_run(tmp_path, repo, capsys):
     assert f"qa pass commit: {repo['qa'][:9]}" in out  # the intruder's comment is ignored
     assert not (Path.cwd() / "pwned").exists() and not (Path.cwd() / "pwned2").exists()
     assert not (repo["root"] / "pwned").exists() and not (repo["root"] / "pwned2").exists()
+    # hostile text in a commit subject is matched by the rule and nothing is run
+    hostile_sha = commit(repo["root"], "$(touch pwned3) `touch pwned4`; rm -rf x (#9)", {"src/h.py": "h\n"})
+    code = run_cli(tmp_path, repo["root"], issue_for(hostile_sha))
+    out = capsys.readouterr().out
+    assert code == 0
+    assert hostile_sha[:9] in out.split("commits counted")[1].splitlines()[0]
+    for name in ("pwned", "pwned2", "pwned3", "pwned4"):
+        assert not (Path.cwd() / name).exists() and not (repo["root"] / name).exists()
 
 
 def test_a_run_changes_nothing_in_the_repository(tmp_path, repo, capsys):
@@ -217,3 +225,137 @@ def test_generated_files_are_matched_by_name():
     assert pm.is_generated("uv.lock") and pm.is_generated("frontend/bun.lock")
     assert pm.is_generated("frontend/src/routeTree.gen.ts")
     assert not pm.is_generated("src/lock.py")
+
+
+# ---- the "belongs" rule (#36) ----
+
+def history(tmp_path, messages):
+    """A throwaway repository with one commit per message, each changing src/f.py by one line."""
+    root = tmp_path / "hist"
+    root.mkdir(parents=True)
+    run_git(root, "init", "-q")
+    commit(root, "base", {"README.md": "x\n"})
+    shas = [commit(root, message, {"src/f.py": f"line {i}\n"}) for i, message in enumerate(messages)]
+    return root, shas
+
+
+def lines_of(out):
+    """The 'commits counted', 'mention only' and 'shared with other issues' lines as (count, ids)."""
+    found = {}
+    for label in ("commits counted", "mention only", "shared with other issues"):
+        line = next(item for item in out.splitlines() if item.startswith(label + " ("))
+        count, _, ids = line[len(label) + 2:].partition("): ")
+        found[label] = (int(count), [] if ids == "none" else ids.split())
+    return found
+
+
+def classify_run(tmp_path, capsys, messages, number="9"):
+    root, shas = history(tmp_path, messages + ["tail (#9)"])
+    code = run_cli(tmp_path, root, issue_for(shas[-1]), number=number)
+    out = capsys.readouterr().out
+    return code, lines_of(out), [sha[:9] for sha in shas[:-1]], out
+
+
+def test_a_subject_ending_with_the_issue_is_counted_with_or_without_a_body_mention(tmp_path, capsys):
+    code, found, ids, _ = classify_run(tmp_path, capsys, ["Add thing (#9)", "Add other (#9)\n\nSee #9 for more."])
+    assert code == 0
+    assert found["commits counted"][1][:2] == ids
+    assert found["mention only"] == (0, []) and found["shared with other issues"] == (0, [])
+
+
+def test_a_body_only_mention_is_refused_and_listed(tmp_path, capsys):
+    code, found, ids, _ = classify_run(tmp_path, capsys, ["Add thing\n\nrefs #9"])
+    assert found["commits counted"][0] == 1 and ids[0] not in found["commits counted"][1]
+    assert found["mention only"] == (1, ids)
+
+
+def test_a_subject_mention_without_the_trailing_reference_is_refused(tmp_path, capsys):
+    _, found, ids, _ = classify_run(tmp_path, capsys, ["Add session summary for issue #9"])
+    assert ids[0] not in found["commits counted"][1]
+    assert found["mention only"] == (1, ids)
+
+
+def test_a_revert_subject_is_mention_only(tmp_path, capsys):
+    _, found, ids, _ = classify_run(tmp_path, capsys, ['Revert "Add thing (#9)"'])
+    assert found["mention only"] == (1, ids)
+
+
+@pytest.mark.parametrize("subject", ["Add thing (#90)", "Add thing (#19)"])
+def test_the_number_match_is_exact(tmp_path, capsys, subject):
+    _, found, ids, out = classify_run(tmp_path, capsys, [subject])
+    assert ids[0] not in found["commits counted"][1]
+    assert found["mention only"] == (0, []) and found["shared with other issues"] == (0, [])
+    assert ids[0] not in out.split("commits counted")[1]
+
+
+@pytest.mark.parametrize("subject", ["Plan work (#9, #27)", "Fix #9 (#27)", "Fix #27 (#9)"])
+def test_shared_commits_count_for_neither_issue_and_are_listed(tmp_path, capsys, subject):
+    _, found, ids, _ = classify_run(tmp_path, capsys, [subject])
+    assert ids[0] not in found["commits counted"][1]
+    assert found["shared with other issues"] == (1, ids)
+    assert found["mention only"] == (0, [])
+    # the other issue does not count it either
+    root, shas = history(tmp_path / "other", [subject, "tail (#27)"])
+    run_cli(tmp_path, root, issue_for(shas[-1]), number="27")
+    other = lines_of(capsys.readouterr().out)
+    assert shas[0][:9] not in other["commits counted"][1]
+    assert other["shared with other issues"] == (1, [shas[0][:9]])
+
+
+def test_the_lists_print_even_when_nothing_is_counted(tmp_path, capsys):
+    root, shas = history(tmp_path, ["Add thing\n\nrefs #9", "Plan (#9, #27)"])
+    code = run_cli(tmp_path, root, issue_for(shas[-1]))
+    out = capsys.readouterr().out
+    found = lines_of(out)
+    assert code == 1
+    assert found["commits counted"] == (0, [])
+    assert found["mention only"] == (1, [shas[0][:9]])
+    assert found["shared with other issues"] == (1, [shas[1][:9]])
+    assert "git figures: unavailable" in out
+
+
+def test_the_counted_line_keeps_its_form(tmp_path, repo, capsys):
+    run_cli(tmp_path, repo["root"], issue_for(repo["qa"]))
+    out = capsys.readouterr().out
+    assert f"commits counted (2): {repo['first'][:9]} {repo['qa'][:9]}" in out
+    assert "mention only (0): none" in out
+    assert "shared with other issues (0): none" in out
+
+
+# ---- elapsed time unknown, and the failures that stay failures (#36) ----
+
+def test_unknown_elapsed_time_alone_exits_zero(tmp_path, repo, capsys):
+    issue = issue_for(repo["qa"])
+    issue["comments"] = [c for c in issue["comments"] if not c["body"].startswith("Engineer:")]
+    code = run_cli(tmp_path, repo["root"], issue)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "engineer elapsed (coarse, includes idle time): unknown" in out
+    assert "qa elapsed (coarse, includes idle time): unknown" in out
+    assert "unavailable" not in out
+
+
+def test_unknown_elapsed_time_with_an_unavailable_git_figure_exits_one(tmp_path, repo, capsys):
+    issue = issue_for(repo["qa"])
+    issue["comments"] = [c for c in issue["comments"] if not c["body"].startswith("Engineer:")]
+    issue["comments"][-1]["body"] = "Orchestrator: close\nMerge commit: abcdef1\n"
+    code = run_cli(tmp_path, repo["root"], issue)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "elapsed (coarse, includes idle time): unknown" in out
+    assert "git figures: unavailable" in out
+
+
+def test_an_unreadable_conf_exits_one(tmp_path, repo, capsys):
+    fixture = tmp_path / "issue.json"
+    fixture.write_text(json.dumps(issue_for(repo["qa"])), encoding="utf-8")
+    code = pm.main(["9", "--issue-json", str(fixture), "--owner", OWNER, "--conf", str(tmp_path / "missing"),
+                    "--git-dir", str(repo["root"])])
+    assert code == 1
+    assert "cannot read" in capsys.readouterr().err
+
+
+def test_the_header_states_the_rule_and_the_exit_codes():
+    header = pm.__doc__
+    for phrase in ("(#N)", "other issue number", "mention only", "Shared", "at commit time", "unknown"):
+        assert phrase in header
