@@ -97,6 +97,23 @@ def test_normal_issue_prints_the_computed_figures(tmp_path, repo, capsys):
     assert "qa elapsed (coarse, includes idle time): 0 h 20 min" in out
 
 
+def test_a_listed_generated_commit_is_left_out_even_if_it_names_the_issue(tmp_path, repo, capsys, monkeypatch):
+    # the first commit adds 3 lines in src/a.py and names #9; list it as a generated commit
+    monkeypatch.setattr(pm, "GENERATED_COMMITS", (repo["first"][:7],))
+    code = run_cli(tmp_path, repo["root"], issue_for(repo["qa"]))
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "commits counted (1):" in out
+    assert repo["first"][:9] not in out.split("commits counted")[1].splitlines()[0]
+    assert "non-test non-generated lines changed: 2" in out  # only the later fix: 1 added, 1 deleted
+    assert "tests added: 0" in out
+    assert f"generated commits left out of every count (the imported Lovable base): {repo['first'][:7]}" in out
+
+
+def test_the_real_list_names_the_lovable_import_commit():
+    assert pm.GENERATED_COMMITS == ("fab3dd3",)
+
+
 def test_a_commit_for_another_issue_is_not_counted(tmp_path, repo, capsys):
     run_cli(tmp_path, repo["root"], issue_for(repo["qa"]))
     out = capsys.readouterr().out

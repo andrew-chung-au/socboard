@@ -18,7 +18,8 @@ Figures:
     comment. If it is missing no commit is guessed and the git figures are unavailable.
   - lines changed: added plus deleted lines in non-test, non-generated files, over the
     non-merge commits reachable from the QA PASS commit whose message names `#<issue>`.
-    The commits counted are listed so a person can check them.
+    The commits counted are listed so a person can check them. Commits listed in
+    GENERATED_COMMITS (the imported Lovable base) are left out even if they name the issue.
   - tests added: added lines that start a test function or case in test files.
   - Engineer and QA elapsed time: GitHub comment timestamps only, so they include idle time.
 
@@ -52,6 +53,12 @@ DIFF_HEADER = re.compile(r"^diff --git a/(.+) b/(.+)$")
 # Files whose changes are not the Engineer's own writing. Matched on the file name.
 GENERATED_NAMES = ("uv.lock", "package-lock.json", "bun.lock", "bun.lockb", "yarn.lock",
                    "pnpm-lock.yaml", "*.gen.ts", "*.gen.tsx")
+
+
+# Commits that bring in generated code wholesale, left out of every count even if their
+# message names an issue: the imported Lovable base before its first change. Matched as a
+# prefix of the commit id.
+GENERATED_COMMITS = ("fab3dd3",)
 
 
 class Unavailable(Exception):
@@ -209,7 +216,8 @@ def report(number: str, issue: dict, owner: str, git_dir: str, patterns) -> tupl
         complete = False
     try:
         head = qa_pass_commit(issue.get("comments", []), owner)
-        commits = issue_commits(git_dir, head, number)
+        commits = [sha for sha in issue_commits(git_dir, head, number)
+                   if not sha.startswith(GENERATED_COMMITS)]
         if not commits:
             raise Unavailable(f"no commit reachable from {head} names #{number}")
         figures = measure_commits(git_dir, commits, patterns)
@@ -231,6 +239,8 @@ def report(number: str, issue: dict, owner: str, git_dir: str, patterns) -> tupl
         else:
             out.append(f"{label} elapsed (coarse, includes idle time): {times[key]}")
     out.append("generated files left out of the line count: " + ", ".join(GENERATED_NAMES))
+    out.append("generated commits left out of every count (the imported Lovable base): "
+               + ", ".join(GENERATED_COMMITS))
     out.append("test files are those matching TEST_FILES in agent-kit.conf")
     out.append("not computed: reviewer time (reviewer comments have no fixed layout), "
                "files outside Constraints, defects after PASS, invariant violations")
