@@ -7,7 +7,7 @@ Rules: start with `Orchestrator:`. Post with `make issue-comment N=<n> FILE=.scr
 ## Claim
 
 Fixed: the body hash with its re-check (`make issue-hash N=<n>`, `Body sha256:` against `Recorded sha256:`); the "live scripts" warning when the issue touches `scripts/` or hooks; cloud `gh` limits; REST fallback for reads; writes still use `make issue-comment`; "do not close or merge"; the return path.
-**Fact:** issue, branch, hash, expected paths, protected files needing approval.
+**Fact:** issue, branch, hash, expected paths, protected files needing approval, and the environment the next role will run in with its missing tools (for example no bun, so the tests step of `make verify` cannot run).
 Never name an env file in a claim.
 
 ## Release
