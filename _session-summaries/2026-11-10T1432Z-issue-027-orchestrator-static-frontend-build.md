@@ -60,6 +60,13 @@ unknown (role not asked)
 - Open a pull request for the merge.
 - Not answered at the decision point (recorded with the orchestrator's recommendation): delete `/tmp/bunx-1000-frontend@latest` in the container (recommended); test the error page through the router in #8; accept the Latin-only font subset; note the grep-bypass limit of the bundle check in #8; record bun for CI and the push-check image for Deploy; whether to run the first sweep after #27 (due: none recorded); whether #27 counts as a ponytail baseline issue (left as not counted).
 
+### Ponytail epoch settling (after QA PASS, same session)
+
+- #27 is not counted in the ponytail trial (the Lovable scaffold exclusion); #8 is counted.
+- The open human tasks were recorded: Claude Code layer installed (option 1, 9b69b14); commit lines Kiro pass, Claude Code pass with a caveat, OpenCode not run yet (no OpenCode commit exists); planning summary, first backlog and Lovable base done; stack record name left as is (option 2); upstream: file the `issue-comment.sh` stderr finding (draft in `_human-tasks/2026-11-10T1500Z-human-task-orchestrator-file-upstream-issue-comment-stderr.md`), the planning gap is resolved in kit 1.10, attribution held until the first sweep.
+- The epoch starts at the merge commit of PR #32; the orchestrator writes `_docs/records/<timestamp>-measure-ponytail-epoch-1-start.md` after the merge.
+- 8e514a0 and f34b65e were committed by the human with `Assisted-by: Kiro` on the orchestrator's instruction; that attribution is wrong (human commits carry no `Assisted-by` line). No counted figure is affected.
+
 ## Mismatches with the spec or design docs
 
 - `.devcontainer/setup.sh` previously said the project's lockfile tool is npm; the frontend uses bun. Fixed in this issue.

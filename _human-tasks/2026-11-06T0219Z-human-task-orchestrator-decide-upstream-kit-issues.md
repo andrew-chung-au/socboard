@@ -25,7 +25,7 @@ Write Pass once decided, and name the option in the note.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Decide | | |
+| Decide | Pass | Human decided 2026-11-10: file the `issue-comment.sh` stderr finding (from #7: a failed post hides gh's error, so the cause is invisible); the draft is `_human-tasks/2026-11-10T1500Z-human-task-orchestrator-file-upstream-issue-comment-stderr.md`. Option 1 (planning gap) is resolved upstream: kit 1.10 has `procedures/planning.md` with a Definition of ready. Option 2 (attribution and the missing Kiro layer) is held until the first ponytail sweep. |
 
 ## Risk
 

@@ -76,11 +76,7 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | | |
-| 2 | | |
-| 3 | | |
-| 4 | | |
-| 5 | | |
+| 1 to 5 | Pass (done) | Recorded 2026-11-10 from the repo, not at the time. The backlog was proposed, filed and groomed, and issues are approved one at a time (#2 onward; #7, #23, #24, #25 and #27 have been worked). Step-by-step output was not kept. |
 
 ## Risk
 

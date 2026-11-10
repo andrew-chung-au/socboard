@@ -76,11 +76,7 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | | |
-| 2 | | |
-| 3 | | |
-| 4 | | |
-| 5 | | |
+| 1 to 5 | Done, differently | Recorded 2026-11-10. The human generated the base in Lovable and committed it directly as fab3dd3, not through the scaffold issue's Engineer. Step 4's guardrail search would have found `dangerouslySetInnerHTML` in `src/components/ui/chart.tsx`. The import was then reviewed in #7 and fixed in #27 (the chart file is removed). Source record: `_docs/records/2026-11-10T0946Z-source-lovable-frontend.md`. |
 
 ## Risk
 
