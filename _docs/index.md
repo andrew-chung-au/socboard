@@ -42,6 +42,7 @@ By file. Add project manifests here.
 | `_docs/planning/lovable-guidance.md` | How to generate and import the frontend base with Lovable | Current |
 | `_docs/vendor/ponytail/` | Verbatim copy of upstream `ponytail-review` at the pinned commit, with its licence; loaded by path, never auto-discovered (source: `_docs/records/2026-11-06T0024Z-source-ponytail.md`) | Current |
 | `_docs/team/reviewer.md` | The read-only Reviewer role for the ponytail trial (project-owned, outside the kit; pointers in `.claude/agents/`, `.opencode/agents/` and `.kiro/agents/`; decisions: `_docs/decisions/2026-11-06T0024Z-ponytail-trial.md`, `_docs/decisions/2026-11-10T0822Z-reviewer-role.md`) | Current |
+| `_docs/records/2026-11-10T0946Z-source-lovable-frontend.md` | Where the `frontend/` base came from, its template, quirks and licence status (source record) | Current |
 | `pyproject.toml` | Python project metadata and dependencies | Current |
 | `uv.lock` | Resolved dependency versions | Current |
 | `Makefile` | Project commands | Current |
