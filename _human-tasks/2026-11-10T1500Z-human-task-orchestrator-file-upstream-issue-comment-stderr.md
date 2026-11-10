@@ -13,10 +13,10 @@ In a browser, in the kit's own issue tracker. Not here: this sandbox cannot reac
 1. Confirm the line is still the same in this project's kit copy.
 
 ```
-grep -n 'comments --method POST' _docs/agent-kit/scripts/issue-comment.sh
+grep -n 'method POST.*2> /dev/null' _docs/agent-kit/scripts/issue-comment.sh
 ```
 
-Expected: one line ending in `2> /dev/null < <(printf '%s' "$CONTENT"))` (line 85 when this was written).
+Expected: one line ending in `2> /dev/null < <(printf '%s' "$CONTENT"))` (line 85 when this was written). The first version of this check searched for `comments --method POST`, which matches only the code comment on line 21, because the real line has a quote between `comments` and `--method`.
 
 ## Steps
 
@@ -38,8 +38,8 @@ Expected: the issue is filed.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Before you start | | |
-| 1 | | |
+| Before you start | Pass | Checked by the orchestrator on 2026-11-10: line 85 is still `out=$(gh api "repos/$REPO/issues/$number/comments" --method POST -F body=@- 2> /dev/null < <(printf '%s' "$CONTENT"))`. The check's first pattern was wrong and is corrected above. |
+| 1 | Pass | Filed by the human in the kit's tracker on 2026-11-10. Issue address: not recorded yet. |
 
 ## Risk
 
