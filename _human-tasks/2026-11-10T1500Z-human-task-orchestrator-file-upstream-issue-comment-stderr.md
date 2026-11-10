@@ -39,7 +39,7 @@ Expected: the issue is filed.
 | Step | Pass or fail | Output or note |
 |---|---|---|
 | Before you start | Pass | Checked by the orchestrator on 2026-11-10: line 85 is still `out=$(gh api "repos/$REPO/issues/$number/comments" --method POST -F body=@- 2> /dev/null < <(printf '%s' "$CONTENT"))`. The check's first pattern was wrong and is corrected above. |
-| 1 | Pass | Filed by the human in the kit's tracker on 2026-11-10. Issue address: not recorded yet. |
+| 1 | Pass | Filed by the human in the kit's tracker on 2026-11-10: https://github.com/andrew-chung-au/agent-kit/issues/187 (open). The body is the finding only, as drafted. |
 
 ## Risk
 
