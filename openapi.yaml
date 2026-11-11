@@ -180,11 +180,12 @@ info:
     ## Choices where the issue left the value open
 
     Made in this file (also in the issue comment). Each is also a numbered new item in
-    "Differences from the mock" (items 6 to 11; the code `invalid_api_key` is in the new-codes
+    "Differences from the mock" (items 6 to 13; the code `invalid_api_key` is in the new-codes
     sentence there): the ingest key header `X-API-Key`, the ingest 401 code `invalid_api_key`,
     201 for ingest and for `addNote`, the ingest response body (`CaseSummary`), the 422 on
-    `login` for a schema-invalid body, the open `to` schema on `TransitionRequest`, and the
-    illustrative example messages and example id.
+    `login` for a schema-invalid body, the open `to` schema on `TransitionRequest`, the
+    illustrative example messages and example id, the ingest timestamp format (RFC 3339
+    date-time, with 422 `validation_error` otherwise), and the ingest field names.
 servers:
   - url: /api
     description: Server base for every path below.
