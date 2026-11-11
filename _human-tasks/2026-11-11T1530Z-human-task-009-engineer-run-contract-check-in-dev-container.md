@@ -2,6 +2,8 @@
 
 > Human task for #9. Written by the orchestrator; the Engineer could not run `uv` in Kiro Web.
 
+> **Status: done (2026-11-11).** Every step below has been run once; the results are in "Record the result". Do not run steps 1, 3 or 7 again: the dependency is already committed (`2e009c9`) and the branch is pushed. To re-check the contract on a later commit, run only steps 4, 5 and 6 in the dev container after `git pull --rebase origin issue-9-openapi-contract`; they change nothing in the repository.
+
 ## Purpose
 
 Land the protected changes for #9 (the `contract-check` target, its Commands line and the validator dependency), then prove the check passes on `openapi.yaml` and fails on a broken copy. Issue: #9.
@@ -96,13 +98,15 @@ make verify
 
 Expected: the same steps as before; its output lists no contract check. If it fails for a reason unrelated to #9, copy the output.
 
-### Step 7: push
+### Step 7: push from the clean clone
+
+The dev container cannot push (GitHub returns 403; by design, see `AGENTS.md`, Project settings). Push from the clean clone on your machine instead, after fetching the dev container's branch into it:
 
 ```
-git push
+git push origin sandbox/issue-9-openapi-contract:refs/heads/issue-9-openapi-contract
 ```
 
-Expected: the branch updates on GitHub. Tell the orchestrator, who then launches QA.
+Expected: the push check runs `make install verify` in the push-check image and the branch updates on GitHub. If the image is missing, build it first (`_human-tasks/2026-11-11T0327Z-human-task-engineer-rebuild-push-check-image.md`). Never use `--no-verify` or `--force`. Tell the orchestrator, who then launches QA.
 
 ## Record the result
 
@@ -120,4 +124,4 @@ Filled in by the orchestrator from the output the human pasted in this session; 
 
 ## Risk
 
-The commit changes protected files; it is committed only with your approval of the exact diff. Nothing else changes. Undo: `git reset --hard HEAD~1` on the branch before pushing.
+The dependency commit changes protected files (`pyproject.toml`, `uv.lock`); it was committed only with your approval of the exact change. Steps 4 to 6 change nothing. The branch is pushed, so there is no local undo: a wrong commit is fixed by a new commit, never by rewriting the pushed history. If `openapi.yaml` is edited by mistake in step 5, `git restore openapi.yaml` puts it back.
