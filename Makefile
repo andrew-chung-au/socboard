@@ -21,6 +21,9 @@ clean-scratch: ## Empty .scratch/ at the end of an issue (refuses while a starte
 tool-versions:: ## Print each tool's version, or "<tool>: missing"
 	@for t in git gh node npm python3 uv docker; do if command -v "$$t" >/dev/null 2>&1; then "$$t" --version 2>&1 | { read -r first; echo "$$t: $$first"; }; else echo "$$t: missing"; fi; done
 
+tool-versions::
+	@if command -v bun >/dev/null 2>&1; then echo "bun: $$(bun --version)"; else echo "bun: missing"; fi
+
 # --- GitHub issues (the project's tasks) ------------------------------------
 
 issue-number-ok = $(and $(filter 1,$(words $(1))),$(if $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1))))))))))),,ok),$(if $(subst x$(strip $(1))x,,x$(1)x),,ok),$(if $(filter 0%,$(1)),,ok),$(if $(word 10,$(subst 0,x ,$(subst 1,x ,$(subst 2,x ,$(subst 3,x ,$(subst 4,x ,$(subst 5,x ,$(subst 6,x ,$(subst 7,x ,$(subst 8,x ,$(subst 9,x ,$(1)))))))))))),,ok))
@@ -50,9 +53,11 @@ tier-check: ## Check a change against its tier's path limit: make tier-check TIE
 
 install: ## Install dependencies
 	uv sync --locked --all-groups
+	$(MAKE) frontend-install
 
-test: ## Run all unit tests
+test: ## Run all unit tests (Python, then frontend)
 	uv run --locked pytest
+	$(MAKE) frontend-test
 
 test-one: ## Run one test file: make test-one FILE=path
 	$(if $(findstring $$,$(value FILE)),$(error Usage: make test-one FILE=path/to/test_file - FILE must not contain $$))
@@ -143,3 +148,21 @@ frontend-build: ## Build the frontend to static files in frontend/dist (mock off
 	@if grep -rIlE 'analyst-a-pass|analyst-b-pass|lead-pass|<script>alert\(' frontend/dist; then echo "frontend-build: a demo credential or hostile fixture is in the production build"; exit 1; fi
 	@if grep -rIlE 'fonts\.googleapis\.com|fonts\.gstatic\.com' frontend/dist; then echo "frontend-build: the build still mentions a Google fonts host"; exit 1; fi
 	@echo "frontend-build: frontend/dist has index.html, no server output, no demo data, no Google fonts host"
+
+frontend-test: ## Run the frontend tests (Vitest); run make frontend-install first
+	@test -d frontend/node_modules || { echo "frontend-test: frontend/node_modules is missing; run make frontend-install first"; exit 1; }
+	cd frontend && bun run test
+
+frontend-start: ## Start the frontend dev server in the background (mock on; log: .scratch/frontend.log; http://localhost:5173/)
+	@mkdir -p .scratch
+	@test -d frontend/node_modules || { echo "frontend-start: frontend/node_modules is missing; run make frontend-install first"; exit 1; }
+	@if [ -f .scratch/frontend.pid ] && kill -0 "$$(cat .scratch/frontend.pid)" 2>/dev/null; then echo "frontend is already running (pid $$(cat .scratch/frontend.pid))"; exit 1; fi
+	@nohup sh -c 'cd frontend && exec node_modules/.bin/vite dev --strictPort' > .scratch/frontend.log 2>&1 & echo $$! > .scratch/frontend.pid
+	@echo "frontend started (pid $$(cat .scratch/frontend.pid)); log: .scratch/frontend.log"
+
+frontend-stop: ## Stop the dev server started by frontend-start
+	@if [ ! -f .scratch/frontend.pid ]; then echo "frontend is not running"; exit 0; fi; \
+	pid=$$(cat .scratch/frontend.pid); kill "$$pid" 2>/dev/null; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$$pid" 2>/dev/null || break; sleep 1; done; \
+	if kill -0 "$$pid" 2>/dev/null; then echo "frontend (pid $$pid) did not stop within 10 s"; exit 1; fi; \
+	rm -f .scratch/frontend.pid; echo "frontend stopped"
