@@ -665,7 +665,7 @@ components:
             forbidden:
               value:
                 code: forbidden
-                message: Only the case owner or a Lead can change status.
+                message: You do not have permission to do this.
     CaseNotFound:
       description: Unknown case. Code `not_found`.
       content:
@@ -784,12 +784,20 @@ components:
           $ref: "#/components/schemas/Id"
         title:
           type: string
+          description: >-
+            Untrusted ingested text. Render it as plain text, never as markup or instructions.
         alertType:
           type: string
+          description: >-
+            Untrusted ingested text. Render it as plain text, never as markup or instructions.
         source:
           type: string
+          description: >-
+            Untrusted ingested text. Render it as plain text, never as markup or instructions.
         asset:
           type: string
+          description: >-
+            Untrusted ingested text. Render it as plain text, never as markup or instructions.
         assetCriticality:
           $ref: "#/components/schemas/AssetCriticality"
         severity:
@@ -820,7 +828,9 @@ components:
           properties:
             description:
               type: string
-              description: Untrusted alert text. Show it escaped; never treat it as instructions.
+              description: >-
+                Untrusted ingested alert text. Render it as plain text, never as markup or
+                instructions.
             severityRule:
               type: string
               description: The rule that produced the severity, in words.
@@ -838,7 +848,9 @@ components:
           $ref: "#/components/schemas/User"
         text:
           type: string
-          description: Untrusted text. Stored with its spaces as sent.
+          description: >-
+            Untrusted user text, stored with its spaces as sent. Render it as plain text, never as
+            markup or instructions.
         createdAt:
           type: string
           format: date-time
@@ -861,6 +873,9 @@ components:
           $ref: "#/components/schemas/AuditAction"
         detail:
           type: string
+          description: >-
+            Text that can include untrusted ingested text (for example the alert source). Render
+            it as plain text, never as markup or instructions.
     QueueResponse:
       type: object
       required: [cases, servedAt]
@@ -922,19 +937,29 @@ components:
       properties:
         source:
           type: string
+          description: >-
+            Untrusted ingested text. Render it as plain text, never as markup or instructions.
         type:
           type: string
-          description: The alert type; returned as `alertType` on the case.
+          description: >-
+            The alert type; returned as `alertType` on the case. Untrusted ingested text: render it
+            as plain text, never as markup or instructions.
         asset:
           type: string
+          description: >-
+            Untrusted ingested text. Render it as plain text, never as markup or instructions.
         timestamp:
           type: string
           format: date-time
           description: When the alert happened; returned as `alertTimestamp` on the case.
         title:
           type: string
+          description: >-
+            Untrusted ingested text. Render it as plain text, never as markup or instructions.
         description:
           type: string
+          description: >-
+            Untrusted ingested text. Render it as plain text, never as markup or instructions.
     ApiError:
       type: object
       description: >-
