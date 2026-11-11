@@ -7,7 +7,9 @@ import {
   HeadContent,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { ErrorPage } from "@/components/soc/ErrorPage";
+import { startNewAlertTimer } from "@/services/mockService";
 import { Toaster } from "@/components/ui/sonner";
 
 function NotFoundComponent() {
@@ -66,6 +68,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+
+  // Demo only: a new alert every 20 s in mock mode. The comparison is written out here, as in
+  // services/index.ts, so a build with VITE_USE_MOCK=false drops the mock and this call with it.
+  useEffect(() => {
+    if (import.meta.env.VITE_USE_MOCK !== "false") startNewAlertTimer();
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

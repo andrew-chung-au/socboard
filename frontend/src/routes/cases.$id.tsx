@@ -15,7 +15,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSession } from "@/lib/auth";
 import { fmt } from "@/lib/time";
-import { api, ApiError, CLOSING_REASON_LABELS, type CaseDetail, type ClosingReason } from "@/services";
+import { api, ApiError, CLOSING_REASON_LABELS, config, type CaseDetail, type ClosingReason } from "@/services";
 
 export const Route = createFileRoute("/cases/$id")({
   head: ({ params }) => ({
@@ -105,7 +105,7 @@ function CasePage() {
   const closed = c.status === "Closed";
   const canClaim = !c.owner && !closed;
   const canChangeStatus = (isOwner || isLead) && !closed;
-  const canReassign = isLead && !!c.owner && !closed;
+  const canReassign = config.featureReassign && isLead && !!c.owner && !closed;
   const busy = run.isPending;
 
   return (
@@ -228,14 +228,14 @@ function CasePage() {
                     Claim case
                   </Button>
                 )}
-                {c.status === "New" && (
-                  <Button className="w-full" size="sm" variant="secondary" disabled={busy || !canChangeStatus}
+                {canChangeStatus && c.status === "New" && (
+                  <Button className="w-full" size="sm" variant="secondary" disabled={busy}
                     onClick={() => run.mutate(() => api.transitionCase(c.id, "Investigating"))}>
                     Start investigating
                   </Button>
                 )}
-                {c.status === "Investigating" && (
-                  <Button className="w-full" size="sm" variant="secondary" disabled={busy || !canChangeStatus}
+                {canChangeStatus && c.status === "Investigating" && (
+                  <Button className="w-full" size="sm" variant="secondary" disabled={busy}
                     onClick={() => { setReason(""); setCloseOpen(true); }}>
                     Close case…
                   </Button>
