@@ -61,13 +61,13 @@ With no Docker, the sandbox can't run the push check end to end; it runs on your
 
 ### The push-check image
 
-The push check runs `make install verify` in a throwaway container. Its image comes from `AGENT_PUSH_CHECK_IMAGE` in the shell you push from, and defaults to `python:3.12`, which has git and make but no Node and no uv. A project whose `make install` runs `npm ci` or `uv sync` fails there with exit 127 before `verify` runs.
+The push check runs `make install verify` in a throwaway container. Its image comes from `AGENT_PUSH_CHECK_IMAGE` in the shell you push from, and defaults to `python:3.12`, which has git and make but no Node and no uv. A project whose `make install` runs `npm ci`, `bun install` or `uv sync` fails there with exit 127 before `verify` runs. The container has network access unless `AGENT_PUSH_CHECK_NETWORK=none`; a project whose `make install` downloads packages (the frontend's `bun install`) needs it.
 
-`environments/local-sandbox/push-check.Dockerfile` is a reference image with Node and uv at the same pins as the dev container recipe (all unverified until you build it). Build it on your machine from the clean clone's copy, never from a sandbox, with no build context, then point the push check at it:
+`environments/local-sandbox/push-check.Dockerfile` is a reference image with Node, uv and bun at the same pins as the dev container recipe (all unverified until you build it). Build it on your machine from the clean clone's copy, never from a sandbox, with no build context, then point the push check at it:
 
 ```
-docker build -t agent-push-check:node24-uv0.13.6 - < agent-kit/environments/local-sandbox/push-check.Dockerfile
-export AGENT_PUSH_CHECK_IMAGE=agent-push-check:node24-uv0.13.6
+docker build -t agent-push-check:node24-uv0.13.6-bun1.4.2 - < _docs/agent-kit/environments/local-sandbox/push-check.Dockerfile
+export AGENT_PUSH_CHECK_IMAGE=agent-push-check:node24-uv0.13.6-bun1.4.2
 AGENT_PUSH_CHECK_PLAN=1 git push
 ```
 
