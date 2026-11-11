@@ -33,19 +33,23 @@ uv add --dev openapi-spec-validator
 Expected: `pyproject.toml` and `uv.lock` change; `uv.lock` names a version that supports OpenAPI 3.1 (`openapi-spec-validator` 0.7 or later). Write the version in the results table.
 If different: stop and tell the orchestrator what was printed.
 
-### Step 2: add the Makefile target and the AGENTS.md Commands line
+### Step 2: check the target and Commands line already on the branch
 
-Apply the approved diffs: a `contract-check` target in `Makefile` that runs `uv run --locked openapi-spec-validator` on `openapi.yaml` (or on `FILE=<path>` when given, checked with the existing `kit-path-ok`), and one line in the AGENTS.md Commands list: "**Contract check:** `make contract-check`: validates `openapi.yaml` as OpenAPI 3.1; fails on an invalid file."
-
-Expected: `git diff --stat` lists `Makefile`, `AGENTS.md`, `pyproject.toml` and `uv.lock` only.
-
-### Step 3: commit the protected files
+The orchestrator committed the approved `Makefile` target and the AGENTS.md Commands line in `2ab7135` (with `HUMAN_APPROVED=1`, after you approved the exact diffs). Check them:
 
 ```
-HUMAN_APPROVED=1 git commit -m "Add make contract-check and the OpenAPI validator (#9)"
+git show --stat 2ab7135
 ```
 
-Expected: the commit succeeds with the four files; end the message with the tool line the repository requires if you used an agent.
+Expected: only `Makefile` (6 lines added) and `AGENTS.md` (1 line added).
+
+### Step 3: commit the dependency files
+
+```
+HUMAN_APPROVED=1 git commit -m "Add openapi-spec-validator as a dev dependency (#9)" pyproject.toml uv.lock
+```
+
+Expected: the commit succeeds with `pyproject.toml` and `uv.lock` only; end the message with the tool line the repository requires if an agent helped.
 
 ### Step 4: the check passes on the contract
 
