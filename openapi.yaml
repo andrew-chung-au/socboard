@@ -254,7 +254,7 @@ paths:
       operationId: getCase
       tags: [cases]
       summary: Read one case
-      description: Open to any authenticated user. Order: 401, 404.
+      description: "Open to any authenticated user. Order: 401, 404."
       responses:
         "200":
           description: The case.
@@ -589,12 +589,12 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: The token returned by `login`. Token format is decided in #13.
+      description: "The token returned by `login`. Token format is decided in #13."
     ingestKey:
       type: apiKey
       in: header
       name: X-API-Key
-      description: The ingest API key, set by environment variable (handling decided in #14).
+      description: "The ingest API key, set by environment variable (handling decided in #14)."
   parameters:
     CaseId:
       name: id
