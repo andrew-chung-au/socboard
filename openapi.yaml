@@ -1,0 +1,912 @@
+openapi: 3.1.0
+info:
+  title: SOCBoard API
+  version: 0.1.0
+  summary: HTTP API of the SOCBoard alert triage case manager (Core release).
+  description: |
+    This file is the single source of truth for the HTTP API. It is hand-written from the
+    frontend service layer (`frontend/src/services/`) and `_docs/specs.md` sections 4 and 5.
+    The backend (#10 onward) and the real client (#21) are built to it. The decision record is
+    `_docs/decisions/2026-11-11T1511Z-openapi-contract.md`.
+
+    All paths are under the server base `/api`. Every response is a bare JSON value as listed:
+    there are no paging fields. A request without paging parameters returns the whole list in the
+    shape given here; paging, if ever added, is a new optional parameter. Every operation except
+    `login` and `ingestAlert` takes `Authorization: Bearer <token>`. `ingestAlert` takes the API
+    key header instead and no bearer token. The token format is decided in #13 and the ingest key
+    handling in #14; the mock token `mock-token-<userId>` is mock-only.
+
+    ## Function to operationId mapping
+
+    | Service-layer function | operationId | Method and path |
+    |---|---|---|
+    | `login` | `login` | `POST /login` |
+    | `getQueue` | `getQueue` | `GET /queue` |
+    | `getClosedCases` | `getClosedCases` | `GET /cases?status=Closed` |
+    | `getCase` | `getCase` | `GET /cases/{id}` |
+    | `claimCase` | `claimCase` | `POST /cases/{id}/claim` |
+    | `transitionCase` | `transitionCase` | `POST /cases/{id}/transition` |
+    | `reassignCase` | `reassignCase` | `POST /cases/{id}/reassign` (planned) |
+    | `addNote` | `addNote` | `POST /cases/{id}/notes` |
+    | `getAudit` | `getAudit` | `GET /cases/{id}/audit` |
+    | `listUsers` | `listUsers` | `GET /users` |
+    | (source systems, not the frontend) | `ingestAlert` | `POST /alerts` |
+
+    ## Refusals
+
+    Each code identifies one refusal; a status may carry several codes. Clients switch on `code`,
+    and on the status only for 401. The error body is `ApiError` (`{ code, message }`); the HTTP
+    status carries the status. A network failure is client-side only (`network_error`, status 0)
+    and is not part of this contract.
+
+    | Refusal | Status | Code |
+    |---|---|---|
+    | Missing or invalid token | 401 | `unauthorized` |
+    | Wrong username or password at login | 401 | `invalid_credentials` |
+    | Ingest with a missing or invalid API key | 401 | `invalid_api_key` (new) |
+    | Unknown case | 404 | `not_found` |
+    | Reassign target user does not exist (user is in the body) | 404 | `user_not_found` |
+    | Wrong role, or not the owner | 403 | `forbidden` |
+    | Claim on a Closed case | 409 | `case_closed` |
+    | Note on a Closed case | 409 | `case_closed` |
+    | Second claim, including by the current owner | 409 | `already_claimed` |
+    | Illegal transition (only New to Investigating and Investigating to Closed are legal) | 409 | `invalid_transition` |
+    | Reassign of an unclaimed case | 409 | `not_claimed` |
+    | Reassign of a Closed case | 409 | `case_closed` |
+    | Reassign to the current owner | 409 | `same_owner` |
+    | Close without a reason | 422 | `reason_required` |
+    | Note empty after trimming | 422 | `empty_note` |
+    | Reassign target is a Lead | 422 | `invalid_target` (new) |
+    | Request fails schema validation (missing `to`, a wrong type, an unknown enum value, a missing ingest field, a `status` on the closed list other than `Closed` or absent, a body that is not JSON) | 422 | `validation_error` (new) |
+
+    Three refusals happen outside any operation (FastAPI and #10 produce them for every route).
+    They are documented here once, not on each operation (see `components/responses`
+    `UnknownRoute`, `MethodNotAllowed` and `InternalError`):
+
+    | Refusal | Status | Code |
+    |---|---|---|
+    | Unknown route (the same code as an unknown case) | 404 | `not_found` |
+    | Wrong method on a known route | 405 | `method_not_allowed` (new) |
+    | Unexpected server exception (generic message, no stack trace or path) | 500 | `internal_error` (new) |
+
+    ### Order of checks for a well-formed request
+
+    When several refusals apply to a well-formed request, the order is 401, 404, 403, 409, then
+    422 (409 before 422). This follows the mock, which is pinned by
+    `frontend/src/test/mock-service.test.ts`. Per operation:
+
+    - claim: 401, 404, 409 `case_closed`, 409 `already_claimed` (no 403).
+    - transition: 401, 404, 403, 409 `invalid_transition`, 422 `reason_required` (only when closing).
+    - reassign: 401, 404, 403 (non-Lead), 409 `not_claimed`, 409 `case_closed`, 404 `user_not_found`,
+      409 `same_owner`, then 422 `invalid_target` last (after `same_owner`). The Lead check runs
+      after the case lookup, not as a route dependency.
+    - note: 401, 404, 409 `case_closed`, 422 `empty_note`.
+
+    Refused cases that show the order: a close request without a reason on a New case returns 409
+    `invalid_transition`, not 422; an empty note on a Closed case returns 409 `case_closed`, not
+    422; a reassign to the current owner who is also a Lead returns 409 `same_owner`, not 422
+    `invalid_target`. `reason_required`, `empty_note` and `invalid_target` are domain rules checked
+    in the handler, not schema rules.
+
+    ### Order of checks for a request that is not well-formed
+
+    This is TESTED behaviour (FastAPI 0.162.4, starlette 1.10.0, pydantic 2.14.3). It holds only
+    when authentication is a route dependency, never an inline check in the handler.
+
+    - A request with no token gets 401 `unauthorized` even when its body is schema-invalid,
+      provided the body parses as JSON.
+    - A role check that needs no case (today only `GET /cases`, Lead-only) gives 403 `forbidden`
+      BEFORE the schema 422. An Analyst calling `GET /cases` with no `status`, or with a wrong
+      `status`, gets 403, not 422; a Lead with no `status` gets 422 `validation_error`.
+    - For a route with a body, a schema-invalid body gives the generic 422 `validation_error`
+      BEFORE the 404, the owner 403, the 409s and the domain 422s. So an Analyst or a Lead who
+      sends a bad body to an unknown case gets 422, not 404.
+    - A body that is not parseable JSON gives 422 `validation_error` even with no token.
+    - For well-formed requests the order is unchanged: 401, 404, 403, 409, domain 422.
+
+    ## Stated facts
+
+    - Login: the username is trimmed before lookup; a wrong username or password is 401
+      `invalid_credentials`; login does not clear the session.
+    - A `closingReason` sent with a move that is not a close is ignored (not a 422). The request
+      omits the key when there is no reason.
+    - Queue order is severity (Critical first), then oldest alert time (`alertTimestamp`); ties
+      after that are broken in a stable order chosen by the server that clients must not infer.
+      Two reads of an unchanged queue return the same order. The client never sorts.
+    - Audit entries are returned oldest first, as stored; an `ingested` entry has actor `"system"`.
+    - A note's stored text keeps its spaces as sent; only the emptiness check trims.
+    - When several claims for one unowned case arrive together, exactly one returns 200 and every
+      other returns 409 `already_claimed`. Which one wins is not defined. A repeat of the winning
+      claim also returns 409.
+    - The audit read is allowed for any authenticated user (to be confirmed in #19).
+    - `GET /cases/{id}` is open to any authenticated user.
+
+    ## Differences from the mock
+
+    The mock is `frontend/src/services/mockService.ts`. The frontend reassign picker
+    (`routes/cases.$id.tsx`) and the mock are changed later (#21), not in #9.
+
+    1. Reassign target: the contract allows another analyst only and the backend enforces it (422
+       `invalid_target`, checked last), while the mock accepts any user other than the current
+       owner, including a Lead.
+    2. Closed-cases list: Lead-only (403 for an Analyst) and `status=Closed` required (422
+       otherwise) in the contract, open to any valid token in the mock.
+    3. The role check on that list runs before schema validation (an Analyst without `status` gets
+       403, not 422), while the mock has no schema validation.
+    4. Schema-invalid requests: the contract gives the generic 422 `validation_error` before the
+       404, 403 and 409 checks (after 401 and after a case-free role check), while the mock never
+       sees a malformed request, so it has no such order.
+
+    Codes the mock lacks are new: `invalid_target`, the generic 422 `validation_error`, the 405
+    `method_not_allowed`, the 500 `internal_error`, and the ingest codes `invalid_api_key` (401)
+    and `validation_error` (422), because the mock has no ingest. `not_found` is not new, but it
+    now also covers an unknown route.
+
+    ## Choices where the issue left the value open
+
+    Made in this file (also in the issue comment):
+    the ingest key header `X-API-Key`, the ingest 401 code `invalid_api_key`, 201 for ingest and
+    for `addNote`, the ingest response body (`CaseSummary`), and the 422 on `login` for a
+    schema-invalid body.
+servers:
+  - url: /api
+    description: Server base for every path below.
+security:
+  - bearerAuth: []
+tags:
+  - name: auth
+  - name: queue
+  - name: cases
+  - name: ingest
+  - name: users
+paths:
+  /login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Sign in
+      description: |
+        The username is trimmed before lookup. A wrong username or password is 401
+        `invalid_credentials`. Login does not clear the session. No bearer token is sent.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Signed in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Wrong username or password. Code `invalid_credentials`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                invalidCredentials:
+                  value:
+                    code: invalid_credentials
+                    message: Invalid username or password.
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /queue:
+    get:
+      operationId: getQueue
+      tags: [queue]
+      summary: Open cases in queue order
+      description: |
+        Every case that is not Closed, claimed or not. Order is severity (Critical first), then
+        oldest `alertTimestamp`; ties after that are in a stable server-chosen order that clients
+        must not infer. The client never sorts.
+      responses:
+        "200":
+          description: The queue and the time it was served.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /cases:
+    get:
+      operationId: getClosedCases
+      tags: [cases]
+      summary: List closed cases (Lead only)
+      description: |
+        Lists closed cases only in Core. The query parameter `status` is required and only
+        `Closed` is accepted; any other value, or none, is 422 `validation_error`. Lead-only
+        (spec section 4): 403 `forbidden` for an Analyst. The role check runs before the schema
+        422, so an Analyst without `status` gets 403. The mock does not enforce the Lead-only
+        rule (see "Differences from the mock"). Order: 401, 403, 422.
+      parameters:
+        - name: status
+          in: query
+          required: true
+          description: Must be `Closed`.
+          schema:
+            type: string
+            enum: [Closed]
+      responses:
+        "200":
+          description: The closed cases, as a bare array.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaseSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /cases/{id}:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      operationId: getCase
+      tags: [cases]
+      summary: Read one case
+      description: Open to any authenticated user. Order: 401, 404.
+      responses:
+        "200":
+          description: The case.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CaseNotFound"
+  /cases/{id}/claim:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      operationId: claimCase
+      tags: [cases]
+      summary: Claim a case
+      description: |
+        No request body. Sets the owner only; moving the status is a separate step. Open to
+        Analyst and Lead (no 403). Order: 401, 404, 409 `case_closed`, 409 `already_claimed`.
+        A second claim, including by the current owner, is 409 `already_claimed`. When several
+        claims for one unowned case arrive together, exactly one returns 200 and every other
+        returns 409 `already_claimed`; which one wins is not defined. A repeat of the winning
+        claim also returns 409.
+      responses:
+        "200":
+          description: The case after the claim.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CaseNotFound"
+        "409":
+          description: |
+            Code `case_closed` (the case is Closed) or `already_claimed` (the case has an owner,
+            including the caller).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                caseClosed:
+                  value:
+                    code: case_closed
+                    message: Closed cases cannot be claimed.
+                alreadyClaimed:
+                  value:
+                    code: already_claimed
+                    message: Case is already owned.
+  /cases/{id}/transition:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      operationId: transitionCase
+      tags: [cases]
+      summary: Move a case through the workflow
+      description: |
+        Only the owner or a Lead may change status. Only New to Investigating and Investigating to
+        Closed are legal. Closing needs a `closingReason` (a domain rule, 422 `reason_required`,
+        checked after the 409s). A `closingReason` sent with a move that is not a close is
+        ignored. Order: 401, (schema 422), 404, 403, 409 `invalid_transition`, 422
+        `reason_required` (only when closing).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRequest"
+      responses:
+        "200":
+          description: The case after the move.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/CaseNotFound"
+        "409":
+          description: Code `invalid_transition`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                invalidTransition:
+                  value:
+                    code: invalid_transition
+                    message: Cannot move a case from New to Closed.
+        "422":
+          description: |
+            Code `validation_error` (the body fails the schema, for example `to` is missing) or
+            `reason_required` (closing without a reason).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                missingTo:
+                  summary: A transition request without `to`
+                  value:
+                    code: validation_error
+                    message: The request is not valid.
+                reasonRequired:
+                  value:
+                    code: reason_required
+                    message: A closing reason is required.
+  /cases/{id}/reassign:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      operationId: reassignCase
+      x-status: planned
+      tags: [cases]
+      summary: Reassign a claimed case to another analyst (planned)
+      description: |
+        PLANNED. A Should-have, not implemented in Core (`x-status: planned`). Lead only. The
+        target is another analyst only (spec wording). Order: 401, (schema 422), 404, 403
+        (non-Lead), 409 `not_claimed`, 409 `case_closed`, 404 `user_not_found` (the user is in the
+        request body, not the path), 409 `same_owner`, then 422 `invalid_target` for a target who
+        is a Lead, checked last. The Lead check runs after the case lookup, not as a route
+        dependency. Refused case: reassigning a claimed case to a Lead who is not the current
+        owner returns 422 `invalid_target`; reassigning to the current owner who is a Lead
+        returns 409 `same_owner`. The mock accepts a Lead as target (see "Differences from the
+        mock").
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReassignRequest"
+      responses:
+        "200":
+          description: The case after the reassignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Code `not_found` (unknown case) or `user_not_found` (unknown target user).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                notFound:
+                  value:
+                    code: not_found
+                    message: Case not found.
+                userNotFound:
+                  value:
+                    code: user_not_found
+                    message: User not found.
+        "409":
+          description: Code `not_claimed`, `case_closed` or `same_owner`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                notClaimed:
+                  value:
+                    code: not_claimed
+                    message: Only claimed cases can be reassigned.
+                caseClosed:
+                  value:
+                    code: case_closed
+                    message: Closed cases cannot be reassigned.
+                sameOwner:
+                  value:
+                    code: same_owner
+                    message: Case is already owned by that user.
+        "422":
+          description: |
+            Code `validation_error` (the body fails the schema) or `invalid_target` (the target is
+            a Lead; checked last).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                invalidTarget:
+                  value:
+                    code: invalid_target
+                    message: A case can be reassigned to an analyst only.
+  /cases/{id}/notes:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      operationId: addNote
+      tags: [cases]
+      summary: Add a note to an open case
+      description: |
+        Any authenticated user may add a note to any open case, owned or not. A note on a Closed
+        case is 409 `case_closed`. A note empty after trimming is 422 `empty_note` (a domain rule
+        in the handler, not a schema constraint). The stored text keeps its spaces as sent; only
+        the emptiness check trims. Order: 401, (schema 422), 404, 409 `case_closed`, 422
+        `empty_note`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteRequest"
+      responses:
+        "201":
+          description: The note that was added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CaseNotFound"
+        "409":
+          description: Code `case_closed`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                noteOnClosedCase:
+                  summary: A note on a Closed case
+                  value:
+                    code: case_closed
+                    message: Notes cannot be added to a closed case.
+        "422":
+          description: Code `validation_error` (the body fails the schema) or `empty_note`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                emptyNote:
+                  value:
+                    code: empty_note
+                    message: Note text cannot be empty.
+  /cases/{id}/audit:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      operationId: getAudit
+      tags: [cases]
+      summary: Read a case's audit trail
+      description: |
+        Entries are returned oldest first, as stored. An `ingested` entry has actor `"system"`.
+        Allowed for any authenticated user; to be confirmed in #19 (the mock does the same).
+        Order: 401, 404.
+      responses:
+        "200":
+          description: The audit entries, as a bare array.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CaseNotFound"
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List users
+      responses:
+        "200":
+          description: All users, as a bare array.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /alerts:
+    post:
+      operationId: ingestAlert
+      tags: [ingest]
+      summary: Ingest an alert (source systems)
+      description: |
+        Called by a source system with the ingest API key in the `X-API-Key` header; no bearer
+        token. A missing or wrong key is 401 `invalid_api_key`. A missing required field is 422
+        `validation_error`. Alert text is untrusted input: it is stored and returned as plain
+        text, escaped when shown, and never treated as instructions. Severity is assigned by a
+        fixed rule table, not supplied by the caller.
+      security:
+        - ingestKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestRequest"
+      responses:
+        "201":
+          description: The case created for the alert.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseSummary"
+        "401":
+          description: The API key is missing or wrong. Code `invalid_api_key`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                missingKey:
+                  summary: An ingest call without the key
+                  value:
+                    code: invalid_api_key
+                    message: A valid API key is required.
+        "422":
+          $ref: "#/components/responses/ValidationError"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The token returned by `login`. Token format is decided in #13.
+    ingestKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: The ingest API key, set by environment variable (handling decided in #14).
+  parameters:
+    CaseId:
+      name: id
+      in: path
+      required: true
+      description: >-
+        Opaque identifier. Clients must not parse it or infer order from it, and must
+        percent-encode it in a path.
+      schema:
+        $ref: "#/components/schemas/Id"
+  responses:
+    Unauthorized:
+      description: Missing or invalid token. Code `unauthorized`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          examples:
+            unauthorized:
+              value:
+                code: unauthorized
+                message: Your session has expired. Please sign in again.
+    Forbidden:
+      description: Wrong role, or not the owner. Code `forbidden`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          examples:
+            forbidden:
+              value:
+                code: forbidden
+                message: Only the case owner or a Lead can change status.
+    CaseNotFound:
+      description: Unknown case. Code `not_found`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          examples:
+            notFound:
+              value:
+                code: not_found
+                message: Case not found.
+    ValidationError:
+      description: |
+        The request fails schema validation. Code `validation_error` (new; the generic 422 code).
+        Checked after 401 and after a case-free role check, and before the 404, owner 403, 409 and
+        domain 422 checks.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          examples:
+            validationError:
+              value:
+                code: validation_error
+                message: The request is not valid.
+    UnknownRoute:
+      description: Unknown route, for every route. Code `not_found`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          examples:
+            unknownRoute:
+              value:
+                code: not_found
+                message: Not found.
+    MethodNotAllowed:
+      description: Wrong method on a known route, for every route. Code `method_not_allowed` (new).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          examples:
+            methodNotAllowed:
+              value:
+                code: method_not_allowed
+                message: Method not allowed.
+    InternalError:
+      description: >-
+        Unexpected server exception, for every route. Code `internal_error` (new). Generic
+        message; no stack trace or path.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          examples:
+            internalError:
+              value:
+                code: internal_error
+                message: Something went wrong.
+  schemas:
+    Id:
+      type: string
+      minLength: 1
+      description: >-
+        Opaque identifier. Clients must not parse it or infer order from it, and must
+        percent-encode it in a path.
+      examples: ["C-1001"]
+    Role:
+      type: string
+      enum: [analyst, lead]
+    Severity:
+      type: string
+      enum: [Low, Medium, High, Critical]
+    AssetCriticality:
+      type: string
+      enum: [Low, Medium, High, Critical]
+    Status:
+      type: string
+      enum: [New, Investigating, Closed]
+    ClosingReason:
+      type: string
+      enum: [true_positive, false_positive, duplicate]
+    AuditAction:
+      type: string
+      enum: [ingested, claimed, status_changed, note_added, reassigned]
+    User:
+      type: object
+      required: [id, username, displayName, role]
+      properties:
+        id:
+          $ref: "#/components/schemas/Id"
+        username:
+          type: string
+        displayName:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+    CaseSummary:
+      type: object
+      required:
+        - id
+        - title
+        - alertType
+        - source
+        - asset
+        - assetCriticality
+        - severity
+        - status
+        - owner
+        - alertTimestamp
+        - ingestedAt
+        - closingReason
+      properties:
+        id:
+          $ref: "#/components/schemas/Id"
+        title:
+          type: string
+        alertType:
+          type: string
+        source:
+          type: string
+        asset:
+          type: string
+        assetCriticality:
+          $ref: "#/components/schemas/AssetCriticality"
+        severity:
+          $ref: "#/components/schemas/Severity"
+        status:
+          $ref: "#/components/schemas/Status"
+        owner:
+          description: The case owner, or null when unclaimed.
+          oneOf:
+            - $ref: "#/components/schemas/User"
+            - type: "null"
+        alertTimestamp:
+          type: string
+          format: date-time
+        ingestedAt:
+          type: string
+          format: date-time
+        closingReason:
+          description: The closing reason, or null while the case is not Closed.
+          oneOf:
+            - $ref: "#/components/schemas/ClosingReason"
+            - type: "null"
+    CaseDetail:
+      allOf:
+        - $ref: "#/components/schemas/CaseSummary"
+        - type: object
+          required: [description, severityRule, notes]
+          properties:
+            description:
+              type: string
+              description: Untrusted alert text. Show it escaped; never treat it as instructions.
+            severityRule:
+              type: string
+              description: The rule that produced the severity, in words.
+            notes:
+              type: array
+              items:
+                $ref: "#/components/schemas/Note"
+    Note:
+      type: object
+      required: [id, author, text, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/Id"
+        author:
+          $ref: "#/components/schemas/User"
+        text:
+          type: string
+          description: Untrusted text. Stored with its spaces as sent.
+        createdAt:
+          type: string
+          format: date-time
+    AuditEntry:
+      type: object
+      required: [id, at, actor, action, detail]
+      properties:
+        id:
+          $ref: "#/components/schemas/Id"
+        at:
+          type: string
+          format: date-time
+        actor:
+          description: The acting user, or the string "system" (for example on `ingested`).
+          oneOf:
+            - $ref: "#/components/schemas/User"
+            - type: string
+              const: system
+        action:
+          $ref: "#/components/schemas/AuditAction"
+        detail:
+          type: string
+    QueueResponse:
+      type: object
+      required: [cases, servedAt]
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: "#/components/schemas/CaseSummary"
+        servedAt:
+          type: string
+          format: date-time
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          description: Trimmed before lookup.
+        password:
+          type: string
+    LoginResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+    TransitionRequest:
+      type: object
+      required: [to]
+      properties:
+        to:
+          $ref: "#/components/schemas/Status"
+        closingReason:
+          description: >-
+            Optional. Required in practice only when closing (a domain rule, 422
+            `reason_required`, not a schema rule). Ignored on a move that is not a close. Omit the
+            key when there is no reason.
+          $ref: "#/components/schemas/ClosingReason"
+    ReassignRequest:
+      type: object
+      required: [userId]
+      properties:
+        userId:
+          $ref: "#/components/schemas/Id"
+    NoteRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: >-
+            Plain text, no schema minimum length. Emptiness after trimming is a domain rule
+            (`empty_note`) checked in the handler.
+    IngestRequest:
+      type: object
+      required: [source, type, asset, timestamp, title, description]
+      properties:
+        source:
+          type: string
+        type:
+          type: string
+          description: The alert type; returned as `alertType` on the case.
+        asset:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+          description: When the alert happened; returned as `alertTimestamp` on the case.
+        title:
+          type: string
+        description:
+          type: string
+    ApiError:
+      type: object
+      description: >-
+        The error body. The HTTP status carries the status, so there is no `status` field. Clients
+        must ignore properties they do not know.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: A stable machine-readable code that clients switch on.
+        message:
+          type: string
+          description: Human-readable text. It never contains submitted values.
