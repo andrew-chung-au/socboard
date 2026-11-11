@@ -1,15 +1,26 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // Source guardrails from the Lovable guide (_docs/planning/lovable-guidance.md) held as a test.
 // The scan covers every file under frontend/src except src/test/ (the tests name the patterns).
 
-const SRC = fileURLToPath(new URL("..", import.meta.url));
-
 const MOCK = "services/mockService.ts";
 const HTTP = "services/http.ts";
+
+// Locate frontend/src without import.meta.url: under Vitest's jsdom environment `new URL(...)` is
+// jsdom's URL and `fileURLToPath` rejects it ("The URL must be of scheme file", CI run 42967613566).
+// Vitest's root is frontend/ (`cd frontend && bun run test`), so `process.cwd()` is frontend/. The
+// repo-root candidate keeps the test working if it is started from the repo root. A directory only
+// counts if it holds the mock, so a wrong guess fails loudly instead of scanning nothing.
+function findSrc(): string {
+  const candidates = [resolve(process.cwd(), "src"), resolve(process.cwd(), "frontend", "src")];
+  const found = candidates.find((dir) => existsSync(join(dir, MOCK)));
+  if (!found) throw new Error(`guardrails: frontend/src not found; looked in ${candidates.join(", ")}`);
+  return found;
+}
+
+const SRC = findSrc();
 
 // The only `<script` text allowed anywhere: the hostile fixture title in the mock.
 const SCRIPT_FIXTURE = "<script>alert('xss')</script> in alert title";
