@@ -198,24 +198,57 @@ def classify(message: str, number: str) -> str:
     return ""
 
 
+def shown(text: str) -> str:
+    """A short, quoted form of text from a log record, safe to print in a reason."""
+    return repr(text[:12]) + ("..." if len(text) > 12 else "")
+
+
+def parse_messages(walked, log_output: str) -> list:
+    """(id, message) pairs from `git log -z --format=%H%x1f%B` output, checked against git's walk.
+
+    `walked` is the id list from git's own walk (ids only, no message text). The records must
+    match it exactly: same ids, same order, each once. Records are ended by NUL, which message
+    text cannot add; the id is the text before the first \\x1f of a record. Any difference
+    raises Unavailable (fail closed) and nothing is returned from the partial data.
+    """
+    pieces = log_output.split("\0")
+    if pieces and pieces[-1] == "":
+        pieces.pop()
+    records, seen, allowed = [], set(), set(walked)
+    for piece in pieces:
+        sha, _, message = piece.partition("\x1f")
+        if sha in seen:
+            raise Unavailable(f"log record {shown(sha)} appears more than once")
+        if sha not in allowed:
+            raise Unavailable(f"log record {shown(sha)} is not a commit git walked")
+        seen.add(sha)
+        records.append((sha, message.strip("\n")))
+    for sha in walked:
+        if sha not in seen:
+            raise Unavailable(f"commit {shown(sha)} git walked is missing from the log")
+    if [sha for sha, _ in records] != list(walked):
+        raise Unavailable("log records are not in the order git walked them")
+    return records
+
+
 def issue_commits(git_dir: str, head: str, number: str) -> dict:
     """Non-merge commits reachable from head sorted by the belongs rule, oldest first.
 
-    Returns {'counted': [...], 'mention': [...], 'shared': [...]} of full commit ids.
+    Returns {'counted': [...], 'mention': [...], 'shared': [...]} of full commit ids, each
+    taken from git's own walk of the history (see parse_messages).
     """
     if not HEX.fullmatch(head):
         raise Unavailable("the QA PASS commit is not a hex commit id")
     full = git(git_dir, "rev-parse", "--verify", "--quiet", head + "^{commit}").strip()
     if not full:
         raise Unavailable("the QA PASS commit is not in this repository")
-    out = git(git_dir, "log", "--no-merges", "--reverse", "--format=%H%x1f%B%x1e", full)
+    walked = git(git_dir, "log", "--no-merges", "--reverse", "--format=%H", full).split()
+    out = git(git_dir, "log", "--no-merges", "--reverse", "-z", "--format=%H%x1f%B", full)
     found = {"counted": [], "mention": [], "shared": []}
-    for record in out.split("\x1e"):
-        sha, _, message = record.strip("\n").partition("\x1f")
-        if re.fullmatch(r"[0-9a-f]{40}", sha):
-            kind = classify(message, number)
-            if kind:
-                found[kind].append(sha)
+    for sha, message in parse_messages(walked, out):
+        kind = classify(message, number)
+        if kind:
+            found[kind].append(sha)
     return found
 
 

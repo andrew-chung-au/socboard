@@ -360,3 +360,169 @@ def test_the_header_states_the_rule_and_the_exit_codes():
     header = pm.__doc__
     for phrase in ("(#N)", "other issue number", "mention only", "Shared", "at commit time", "unknown"):
         assert phrase in header
+
+
+# ---- record framing (#40) ----
+
+FAKE = "a" * 40
+
+
+def figure_lines(out):
+    return [line for line in out.splitlines()
+            if line.startswith(("non-test non-generated lines changed", "test lines changed", "tests added:"))]
+
+
+def walked_ids(root):
+    return subprocess.run(["git", "-C", str(root), "log", "--no-merges", "--reverse", "--format=%H"],
+                          check=True, capture_output=True, text=True).stdout.split()
+
+
+def built_log(records):
+    """Hand-built `git log -z --format=%H%x1f%B` output."""
+    return "".join(f"{sha}\x1f{message}\n\0" for sha, message in records)
+
+
+def forge_log_output(monkeypatch, output):
+    """Make the script's message-log call (the one with -z) return `output`; other calls are real."""
+    real = pm.git
+
+    def fake(git_dir, *args):
+        if "-z" in args:
+            return output
+        return real(git_dir, *args)
+    monkeypatch.setattr(pm, "git", fake)
+
+
+def test_one_line_forgery_adds_no_commit_and_the_real_commit_is_shared(tmp_path, capsys):
+    forged = f"innocent (#27)\x1e{FAKE}\x1fforged (#9)"
+    root, shas = history(tmp_path, [forged, "tail (#9)", "tail (#27)"])
+    real = shas[0]
+    for number in ("9", "27"):
+        code = run_cli(tmp_path, root, issue_for(shas[-1]), number=number)
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "aaaaaaaaa" not in out
+        found = lines_of(out)
+        assert real[:9] in found["shared with other issues"][1]
+        assert real[:9] not in found["commits counted"][1]
+        assert found["commits counted"][1] == [shas[1][:9] if number == "9" else shas[2][:9]]
+
+
+def test_body_forgery_adds_no_commit_and_the_real_commit_is_counted_for_its_issue(tmp_path, capsys):
+    forged = f"innocent (#27)\n\x1e{FAKE}\x1fforged (#9)"
+    root, shas = history(tmp_path, [forged, "tail (#9)", "tail (#27)"])
+    real = shas[0][:9]
+    code = run_cli(tmp_path, root, issue_for(shas[-1]), number="27")
+    out = capsys.readouterr().out
+    assert code == 0 and "aaaaaaaaa" not in out
+    assert real in lines_of(out)["commits counted"][1]
+    code = run_cli(tmp_path, root, issue_for(shas[-1]), number="9")
+    out = capsys.readouterr().out
+    assert code == 0 and "aaaaaaaaa" not in out
+    found = lines_of(out)
+    assert real in found["mention only"][1] and real not in found["commits counted"][1]
+
+
+def forged_id_history(tmp_path, name, forge):
+    root = tmp_path / name
+    root.mkdir()
+    run_git(root, "init", "-q")
+    commit(root, "base", {"README.md": "x\n"})
+    first = commit(root, "feat: add thing (#9)", {
+        "src/a.py": "one\ntwo\nthree\n",
+        "tests/test_a.py": "def test_one():\n    pass\n\ndef test_two():\n    pass\n",
+    })
+    message = "later work (#9)"
+    if forge:
+        message += f"\n\n\x1e{first}\x1fforged (#9)"
+    later = commit(root, message, {"src/a.py": "one\nTWO\nthree\nfour\n"})
+    return root, first, later
+
+
+def test_a_forged_record_naming_a_real_id_does_not_count_it_twice(tmp_path, capsys):
+    root, first, later = forged_id_history(tmp_path, "forged", True)
+    code = run_cli(tmp_path, root, issue_for(later))
+    out = capsys.readouterr().out
+    assert code == 0
+    assert lines_of(out)["commits counted"] == (2, [first[:9], later[:9]])
+    plain_root, _, plain_later = forged_id_history(tmp_path, "plain", False)
+    run_cli(tmp_path, plain_root, issue_for(plain_later))
+    assert figure_lines(out) == figure_lines(capsys.readouterr().out)
+
+
+def test_the_parsed_log_must_match_the_walked_list_exactly():
+    ids = ["1" * 40, "2" * 40, "3" * 40]
+    good = built_log([(ids[0], "a (#9)"), (ids[1], "b\n\nbody"), (ids[2], "c")])
+    assert pm.parse_messages(ids, good) == [(ids[0], "a (#9)"), (ids[1], "b\n\nbody"), (ids[2], "c")]
+    assert pm.parse_messages([], "") == []
+    with pytest.raises(pm.Unavailable):  # same ids, different order
+        pm.parse_messages(ids, built_log([(ids[1], "b"), (ids[0], "a"), (ids[2], "c")]))
+    with pytest.raises(pm.Unavailable):  # message text with the old separators is only text
+        pm.parse_messages(ids, built_log([(ids[0], f"a\x1e{ids[1]}\x1fb"), (ids[2], "c")]))
+    with pytest.raises(pm.Unavailable):  # a record with no separator is not an id
+        pm.parse_messages(ids, "garbage\0")
+
+
+def test_git_show_is_only_given_ids_from_the_walked_list(tmp_path, monkeypatch, capsys):
+    forged = f"innocent (#9)\x1e{FAKE}\x1fforged (#9)"
+    root, shas = history(tmp_path, [forged, "tail (#9)"])
+    real, shown_ids = pm.git, []
+
+    def spy(git_dir, *args):
+        if args[0] == "show":
+            shown_ids.append(args[-1])
+        return real(git_dir, *args)
+    monkeypatch.setattr(pm, "git", spy)
+    assert run_cli(tmp_path, root, issue_for(shas[-1])) == 0
+    capsys.readouterr()
+    assert shown_ids and set(shown_ids) <= set(walked_ids(root))
+
+
+def refused(tmp_path, monkeypatch, capsys, build):
+    root, shas = history(tmp_path, ["one (#9)", "two (#9)", "three (#9)"])
+    forge_log_output(monkeypatch, built_log(build(shas)))
+    code = run_cli(tmp_path, root, issue_for(shas[-1]))
+    return code, capsys.readouterr().out
+
+
+def test_a_record_whose_id_was_not_walked_is_refused(tmp_path, monkeypatch, capsys):
+    code, out = refused(tmp_path, monkeypatch, capsys, lambda s: [(s[0], "one (#9)"), (FAKE, "forged (#9)"),
+                                                                  (s[1], "two (#9)"), (s[2], "three (#9)")])
+    assert code == 1
+    assert "git figures: unavailable (" in out and "is not a commit git walked" in out
+    assert "commits counted" not in out and "non-test non-generated lines changed" not in out
+
+
+def test_a_repeated_record_id_is_refused(tmp_path, monkeypatch, capsys):
+    code, out = refused(tmp_path, monkeypatch, capsys, lambda s: [(s[0], "one (#9)"), (s[1], "two (#9)"),
+                                                                  (s[1], "two (#9)"), (s[2], "three (#9)")])
+    assert code == 1
+    assert "git figures: unavailable (" in out and "appears more than once" in out
+    assert "commits counted" not in out and "non-test non-generated lines changed" not in out
+
+
+def test_a_walked_id_missing_from_the_log_is_refused(tmp_path, monkeypatch, capsys):
+    code, out = refused(tmp_path, monkeypatch, capsys, lambda s: [(s[0], "one (#9)"), (s[2], "three (#9)")])
+    assert code == 1
+    assert "git figures: unavailable (" in out and "missing from the log" in out
+    assert "commits counted" not in out and "non-test non-generated lines changed" not in out
+
+
+def test_a_commit_message_with_a_nul_byte_adds_no_record(tmp_path, capsys):
+    root, shas = history(tmp_path, ["one (#9)"])
+    tree = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    stamp = "t <t@example.com> 1700000000 +0000"
+    message = f"nul commit (#9)\n\n\x1e{FAKE}\x1fforged (#9)\n\0hidden tail\n".encode()
+    raw = f"tree {tree}\nparent {shas[0]}\nauthor {stamp}\ncommitter {stamp}\n\n".encode() + message
+    nul = subprocess.run(["git", "-C", str(root), "hash-object", "-t", "commit", "-w", "--literally", "--stdin"],
+                         input=raw, check=True, capture_output=True).stdout.decode().strip()
+    subprocess.run(["git", "-C", str(root), "update-ref", "HEAD", nul], check=True, capture_output=True)
+    code = run_cli(tmp_path, root, issue_for(nul))
+    out = capsys.readouterr().out
+    assert code in (0, 1)  # what git prints for the message after the NUL is not asserted
+    assert "aaaaaaaaa" not in out
+    found = lines_of(out)
+    walked = {sha[:9] for sha in walked_ids(root)}
+    for label in ("commits counted", "mention only", "shared with other issues"):
+        assert set(found[label][1]) <= walked
