@@ -1,6 +1,7 @@
 """Tests for scripts/ponytail_metrics.py, on fixture issues and a throwaway git repository."""
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -54,9 +55,9 @@ def repo(tmp_path):
         "tests/test_a.py": "def test_one():\n    pass\n\ndef test_two():\n    pass\n",
         "uv.lock": "\n".join(f"line {i}" for i in range(10)) + "\n",
     })
-    commit(root, "unrelated work for #90", {"src/b.py": "b1\nb2\nb3\nb4\n"})
+    c2 = commit(root, "unrelated work for #90", {"src/b.py": "b1\nb2\nb3\nb4\n"})
     c3 = commit(root, "fix the thing (#9)", {"src/a.py": "one\nTWO\nthree\n"})
-    return {"root": root, "base": c0, "first": c1, "qa": c3}
+    return {"root": root, "base": c0, "first": c1, "other": c2, "qa": c3}
 
 
 def comment(login, when, body):
@@ -118,7 +119,7 @@ def test_a_commit_for_another_issue_is_not_counted(tmp_path, repo, capsys):
     run_cli(tmp_path, repo["root"], issue_for(repo["qa"]))
     out = capsys.readouterr().out
     assert repo["first"][:9] in out
-    assert "b1" not in out and "commits counted (3)" not in out
+    assert repo["other"][:9] not in out and "commits counted (3)" not in out
 
 
 def test_missing_qa_pass_line_is_unavailable_and_never_guessed(tmp_path, repo, capsys):
@@ -196,7 +197,7 @@ def test_fixture_options_must_come_together(tmp_path):
 
 def test_output_has_raw_values_only(tmp_path, repo, capsys):
     run_cli(tmp_path, repo["root"], issue_for(repo["qa"]))
-    out = capsys.readouterr().out.lower()
+    out = re.sub(r"\b[0-9a-f]{7,40}\b", "", capsys.readouterr().out.lower())  # commit ids are not prose
     for word in ("better", "worse", "threshold", "target", "band", "verdict", "pass the", "good", "bad"):
         assert word not in out
 
