@@ -150,19 +150,24 @@ frontend-build: ## Build the frontend to static files in frontend/dist (mock off
 	@echo "frontend-build: frontend/dist has index.html, no server output, no demo data, no Google fonts host"
 
 frontend-test: ## Run the frontend tests (Vitest); run make frontend-install first
-	@test -d frontend/node_modules || { echo "frontend-test: frontend/node_modules is missing; run make frontend-install first"; exit 1; }
+	@test -x frontend/node_modules/.bin/vitest || { echo "frontend-test: frontend/node_modules/.bin/vitest is missing; run make frontend-install first"; exit 1; }
 	cd frontend && bun run test
 
 frontend-start: ## Start the frontend dev server in the background (mock on; log: .scratch/frontend.log; http://localhost:5173/)
 	@mkdir -p .scratch
-	@test -d frontend/node_modules || { echo "frontend-start: frontend/node_modules is missing; run make frontend-install first"; exit 1; }
-	@if [ -f .scratch/frontend.pid ] && kill -0 "$$(cat .scratch/frontend.pid)" 2>/dev/null; then echo "frontend is already running (pid $$(cat .scratch/frontend.pid))"; exit 1; fi
+	@test -x frontend/node_modules/.bin/vite || { echo "frontend-start: frontend/node_modules/.bin/vite is missing; run make frontend-install first"; exit 1; }
+	@if [ -f .scratch/frontend.pid ]; then pid=$$(cat .scratch/frontend.pid); case "$$pid" in ''|*[!0-9]*|0*) echo "frontend-start: .scratch/frontend.pid does not hold a plain pid; check it and remove it by hand"; exit 1;; esac; if kill -0 "$$pid" 2>/dev/null; then echo "frontend is already running (pid $$pid)"; exit 1; fi; fi
 	@nohup sh -c 'cd frontend && exec node_modules/.bin/vite dev --strictPort' > .scratch/frontend.log 2>&1 & echo $$! > .scratch/frontend.pid
-	@echo "frontend started (pid $$(cat .scratch/frontend.pid)); log: .scratch/frontend.log"
+	@sleep 1; pid=$$(cat .scratch/frontend.pid); if ! kill -0 "$$pid" 2>/dev/null || grep -q '^State:[[:space:]]*Z' "/proc/$$pid/status" 2>/dev/null; then echo "frontend-start: the server exited at once; last lines of .scratch/frontend.log:"; tail -n 20 .scratch/frontend.log; rm -f .scratch/frontend.pid; exit 1; fi; echo "frontend started (pid $$pid); log: .scratch/frontend.log"
 
 frontend-stop: ## Stop the dev server started by frontend-start
 	@if [ ! -f .scratch/frontend.pid ]; then echo "frontend is not running"; exit 0; fi; \
-	pid=$$(cat .scratch/frontend.pid); kill "$$pid" 2>/dev/null; \
+	pid=$$(cat .scratch/frontend.pid); \
+	case "$$pid" in ''|*[!0-9]*|0*) echo "frontend-stop: .scratch/frontend.pid does not hold a plain pid; nothing killed; check the file"; exit 1;; esac; \
+	if ! kill -0 "$$pid" 2>/dev/null; then rm -f .scratch/frontend.pid; echo "frontend was not running (stale pid file removed)"; exit 0; fi; \
+	if [ -r "/proc/$$pid/cmdline" ]; then cmd=$$(tr '\0' ' ' < "/proc/$$pid/cmdline"); elif command -v ps >/dev/null 2>&1; then cmd=$$(ps -o command= -p "$$pid"); else cmd=; fi; \
+	case "$$cmd" in *node_modules/.bin/vite\ dev*) ;; *) echo "frontend-stop: pid $$pid does not look like the dev server (its command line is not the one frontend-start runs, or it cannot be read); nothing killed; stop it by hand if it is yours"; exit 1;; esac; \
+	kill "$$pid" 2>/dev/null; \
 	for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$$pid" 2>/dev/null || break; sleep 1; done; \
-	if kill -0 "$$pid" 2>/dev/null; then echo "frontend (pid $$pid) did not stop within 10 s"; exit 1; fi; \
+	if kill -0 "$$pid" 2>/dev/null; then echo "frontend (pid $$pid) did not stop within 10 s; not forced; pid file kept"; exit 1; fi; \
 	rm -f .scratch/frontend.pid; echo "frontend stopped"
