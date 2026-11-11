@@ -136,6 +136,12 @@ kit-feedback: ## Write a read-only feedback bundle under .scratch/ from a projec
 decisions: ## List the decision records with their Status word (proposed, approved or superseded)
 	@for f in _docs/decisions/*.md; do s=$$(grep -m1 -i -o 'status: [a-z]*' "$$f" | cut -d' ' -f2); printf '%-11s %s  (%s)\n' "$${s:-MISSING}" "$$(head -n 1 "$$f" | sed 's/^# //')" "$$(basename "$$f")"; done
 
+# --- API contract (issue #9) -------------------------------------------------
+
+contract-check: ## Validate openapi.yaml as OpenAPI 3.1 (fails on an invalid file): make contract-check [FILE=<path>]
+	$(if $(value FILE),$(if $(call kit-path-ok,$(value FILE)),,$(error Usage: make contract-check [FILE=<path>] - FILE: one word, letters digits . _ / - only, no ..)))
+	uv run --locked openapi-spec-validator "$(if $(value FILE),$(FILE),openapi.yaml)"
+
 # --- Frontend (issue #27) ----------------------------------------------------
 
 frontend-install: ## Install the frontend packages from frontend/bun.lock; fails if the lockfile would change
