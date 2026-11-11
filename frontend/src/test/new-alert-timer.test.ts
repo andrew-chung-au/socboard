@@ -29,8 +29,10 @@ async function queue(mod: MockModule) {
 }
 
 afterEach(() => {
-  vi.useRealTimers();
+  // Spies first: a spy put on a fake timer function must be removed before the real timers come
+  // back, or restoring it afterwards would put the fake function back on globalThis.
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
 });
 
