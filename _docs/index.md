@@ -45,6 +45,7 @@ By file. Add project manifests here.
 | `_docs/records/2026-11-10T0946Z-source-lovable-frontend.md` | Where the `frontend/` base came from, its template, quirks and licence status (source record) | Current |
 | `_docs/records/2026-11-10T1506Z-measure-ponytail-epoch-1-start.md` | Start of ponytail epoch 1: the commit, kit version, role-file versions, skill pin and excluded issues | Current |
 | `_docs/records/2026-11-10T1518Z-measure-pm-sweep.md` | First PM sweep: figures at f41d503, seven proposals and the human's ruling | Current |
+| `_docs/decisions/2026-11-11T0327Z-frontend-tests-in-make-test.md` | Why `make install` installs the frontend packages and `make test` and `make verify` run the frontend tests (issue #46) | Current |
 | `pyproject.toml` | Python project metadata and dependencies | Current |
 | `uv.lock` | Resolved dependency versions | Current |
 | `Makefile` | Project commands | Current |
