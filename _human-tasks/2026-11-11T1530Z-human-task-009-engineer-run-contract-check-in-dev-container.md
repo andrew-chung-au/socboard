@@ -96,13 +96,15 @@ Expected: the branch updates on GitHub. Tell the orchestrator, who then launches
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 (validator version) | | |
-| 2 | | |
-| 3 | | |
-| 4 | | |
-| 5 | | |
-| 6 | | |
-| 7 | | |
+| 1 (validator version) | pass | `openapi-spec-validator` 0.9.0 (21 packages resolved; also pydantic 2.14.3, pydantic-core 2.50.4). Hardlink warning only. |
+| 2 | pass | The branch was behind at first (`No rule to make target 'contract-check'`); after `git pull --rebase` the target and Commands line from `2ab7135` were present. |
+| 3 | pass | Committed `pyproject.toml` and `uv.lock` only (532 insertions, 2 deletions); on GitHub as `2e009c9`. |
+| 4 | pass | First run failed on three unquoted YAML scalars (lines 257, 592, 597), fixed in `114624c`; then `openapi.yaml: OK`, and again `openapi.yaml: OK` after the Differences change in `8ad8874`. |
+| 5 | pass | A copy with the `openapi: 3.1.0` line deleted failed with a blank `Error: ` and make exit status 2; the same on the root file with the line deleted (restored with `git restore`). The failure message is blank, which is a known limitation. |
+| 6 | pass | `VERIFY: PASS`: 47 Python tests, 154 frontend tests, no whitespace errors, "No test files changed". Its output lists no contract check. |
+| 7 | pass | The dev container cannot push (403 by design). Pushed from the clean clone after building `agent-push-check:node24-uv0.13.6-bun1.4.2` (bun 1.4.2) and setting `AGENT_PUSH_CHECK_IMAGE`; the push check passed. Also covers the rebuild-the-image task from #46. |
+
+Filled in by the orchestrator from the output the human pasted in this session; the human confirmed the steps ("I think I did the steps can you fill it in for me").
 
 ## Risk
 
