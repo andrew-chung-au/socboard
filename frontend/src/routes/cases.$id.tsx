@@ -228,14 +228,14 @@ function CasePage() {
                     Claim case
                   </Button>
                 )}
-                {c.status === "New" && (
-                  <Button className="w-full" size="sm" variant="secondary" disabled={busy || !canChangeStatus}
+                {canChangeStatus && c.status === "New" && (
+                  <Button className="w-full" size="sm" variant="secondary" disabled={busy}
                     onClick={() => run.mutate(() => api.transitionCase(c.id, "Investigating"))}>
                     Start investigating
                   </Button>
                 )}
-                {c.status === "Investigating" && (
-                  <Button className="w-full" size="sm" variant="secondary" disabled={busy || !canChangeStatus}
+                {canChangeStatus && c.status === "Investigating" && (
+                  <Button className="w-full" size="sm" variant="secondary" disabled={busy}
                     onClick={() => { setReason(""); setCloseOpen(true); }}>
                     Close case…
                   </Button>
