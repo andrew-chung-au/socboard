@@ -136,6 +136,24 @@ info:
     4. Schema-invalid requests: the contract gives the generic 422 `validation_error` before the
        404, 403 and 409 checks (after 401 and after a case-free role check), while the mock never
        sees a malformed request, so it has no such order.
+    5. Error messages: the mock's messages may include the case id (its 404 reads "Case <id> not
+       found."), while the contract says a message never contains submitted values and the backend
+       must not echo them. The mock is unchanged in #9.
+    6. New (not in the mock): the ingest key header is `X-API-Key`. The mock has no ingest, and
+       the issue leaves the header name open.
+    7. New (not in the mock): `ingestAlert` and `addNote` return status 201. The mock has no status
+       codes, and the issue leaves the success status open. Every other operation returns 200.
+    8. New (not in the mock): `ingestAlert` returns the created case as a `CaseSummary` body. The
+       mock has no ingest, and the issue leaves the response body open.
+    9. New (not in the mock): `login` can return 422 `validation_error` for a schema-invalid body
+       (for example a missing `password`). The mock has no schema validation, and the issue leaves
+       this open.
+    10. New (not in the mock): `TransitionRequest.to` accepts any `Status` value, so an illegal
+       move such as New to Closed is refused with 409 `invalid_transition`, not a schema 422. The
+       issue leaves the schema of `to` open.
+    11. New (not in the mock): the example messages in the error examples are illustrative
+       wording chosen here, and the example id `C-1001` on `Id` is an example only. Clients
+       switch on `code`, never on `message`.
 
     Codes the mock lacks are new: `invalid_target`, the generic 422 `validation_error`, the 405
     `method_not_allowed`, the 500 `internal_error`, and the ingest codes `invalid_api_key` (401)
@@ -144,10 +162,12 @@ info:
 
     ## Choices where the issue left the value open
 
-    Made in this file (also in the issue comment):
-    the ingest key header `X-API-Key`, the ingest 401 code `invalid_api_key`, 201 for ingest and
-    for `addNote`, the ingest response body (`CaseSummary`), and the 422 on `login` for a
-    schema-invalid body.
+    Made in this file (also in the issue comment). Each is also a numbered new item in
+    "Differences from the mock" (items 6 to 11; the code `invalid_api_key` is in the new-codes
+    sentence there): the ingest key header `X-API-Key`, the ingest 401 code `invalid_api_key`,
+    201 for ingest and for `addNote`, the ingest response body (`CaseSummary`), the 422 on
+    `login` for a schema-invalid body, the open `to` schema on `TransitionRequest`, and the
+    illustrative example messages and example id.
 servers:
   - url: /api
     description: Server base for every path below.
