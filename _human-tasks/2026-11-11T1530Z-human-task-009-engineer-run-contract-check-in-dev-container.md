@@ -62,19 +62,31 @@ If different: copy the full error to the orchestrator; do not edit `openapi.yaml
 
 ### Step 5: the check refuses a broken copy
 
+Do not edit `openapi.yaml` by hand in this step. This command writes the broken copy for you, with the `openapi: 3.1.0` line left out, and leaves `openapi.yaml` unchanged:
+
 ```
-cp openapi.yaml .scratch/broken-openapi.yaml
+grep -v '^openapi: 3.1.0$' openapi.yaml > .scratch/broken-openapi.yaml
 ```
 
-Then delete the `openapi: 3.1.0` line from `.scratch/broken-openapi.yaml` and run:
+Then run the check on the copy, then on the root file again, then confirm nothing in the repository changed:
 
 ```
 make contract-check FILE=.scratch/broken-openapi.yaml
+make contract-check
+git status --short
 ```
 
 Refusal test: run it in this dev container window, not in an agent session.
-Risk: none; the copy is in `.scratch/` and nothing is printed except the validator's error.
-Expected: exits non-zero and names the problem. Then delete `.scratch/broken-openapi.yaml`.
+Risk: none; the copy is in `.scratch/` and nothing is printed except the validator's error. If `openapi.yaml` itself was edited by mistake, `git restore openapi.yaml` puts it back.
+Expected: the copy fails with a non-zero exit (the validator prints a blank `Error: `); the root file still prints `openapi.yaml: OK`; `git status --short` prints nothing. Then delete `.scratch/broken-openapi.yaml`.
+
+Also check that the target refuses an option or an absolute path as `FILE`, without running the validator:
+
+```
+make contract-check FILE=--version
+```
+
+Expected: the usage error from `Makefile` line 142; no `uv run` line is printed. The same for `FILE=/etc/hosts`.
 
 ### Step 6: verify is unchanged
 
@@ -100,8 +112,8 @@ Expected: the branch updates on GitHub. Tell the orchestrator, who then launches
 | 2 | pass | The branch was behind at first (`No rule to make target 'contract-check'`); after `git pull --rebase` the target and Commands line from `2ab7135` were present. |
 | 3 | pass | Committed `pyproject.toml` and `uv.lock` only (532 insertions, 2 deletions); on GitHub as `2e009c9`. |
 | 4 | pass | First run failed on three unquoted YAML scalars (lines 257, 592, 597), fixed in `114624c`; then `openapi.yaml: OK`, and again `openapi.yaml: OK` after the Differences change in `8ad8874`. |
-| 5 | pass | A copy with the `openapi: 3.1.0` line deleted failed with a blank `Error: ` and make exit status 2; the same on the root file with the line deleted (restored with `git restore`). The failure message is blank, which is a known limitation. |
-| 6 | pass | `VERIFY: PASS`: 47 Python tests, 154 frontend tests, no whitespace errors, "No test files changed". Its output lists no contract check. |
+| 5 | pass | Final run at `7e4de44`: `openapi.yaml: OK`; a copy written with `grep -v` (no `openapi: 3.1.0` line) failed with a blank `Error: ` and make exit status 2; the root file again `openapi.yaml: OK`; `git status --short` empty. `FILE=--version` and `FILE=/etc/hosts` were refused with the usage error and the validator did not run. Earlier runs were confused because the root file had been edited by hand (the old wording of this step was ambiguous) and copies of it failed; `git restore openapi.yaml` fixed it. The failure message is blank, a known limitation; only one kind of break was shown. |
+| 6 | pass | `VERIFY: PASS` at `7e4de44`: 47 Python tests, 154 frontend tests, no whitespace errors, "No test files changed", nothing changed since the pushed branch. Its output lists no contract check. |
 | 7 | pass | The dev container cannot push (403 by design). Pushed from the clean clone after building `agent-push-check:node24-uv0.13.6-bun1.4.2` (bun 1.4.2) and setting `AGENT_PUSH_CHECK_IMAGE`; the push check passed. Also covers the rebuild-the-image task from #46. |
 
 Filled in by the orchestrator from the output the human pasted in this session; the human confirmed the steps ("I think I did the steps can you fill it in for me").
