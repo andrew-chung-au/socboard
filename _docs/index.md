@@ -46,6 +46,7 @@ By file. Add project manifests here.
 | `_docs/records/2026-11-10T1506Z-measure-ponytail-epoch-1-start.md` | Start of ponytail epoch 1: the commit, kit version, role-file versions, skill pin and excluded issues | Current |
 | `_docs/records/2026-11-10T1518Z-measure-pm-sweep.md` | First PM sweep: figures at f41d503, seven proposals and the human's ruling | Current |
 | `_docs/decisions/2026-11-11T0327Z-frontend-tests-in-make-test.md` | Why `make install` installs the frontend packages and `make test` and `make verify` run the frontend tests (issue #46) | Current |
+| `_docs/decisions/2026-11-11T1511Z-openapi-contract.md` | Why `openapi.yaml` is hand-written first and is the source of truth for the HTTP API; the refusal order and the error body (issue #9) | Current |
 | `_docs/runbooks/kiro-web-to-dev-container-handover.md` | What can and cannot run in Kiro Web, CI and the dev container; the per-issue hand-over map, the hand-over comment layout, and the fallback for when the dev container is not available (Engineer and QA in Kiro Web with CI as the runner; worked example #8) | Current |
 | `pyproject.toml` | Python project metadata and dependencies | Current |
 | `uv.lock` | Resolved dependency versions | Current |
