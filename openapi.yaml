@@ -154,6 +154,23 @@ info:
     11. New (not in the mock): the example messages in the error examples are illustrative
        wording chosen here, and the example id `C-1001` on `Id` is an example only. Clients
        switch on `code`, never on `message`.
+    12. New (not in the mock): `IngestRequest.timestamp` must be an RFC 3339 date-time
+       (`format: date-time`), and an ingest whose timestamp is not one is refused with 422
+       `validation_error`. The mock has no ingest, and the issue says only that a timestamp is
+       required, so the format and the refusal are a choice made here.
+    13. New (not in the mock): the ingest field names. The request names follow the issue (its
+       list of required fields: source, type, asset, timestamp, title, description), and the
+       case returned by ingest uses the frontend type names (`frontend/src/services/types.ts`,
+       `CaseSummary`). Where they differ:
+       `asset` in the request is "affected asset" in `_docs/specs.md` section 4 (the issue
+       shortens it to `asset`; `CaseSummary.asset` also follows `types.ts`);
+       `type` in the request is `alertType` on the case (the request follows the issue and the
+       spec's word "type"; `alertType` follows `types.ts`);
+       `timestamp` in the request is `alertTimestamp` on the case (the request follows the
+       issue and the spec's word "timestamp"; `alertTimestamp` follows `types.ts`);
+       `source`, `title` and `description` are the same in the spec, the issue, the request and
+       `types.ts`. The operationId `ingestAlert` is a name chosen here; neither the issue nor
+       the spec gives one.
 
     Codes the mock lacks are new: `invalid_target`, the generic 422 `validation_error`, the 405
     `method_not_allowed`, the 500 `internal_error`, and the ingest codes `invalid_api_key` (401)
@@ -370,7 +387,7 @@ paths:
                 invalidTransition:
                   value:
                     code: invalid_transition
-                    message: Cannot move a case from New to Closed.
+                    message: That move is not allowed for this case.
         "422":
           description: |
             Code `validation_error` (the body fails the schema, for example `to` is missing) or
