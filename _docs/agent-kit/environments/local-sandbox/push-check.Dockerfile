@@ -1,13 +1,14 @@
 # Reference image for the push check (see environments.md, "The push-check image").
 # The push check runs `make install verify` in a throwaway container. The default
 # image, python:3.12, has git and make but no Node and no uv, so a Node plus uv
-# project's `make install` fails there with exit 127. This image adds both, at the
-# same pins as the dev container recipe (devcontainer.json and setup.sh).
+# project's `make install` fails there with exit 127. This image adds both, and bun
+# for the frontend, at the same pins as the dev container recipe (devcontainer.json
+# and setup.sh). # local deviation: bun (socboard, frontend tests in make verify)
 #
 # You build it on your own machine, from a copy taken from a clean clone, never
 # from a sandbox, and point the push check at it:
-#   docker build -t agent-push-check:node24-uv0.13.6 - < push-check.Dockerfile
-#   export AGENT_PUSH_CHECK_IMAGE=agent-push-check:node24-uv0.13.6
+#   docker build -t agent-push-check:node24-uv0.13.6-bun1.4.2 - < push-check.Dockerfile
+#   export AGENT_PUSH_CHECK_IMAGE=agent-push-check:node24-uv0.13.6-bun1.4.2
 # Building from standard input gives docker no build context, so nothing from a
 # folder can be copied in. Nothing here is built or published by this repo.
 #
@@ -16,8 +17,8 @@
 # (Terraform, pip-audit, libpq-dev) to its own copy of this file.
 #
 # All pins are UNVERIFIED until you have built the image and read the output of
-# the version checks below. Node and uv must equal the recipe's pins; a test
-# fails when they differ. npm is the one that ships with that Node.
+# the version checks below. Node, uv and bun must equal the recipe's pins. npm is
+# the one that ships with that Node.
 
 # Base: the python:3.12 line the default image uses, pinned to one Debian release
 # so the Node image below matches it. Unverified tag.
@@ -34,6 +35,12 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # uv, from Astral's published image at the recipe's version (unverified tag).
 COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /uvx /usr/local/bin/
 
+# bun, from the npm package at the recipe's version (unverified pin), as setup.sh
+# installs it. Needs the registry at build time. Must equal bun_version in setup.sh
+# and bun-version in the CI workflow.
+RUN npm install --global bun@1.4.2
+
 # The build fails if a tool the push check needs is missing.
 RUN bash --version | head -n 1 && git --version && make --version | head -n 1 \
- && python3 --version && node --version && npm --version && uv --version
+ && python3 --version && node --version && npm --version && uv --version \
+ && test "$(bun --version)" = "1.4.2"
