@@ -66,7 +66,8 @@ describe("mock service: refused actions return ApiError with status and code", (
 
   const rows: Row[] = [
     // 409: claims
-    { name: "second claim by another analyst", as: "analyst-b", caseId: "C-1003", run: (m) => m.claimCase("C-1003"), status: 409, code: "already_claimed" },
+    // C-1003 is owned by analyst-b, so analyst-a is a different user from the owner here.
+    { name: "second claim by another analyst", as: "analyst-a", caseId: "C-1003", run: (m) => m.claimCase("C-1003"), status: 409, code: "already_claimed" },
     { name: "claim by the case's own owner", as: "analyst-a", caseId: "C-1001", run: (m) => m.claimCase("C-1001"), status: 409, code: "already_claimed" },
     { name: "claim of a Closed case", as: "analyst-a", caseId: "C-1013", run: (m) => m.claimCase("C-1013"), status: 409, code: "case_closed" },
     // 409: transitions
