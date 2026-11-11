@@ -66,7 +66,7 @@ The push check runs `make install verify` in a throwaway container. Its image co
 `environments/local-sandbox/push-check.Dockerfile` is a reference image with Node, uv and bun at the same pins as the dev container recipe (all unverified until you build it). Build it on your machine from the clean clone's copy, never from a sandbox, with no build context, then point the push check at it:
 
 ```
-docker build -t agent-push-check:node24-uv0.13.6-bun1.4.2 - < agent-kit/environments/local-sandbox/push-check.Dockerfile
+docker build -t agent-push-check:node24-uv0.13.6-bun1.4.2 - < _docs/agent-kit/environments/local-sandbox/push-check.Dockerfile
 export AGENT_PUSH_CHECK_IMAGE=agent-push-check:node24-uv0.13.6-bun1.4.2
 AGENT_PUSH_CHECK_PLAN=1 git push
 ```
