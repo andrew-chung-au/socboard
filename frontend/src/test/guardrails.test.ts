@@ -112,30 +112,41 @@ describe("source guardrails", () => {
     it("dangerouslySetInnerHTML added to a component", () => {
       const files = component('<div dangerouslySetInnerHTML={{ __html: note.text }} />');
 
-      const found = findViolations(files);
-
-      expect(found).toContain("components/soc/Evil.tsx: dangerouslySetInnerHTML");
-      expect(found).toContain("components/soc/Evil.tsx: innerHTML");
+      // CI run 42967972731 (round 2): this test also expected "components/soc/Evil.tsx: innerHTML"
+      // (the removed line was `expect(found).toContain("components/soc/Evil.tsx: innerHTML")`).
+      // That expectation was wrong: the scanner's innerHTML rule is /innerHTML/, which is case
+      // sensitive, and `dangerouslySetInnerHTML` spells it `InnerHTML` (capital I), so the two
+      // rules do not overlap. The issue lists the two strings separately and `innerHTML` is the
+      // DOM property name, which is case sensitive in JS (`innerHtml` is not a banned API), so
+      // the scanner is kept as it is: making it case-insensitive would only add false positives.
+      // The refusal is not lost: the exact list proves the input is reported once, as
+      // dangerouslySetInnerHTML and nothing else. The separate innerHTML row below proves
+      // `el.innerHTML = text;` is reported as innerHTML.
+      expect(findViolations(files)).toEqual(["components/soc/Evil.tsx: dangerouslySetInnerHTML"]);
     });
 
+    // Each row names the one rule it must trigger, so a row cannot pass because a different rule
+    // matched (round 2 tightened these from "not empty" to the exact list; none was loosened).
+    const PKG_IMPORT = "markdown or linkify import";
+    const THIRD_PARTY = "third-party service name";
     it.each([
-      ["innerHTML", "el.innerHTML = text;"],
-      ["markdown import", 'import { marked } from "marked";'],
-      ["react-markdown import", 'import Markdown from "react-markdown";'],
-      ["linkify import", 'import Linkify from "linkify-react";'],
-      ["supabase", 'import { createClient } from "@supabase/supabase-js";'],
-      ["gtag", 'window.gtag("event", "x");'],
-      ["posthog", 'import posthog from "posthog-js";'],
-      ["sentry", 'import * as Sentry from "@sentry/react";'],
-      ["analytics", "const analyticsId = 1;"],
-      ["WebSocket", 'new WebSocket("ws://x");'],
-      ["EventSource", 'new EventSource("/stream");'],
-      ["fetch outside http.ts", 'await fetch("/api/queue");'],
-      [".sort(", "cases.sort((a, b) => a.id.localeCompare(b.id));"],
-      [".toSorted(", "const s = cases.toSorted();"],
-      ["<script", 'const s = "<script>alert(1)</script>";'],
-    ])("%s", (_label, text) => {
-      expect(findViolations(component(text))).not.toEqual([]);
+      ["innerHTML", "el.innerHTML = text;", "innerHTML"],
+      ["markdown import", 'import { marked } from "marked";', PKG_IMPORT],
+      ["react-markdown import", 'import Markdown from "react-markdown";', PKG_IMPORT],
+      ["linkify import", 'import Linkify from "linkify-react";', PKG_IMPORT],
+      ["supabase", 'import { createClient } from "@supabase/supabase-js";', THIRD_PARTY],
+      ["gtag", 'window.gtag("event", "x");', THIRD_PARTY],
+      ["posthog", 'import posthog from "posthog-js";', THIRD_PARTY],
+      ["sentry", 'import * as Sentry from "@sentry/react";', THIRD_PARTY],
+      ["analytics", "const analyticsId = 1;", THIRD_PARTY],
+      ["WebSocket", 'new WebSocket("ws://x");', "WebSocket or EventSource"],
+      ["EventSource", 'new EventSource("/stream");', "WebSocket or EventSource"],
+      ["fetch outside http.ts", 'await fetch("/api/queue");', "fetch( outside http.ts"],
+      [".sort(", "cases.sort((a, b) => a.id.localeCompare(b.id));", ".sort( or .toSorted( outside mockService.ts"],
+      [".toSorted(", "const s = cases.toSorted();", ".sort( or .toSorted( outside mockService.ts"],
+      ["<script", 'const s = "<script>alert(1)</script>";', "<script"],
+    ])("%s", (_label, text, rule) => {
+      expect(findViolations(component(text))).toEqual([`components/soc/Evil.tsx: ${rule}`]);
     });
 
     it("a <script text in the mock that is not the fixture", () => {
