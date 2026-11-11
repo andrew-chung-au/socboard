@@ -82,8 +82,11 @@ function addAudit(caseId: string, actorId: string | "system", action: AuditEntry
   audit.push({ id: nid("a"), caseId, actorId, action, detail, at });
 }
 
-seeds.forEach((s, i) => {
-  const id = `C-${String(1001 + i)}`;
+let caseNo = 1001;
+
+// The one path that creates a case, used for the seeds below and for the timer's alert.
+function ingest(s: Seed): void {
+  const id = `C-${String(caseNo++)}`;
   const ts = minsAgo(s.age);
   const ingested = after(ts, 0.1);
   cases.set(id, {
@@ -111,7 +114,40 @@ seeds.forEach((s, i) => {
     t = after(t, 3);
     addAudit(id, s.owner ?? "u3", "status_changed", `Investigating → Closed (${CLOSING_REASON_LABELS[s.reason]})`, t);
   }
-});
+}
+
+seeds.forEach(ingest);
+
+/** How often the timer adds an alert, in milliseconds. */
+export const NEW_ALERT_INTERVAL_MS = 20_000;
+
+/** The one pre-written alert the timer adds. Its severity is fixed here, not computed. */
+export const NEW_ALERT: Seed = {
+  title: "Unusual outbound DNS volume from build server",
+  type: "exfiltration",
+  source: "DNS monitor",
+  asset: "build-04",
+  crit: "Medium",
+  sev: "Medium",
+  status: "New",
+  owner: null,
+  age: 0,
+  desc: "3,200 TXT queries to one domain in 5 minutes. Added by the mock's new-alert timer.",
+};
+
+let newAlertTimerStarted = false;
+
+/**
+ * Starts the demo timer that adds NEW_ALERT every NEW_ALERT_INTERVAL_MS. Mock mode only, and at
+ * most once per page load: a second call schedules nothing. It is called from the root route, not
+ * on import, so loading this module never starts a timer.
+ */
+export function startNewAlertTimer(): void {
+  if (import.meta.env.VITE_USE_MOCK === "false") return;
+  if (newAlertTimerStarted) return;
+  newAlertTimerStarted = true;
+  setInterval(() => ingest(NEW_ALERT), NEW_ALERT_INTERVAL_MS);
+}
 
 const delay = <T,>(v: T) => new Promise<T>((r) => setTimeout(() => r(v), 150));
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
