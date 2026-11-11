@@ -47,11 +47,11 @@ Blocked transitions, such as closing a New alert without investigating it, retur
 
 ## Development
 
-Requires Python 3.12, uv and make. From the project folder:
+Requires Python 3.12, uv, bun and make. From the project folder:
 
 ```sh
-make install   # create the virtual environment and install dependencies
-make test      # run the pytest suite
+make install   # install the Python and frontend packages (needs bun and the npm registry); run once on a fresh checkout, before test or verify
+make test      # run the pytest suite, then the frontend tests
 make verify    # run tests, whitespace and weakened-test checks
 ```
 
