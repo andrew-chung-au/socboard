@@ -36,7 +36,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from socboard import audit_guard, models
@@ -84,10 +84,13 @@ def guards_disabled():
                 event.listen(target, name, function)
 
 
-@pytest.fixture
-def guards_off():
+def _guards_off():
+    """The fixture's generator: guards off up to the yield, back on when it is resumed or thrown into."""
     with guards_disabled():
         yield
+
+
+guards_off = pytest.fixture(_guards_off)
 
 
 @pytest.fixture
@@ -128,7 +131,7 @@ def trigger_names(engine):
 def test_the_guard_listeners_are_restored_after_the_block(seeded):
     with guards_disabled():
         with seeded["engine"].connect() as conn:
-            with pytest.raises(DBAPIError):  # the trigger, not the guard
+            with pytest.raises(IntegrityError):  # the trigger, not the guard
                 conn.execute(update(AUDIT).values(detail="changed"))
             conn.rollback()
     for target, name, function in _guard_listeners():
@@ -138,6 +141,38 @@ def test_the_guard_listeners_are_restored_after_the_block(seeded):
             conn.execute(update(AUDIT).values(detail="changed"))
         conn.rollback()
     assert rows_now(seeded["engine"]) == seeded["before"]
+
+
+def _update_outcome(engine):
+    """Run the same UPDATE and return the class of the error it raised (it is rolled back)."""
+    with engine.connect() as conn:
+        try:
+            conn.execute(update(AUDIT).values(detail="changed"))
+        except (AuditImmutableError, IntegrityError) as error:
+            return type(error)
+        finally:
+            conn.rollback()
+    return None
+
+
+def test_the_fixture_switches_the_guard_off_and_back_on_even_after_a_failed_test_body(seeded):
+    engine = seeded["engine"]
+    assert _update_outcome(engine) is AuditImmutableError  # before the fixture
+
+    generator = _guards_off()  # the generator the `guards_off` fixture runs
+    next(generator)  # setup
+    assert _update_outcome(engine) is IntegrityError  # inside the fixture: the trigger
+    with pytest.raises(StopIteration):
+        next(generator)  # teardown after a test body that passed
+    assert _update_outcome(engine) is AuditImmutableError  # after it
+
+    generator = _guards_off()
+    next(generator)
+    assert _update_outcome(engine) is IntegrityError
+    with pytest.raises(RuntimeError, match="body failed"):
+        generator.throw(RuntimeError("body failed"))  # a test body that raised
+    assert _update_outcome(engine) is AuditImmutableError  # the guard is back again
+    assert rows_now(engine) == seeded["before"]
 
 
 def test_the_guard_listeners_are_restored_after_an_exception():
@@ -585,13 +620,13 @@ def attempt(seeded, kind, function):
     engine = seeded["engine"]
     if kind == "session":
         with Session(engine) as session:
-            with pytest.raises(DBAPIError) as info:
+            with pytest.raises(IntegrityError) as info:
                 function(session, seeded)
             session.rollback()
         return info.value.orig
     if kind == "connection":
         with engine.connect() as conn:
-            with pytest.raises(DBAPIError) as info:
+            with pytest.raises(IntegrityError) as info:
                 function(conn, seeded)
             conn.rollback()
         return info.value.orig
@@ -599,7 +634,7 @@ def attempt(seeded, kind, function):
     # A stdlib sqlite3 connection to the same database file, with no SQLAlchemy in between.
     raw = sqlite3.connect(engine.url.database)
     try:
-        with pytest.raises(sqlite3.DatabaseError) as info:
+        with pytest.raises(sqlite3.IntegrityError) as info:
             function(raw.cursor(), seeded)
         raw.rollback()
     finally:
@@ -658,7 +693,7 @@ def test_recursive_triggers_off_and_on_give_the_same_result(seeded, guards_off, 
             try:
                 conn.exec_driver_sql(pragma)
                 assert conn.exec_driver_sql("PRAGMA recursive_triggers").scalar() == expected
-                with pytest.raises(DBAPIError) as info:
+                with pytest.raises(IntegrityError) as info:
                     conn.execute(OVERWRITE_CASES[case](seeded))
                 conn.rollback()
             finally:
@@ -675,7 +710,7 @@ def test_recursive_triggers_on_still_refuses_an_update_and_a_delete(seeded, guar
         with seeded["engine"].connect() as conn:
             try:
                 conn.exec_driver_sql("PRAGMA recursive_triggers = ON")
-                with pytest.raises(DBAPIError) as info:
+                with pytest.raises(IntegrityError) as info:
                     conn.execute(statement)
                 conn.rollback()
             finally:
@@ -734,6 +769,75 @@ def test_append_audit_succeeds_on_the_migrated_database(seeded, guards_off):
     assert ids[1] > ids[0]
 
 
+ID_CHECK = "ck_audit_entries_id_positive"
+
+
+@pytest.mark.parametrize("bad_id", [-1, 0])
+def test_an_explicit_id_below_one_is_refused_by_the_check(seeded, guards_off, bad_id):
+    with seeded["engine"].connect() as conn:
+        with pytest.raises(IntegrityError) as info:
+            conn.execute(insert(AUDIT).values(**{**_values(seeded, "bad"), "id": bad_id}))
+        conn.rollback()
+    assert isinstance(info.value.orig, sqlite3.IntegrityError)
+    assert ID_CHECK in str(info.value.orig)
+    assert rows_now(seeded["engine"]) == seeded["before"]
+
+
+@pytest.mark.parametrize("bad_id", [-1, 0])
+def test_an_explicit_id_below_one_is_refused_through_raw_sql_and_the_cursor(seeded, guards_off, bad_id):
+    sql = (
+        "INSERT INTO audit_entries " + _COLUMNS + " VALUES "
+        "(?, ?, ?, 'claimed', 'bad', '" + AT_TEXT + "')"
+    )
+    args = (bad_id, seeded["case_id"], seeded["user_id"])
+    with seeded["engine"].connect() as conn:
+        with pytest.raises(IntegrityError) as info:
+            conn.exec_driver_sql(sql, args)
+        conn.rollback()
+    assert ID_CHECK in str(info.value.orig)
+    raw = sqlite3.connect(seeded["engine"].url.database)
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match=ID_CHECK):
+            raw.cursor().execute(sql, args)
+        raw.rollback()
+    finally:
+        raw.close()
+    assert rows_now(seeded["engine"]) == seeded["before"]
+
+
+def test_a_plain_insert_and_append_audit_succeed_after_refused_ids_on_a_table_with_rows(seeded, guards_off):
+    # The table already holds a row. Refused ids -1 and 0 leave nothing behind, so a plain insert
+    # (NEW.id is -1 inside the trigger) and append_audit are not blocked by trigger (c).
+    for bad_id in (-1, 0):
+        with seeded["engine"].connect() as conn:
+            with pytest.raises(IntegrityError):
+                conn.execute(insert(AUDIT).values(**{**_values(seeded, "bad"), "id": bad_id}))
+            conn.rollback()
+    values = {key: value for key, value in _values(seeded, "plain").items() if key != "id"}
+    with seeded["engine"].begin() as conn:
+        plain = conn.execute(insert(AUDIT).values(**values)).inserted_primary_key[0]
+    with Session(seeded["engine"]) as session:
+        appended = append_audit(
+            session, case_id=seeded["case_id"], actor_id=seeded["user_id"], action="note_added", detail="n"
+        )
+        session.commit()
+        appended_id = appended.id
+    ids = [row[0] for row in rows_now(seeded["engine"])]
+    assert ids == [seeded["entry_id"], plain, appended_id]
+    assert min(ids) >= 1
+
+
+def test_overwrites_still_give_the_no_reuse_id_message_with_the_id_check_in_place(seeded, guards_off):
+    # An overwrite names an id that exists, so it is trigger (c) that refuses it, not the CHECK.
+    for case in ("insert_or_replace", "replace", "on_conflict_do_update"):
+        with seeded["engine"].connect() as conn:
+            with pytest.raises(IntegrityError) as info:
+                conn.execute(OVERWRITE_CASES[case](seeded))
+            conn.rollback()
+        assert str(info.value.orig) == OVERWRITTEN, case
+    assert rows_now(seeded["engine"]) == seeded["before"]
+
+
 def test_an_id_is_not_reused_after_the_database_refuses_a_delete(seeded, guards_off):
     # The row cannot be deleted, so the highest id stays, and the next insert goes above it.
     error = attempt(seeded, "connection", ROUTES["table_delete_connection"][2])
@@ -750,7 +854,7 @@ def test_the_refusal_message_holds_no_value(seeded, guards_off):
             conn, case_id=seeded["case_id"], actor_id=seeded["user_id"], detail=marker
         )
     with seeded["engine"].connect() as conn:
-        with pytest.raises(DBAPIError) as info:
+        with pytest.raises(IntegrityError) as info:
             conn.execute(update(AUDIT).where(AUDIT.c.id == entry_id).values(detail="x"))
         conn.rollback()
     text_of_error = "".join(str(part) for part in (info.value, info.value.orig))
