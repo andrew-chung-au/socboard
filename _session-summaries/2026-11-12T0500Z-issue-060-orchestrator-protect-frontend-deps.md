@@ -22,11 +22,23 @@ unknown (role not asked)
 
 ### Engineer
 
-See comment https://github.com/andrew-chung-au/socboard/issues/60#issuecomment-6815583961 (copied unchanged when this summary is next edited; not copied here to keep the issue's one PR small).
+From comment 6815583961, unchanged:
+
+Reflection:
+(1) Slowed down: proving the hook without installed hooks. I had to write a throwaway-worktree script that runs the pre-commit file directly, with baseline, refused, allowed and unprotected passes (see the prove script in the scratch folder), and the draft had to be rewritten after the approval and CI results arrived.
+(2) Nearly went wrong or was blocked: the protected-file rule meant I could not edit the config myself, and the hooks do not run here, so the real hook path was never exercised. I only avoided touching the branch by using a worktree that I removed afterwards.
+(3) Proposed change: `_docs/agent-kit/procedures/verify.md` should say that a protected-file hook change is proved by running the pre-commit file in a throwaway worktree, with a ready-made make target for it. Expected effect: no custom proof script per issue. Measured by counting scratch scripts written and turns spent proving hook changes on the next two such issues.
 
 ### QA
 
-See the `Reflection:` block in comment https://github.com/andrew-chung-au/socboard/issues/60#issuecomment-6815614727.
+From comment 6815614727, unchanged:
+
+Reflection:
+(1) Slowed down: the second amendment's text was not in the protocol file on this branch, so my first two searches found nothing; I only found it by listing branches and reading the amendment branch's copy. Also the diff against the claim's base printed far more than the real change.
+(2) Nearly went wrong: the base in the claim comment was not the commit's parent, so a naive review of the base-to-head diff would have treated the epoch drafts as part of this change; and the human-commit criterion cannot be verified from git alone.
+(3) Proposed change: `_docs/agent-kit/team/qa-engineer.md` should say to diff against the commit's parent (`git diff <head>^ <head>`) and to state the parent when it differs from the claimed base. Expected effect: fewer reads of unrelated diffs. Measured by counting QA diff reads that print files outside the Constraints over the next few issues.
+
+Orchestrator's note on QA's point (1): Amendment 2 is in `_docs/planning/ponytail-trial-protocol.md` on this branch and on `main` (its commit is an ancestor of the branch); QA's search missed it. Its epoch answer still stands on the amendment's text.
 
 ## Launch usage
 
