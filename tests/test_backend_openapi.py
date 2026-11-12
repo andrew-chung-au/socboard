@@ -2,9 +2,9 @@
 
 What #10 defines and compares: the `ApiError` component (fields `code` and `message`, both
 required strings, no `status`), and that the generated document answers 422 with `ApiError`
-(not FastAPI's `HTTPValidationError`) on the routes that take input. The health route is NOT in
-the contract (it has no `/health` path), so the comparison cannot cover it; it has its own test in
-test_backend_health.py. Business-operation schemas are compared by the endpoint issues (#14 on),
+(not FastAPI's `HTTPValidationError`) on the routes that take input. The health route is in the
+contract (`GET /health`, #74) and `test_health_route_equals_the_contract` compares its 200 schema,
+security and response statuses with the generated document. Business-operation schemas are compared by the endpoint issues (#14 on),
 using tests/openapi_compare.py.
 
 Normalisations applied by tests/openapi_compare.py (what differs, which side changes, why safe):
@@ -323,7 +323,7 @@ def test_routes_with_input_answer_422_with_api_error(app, contract):
     checked = 0
     for path, item in generated["paths"].items():
         if path == "/api/health":
-            continue  # not in the contract; no input, so no 422 either
+            continue  # no parameters and no body, so no 422
         for operation in item.values():
             if not (operation.get("parameters") or operation.get("requestBody")):
                 continue
@@ -361,3 +361,87 @@ def test_health_route_has_no_422(app):
     # The 422 is declared on the API router, not on the app, so /api/health does not gain one.
     operation = app.openapi()["paths"]["/api/health"]["get"]
     assert "422" not in operation["responses"]
+
+
+# --- the health route (#74) --------------------------------------------------------------------
+
+HEALTH_FASTAPI = {
+    "type": "object",
+    "title": "HealthResponse",
+    "required": ["status"],
+    "properties": {"status": {"const": "ok", "type": "string", "title": "Status"}},
+}
+
+
+def health_200_schema(operation):
+    return operation["responses"]["200"]["content"]["application/json"]["schema"]
+
+
+def test_health_route_equals_the_contract(app, contract):
+    generated = app.openapi()
+    contract_operation = join_server_base(contract)["/api/health"]["get"]
+    generated_operation = generated["paths"]["/api/health"]["get"]
+
+    contract_body = health_200_schema(contract_operation)
+    generated_body = health_200_schema(generated_operation)
+    assert compare_schemas(contract, contract_body, generated, generated_body) == []
+
+    assert operation_security(contract, contract_operation) == []
+    assert operation_security(generated, generated_operation) == []
+
+    assert set(contract_operation["responses"]) == {"200"}
+    assert set(generated_operation["responses"]) == {"200"}
+
+    # Stated directly as well, so the test does not depend on the normaliser alone.
+    resolved = canonical(contract, contract_body)
+    assert resolved["required"] == ["status"]
+    assert list(resolved["properties"]) == ["status"]
+
+
+def _contract_health_variant(contract, change):
+    variant = copy.deepcopy(contract)
+    change(variant["components"]["schemas"]["HealthResponse"])
+    schema = health_200_schema(variant["paths"]["/health"]["get"])
+    return variant, schema
+
+
+def _fastapi_health_doc():
+    return {"components": {"schemas": {"HealthResponse": copy.deepcopy(HEALTH_FASTAPI)}}}
+
+
+def test_contract_health_schema_matches_a_fastapi_style_fragment(contract):
+    document = _fastapi_health_doc()
+    variant, schema = _contract_health_variant(contract, lambda health: None)
+    generated = document["components"]["schemas"]["HealthResponse"]
+    assert compare_schemas(variant, schema, document, generated) == []
+
+
+def test_health_status_of_another_type_is_reported(contract):
+    document = _fastapi_health_doc()
+    variant, schema = _contract_health_variant(
+        contract, lambda health: health["properties"]["status"].update(type="integer")
+    )
+    assert compare_schemas(variant, schema, document, document["components"]["schemas"]["HealthResponse"])
+
+
+def test_health_extra_property_is_reported(contract):
+    document = _fastapi_health_doc()
+    variant, schema = _contract_health_variant(
+        contract, lambda health: health["properties"].update(version={"type": "string"})
+    )
+    assert compare_schemas(variant, schema, document, document["components"]["schemas"]["HealthResponse"])
+
+
+def test_health_status_not_required_is_reported(contract):
+    document = _fastapi_health_doc()
+    variant, schema = _contract_health_variant(
+        contract, lambda health: health.update(required=[])
+    )
+    assert compare_schemas(variant, schema, document, document["components"]["schemas"]["HealthResponse"])
+
+
+def test_health_with_bearer_security_differs_from_the_app(contract):
+    bearer_operation = {"security": [{"bearerAuth": []}]}
+    assert operation_security(contract, bearer_operation) != operation_security(
+        fastapi_style_doc(), {}
+    )

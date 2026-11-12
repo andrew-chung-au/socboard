@@ -5,10 +5,12 @@ def test_health_returns_ok_without_authentication(client):
     assert response.json() == {"status": "ok"}
 
 
-def test_health_is_not_in_the_contract():
-    # openapi.yaml has no /health path (checked at grooming). The schema comparison therefore
-    # cannot cover this route; this test and the one above do. If the contract adds /health,
-    # extend the comparison in test_backend_openapi.py and remove this assertion.
+def test_health_is_in_the_contract():
     from backend_support import load_contract
 
-    assert "/health" not in load_contract()["paths"]
+    path = load_contract()["paths"]["/health"]
+    assert set(path) == {"get"}
+    operation = path["get"]
+    assert operation["operationId"] == "getHealth"
+    assert operation["security"] == []
+    assert set(operation["responses"]) == {"200"}
