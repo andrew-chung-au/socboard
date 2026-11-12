@@ -8,6 +8,7 @@ from socboard import database, domain, migrate, seed
 from socboard.inventory import criticality_for_asset
 from socboard.models import Asset
 from data_support import (  # noqa: F401  (fixtures)
+    SEED_PASSWORDS,
     insert_asset,
     isolated_database_env,
     migrated_engine,
@@ -43,7 +44,7 @@ def _rows(engine):
 def test_seed_loads_the_inventory_and_a_second_run_changes_nothing(tmp_path, capsys):
     url = sqlite_url(tmp_path / "seed.db")
     migrate.upgrade(url)
-    env = {database.ENV_NAME: url}
+    env = {database.ENV_NAME: url, **SEED_PASSWORDS}
     assert seed.main(env) == 0
     engine = database.create_db_engine(url)
     try:
@@ -65,7 +66,7 @@ def test_seed_never_changes_or_deletes_an_existing_row(tmp_path):
         with engine.begin() as conn:
             insert_asset(conn, name="dc-01", criticality="Low")
             insert_asset(conn, name="custom-asset", criticality="High")
-        assert seed.main({database.ENV_NAME: url}) == 0
+        assert seed.main({database.ENV_NAME: url, **SEED_PASSWORDS}) == 0
         with engine.connect() as conn:
             rows = {r.name: r.criticality for r in conn.execute(select(Asset.__table__))}
             count = conn.execute(select(func.count()).select_from(Asset.__table__)).scalar_one()
@@ -79,7 +80,7 @@ def test_seed_never_changes_or_deletes_an_existing_row(tmp_path):
 def test_seed_does_not_write_audit_entries(tmp_path):
     url = sqlite_url(tmp_path / "seed.db")
     migrate.upgrade(url)
-    assert seed.main({database.ENV_NAME: url}) == 0
+    assert seed.main({database.ENV_NAME: url, **SEED_PASSWORDS}) == 0
     engine = database.create_db_engine(url)
     try:
         with engine.connect() as conn:
