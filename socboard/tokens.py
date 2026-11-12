@@ -11,9 +11,9 @@ A token is `<payload>.<signature>`:
 an empty part, a character outside the base64url alphabet, a length no base64 text can have, a
 bad signature (compared in constant time, before the payload is decoded), a payload that is not
 a JSON object, a `sub` that `from_public_id` refuses, an `exp` that is missing or not an integer,
-and a token at or past its `exp`. The lifetime is fixed in code (decision record
-`_docs/decisions/2026-11-12T2255Z-auth-tokens.md`); the functions take the current time as an
-argument, so tests never sleep.
+a token at or past its `exp`, and an `exp` more than the lifetime ahead of now. The lifetime is
+fixed in code (decision record `_docs/decisions/2026-11-12T2255Z-auth-tokens.md`); the functions
+take the current time as an argument, so tests never sleep.
 
 The token says who the caller is and nothing else: the role is read from the database on each
 request (`socboard.auth.current_user`).
@@ -24,6 +24,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import re
 
 from socboard.ids import from_public_id, to_public_id
@@ -96,5 +97,9 @@ def read_token(token: str, secret: str, now: int | float) -> int | None:
     if user_id is None:
         return None
     if now >= exp:
+        return None
+    # The lifetime holds when a token is read, not only when it is made. Integers only: `exp` can
+    # have hundreds of digits, and `exp - now` with a float `now` would overflow.
+    if exp > math.floor(now) + TOKEN_LIFETIME_SECONDS:
         return None
     return user_id

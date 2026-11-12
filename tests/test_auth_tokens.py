@@ -58,6 +58,30 @@ def test_a_token_at_or_past_its_exp_is_refused():
     assert tokens.read_token(token, SECRET, now=NOW + tokens.TOKEN_LIFETIME_SECONDS + 1) is None
 
 
+def test_an_exp_exactly_the_lifetime_ahead_is_accepted():
+    lifetime = tokens.TOKEN_LIFETIME_SECONDS
+    assert tokens.read_token(token_for({"sub": "7", "exp": NOW + lifetime}), SECRET, now=NOW) == 7
+    # A float `now`, as `time.time()` gives: create_token at NOW + 0.9 makes exp NOW + lifetime.
+    assert tokens.read_token(token_for({"sub": "7", "exp": NOW + lifetime}), SECRET, now=NOW + 0.9) == 7
+
+
+def test_an_exp_more_than_the_lifetime_ahead_is_refused():
+    lifetime = tokens.TOKEN_LIFETIME_SECONDS
+    assert tokens.read_token(token_for({"sub": "7", "exp": NOW + lifetime + 1}), SECRET, now=NOW) is None
+    assert (
+        tokens.read_token(token_for({"sub": "7", "exp": NOW + lifetime + 1}), SECRET, now=NOW + 0.9)
+        is None
+    )
+
+
+@pytest.mark.parametrize("exp", [10**500, -(10**500)])
+def test_a_huge_exp_is_refused_without_raising(exp):
+    token = token_for({"sub": "7", "exp": exp})
+    assert len(token) <= tokens.MAX_TOKEN_LENGTH
+    assert tokens.read_token(token, SECRET, now=NOW) is None
+    assert tokens.read_token(token, SECRET, now=NOW + 0.5) is None
+
+
 def test_a_hand_built_token_is_accepted():
     # The format is the one the module documents, not just whatever it happens to produce.
     assert tokens.read_token(token_for({"sub": "7", "exp": NOW + 10}), SECRET, now=NOW) == 7

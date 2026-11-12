@@ -63,3 +63,11 @@ none
 
 - The human approves or declines the staged `AGENTS.md` diff, and decides on the Seed-line proposal.
 - First QA launch, then the second, independent QA launch (Heavy).
+
+## Addendum: upper bound on `exp` (2026-11-12)
+
+- **Why:** the first QA launch (PASS at `c11a755`) found that `read_token` accepted a correctly signed token with a 500-digit `exp`, so the 8-hour lifetime held only when a token was made. The human approved fixing it in #13 in this session.
+- **Change:** `socboard/tokens.py` `read_token` now also refuses a token whose `exp` is greater than `math.floor(now) + TOKEN_LIFETIME_SECONDS` (integers only, so a huge `exp` never overflows). The "at or past `exp`" check is unchanged; `socboard/auth.py` is unchanged, so the refusal is the same 401 `unauthorized` with `WWW-Authenticate: Bearer`. The decision record's "As built" lifetime line says so.
+- **Tests:** `tests/test_auth_tokens.py` (exactly the lifetime ahead accepted, one second more refused, with an integer and a float `now`; `10**500` and `-(10**500)` refused without raising); `tests/test_auth_api.py` (both huge values refused with 401 through the real app; lifetime + 60 s refused and exactly the lifetime accepted, built when the test runs). No existing assertion changed.
+- **Verify:** `make verify BASE=1fe0300`: PASS with warnings; 183 assertion lines added, 2 removed (the two `seed.main` calls that now pass the seed passwords, from the earlier #13 commits), and `tests/conftest.py` fixtures changed as the issue requires. The earlier Engineer comment's figures (218 added, 0 removed) were measured from `origin/main`, not from `1fe0300`.
+- **Choice:** the API refusal test uses lifetime + 60 s rather than + 1 s, so a slow clock tick between building the token and the request cannot make it pass by accident; the + 1 s edge is covered in the unit test with a fixed `now`.

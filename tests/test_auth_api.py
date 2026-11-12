@@ -249,6 +249,9 @@ REFUSED_HEADERS = {
     "past its exp": "Bearer "
     + tokens.create_token(ANALYST_ID, TEST_TOKEN_SECRET, time.time() - tokens.TOKEN_LIFETIME_SECONDS - 60),
     "user id that does not exist": "Bearer " + tokens.create_token(999, TEST_TOKEN_SECRET, time.time()),
+    "exp a several-hundred-digit integer": "Bearer " + signed({"sub": str(ANALYST_ID), "exp": 10**500}),
+    "exp a several-hundred-digit negative integer": "Bearer "
+    + signed({"sub": str(ANALYST_ID), "exp": -(10**500)}),
 }
 
 
@@ -257,6 +260,20 @@ def test_current_user_refuses_with_401(safe_client, name):
     value = REFUSED_HEADERS[name]
     headers = {} if value is None else {"Authorization": value}
     assert_unauthorized(safe_client.get("/api/users", headers=headers))
+
+
+def test_an_exp_more_than_the_lifetime_ahead_is_refused_with_401(safe_client):
+    # Built when the test runs, so the margin cannot run out between collection and the request.
+    exp = int(time.time()) + tokens.TOKEN_LIFETIME_SECONDS + 60
+    token = signed({"sub": str(ANALYST_ID), "exp": exp})
+    assert_unauthorized(safe_client.get("/api/users", headers=bearer(token)))
+
+
+def test_an_exp_exactly_the_lifetime_ahead_is_accepted(real_client):
+    # The request reads the clock after this line, so exp is never more than the lifetime ahead.
+    exp = int(time.time()) + tokens.TOKEN_LIFETIME_SECONDS
+    token = signed({"sub": str(ANALYST_ID), "exp": exp})
+    assert real_client.get("/api/users", headers=bearer(token)).status_code == 200
 
 
 def test_the_bearer_scheme_name_is_case_insensitive(real_client):
