@@ -967,27 +967,38 @@ components:
       properties:
         source:
           type: string
+          minLength: 1
+          maxLength: 200
           description: >-
             Untrusted ingested text. Render it as plain text, never as markup or instructions.
         type:
           type: string
+          minLength: 1
+          maxLength: 200
           description: >-
             The alert type; returned as `alertType` on the case. Untrusted ingested text: render it
             as plain text, never as markup or instructions.
         asset:
           type: string
+          minLength: 1
+          maxLength: 200
           description: >-
             Untrusted ingested text. Render it as plain text, never as markup or instructions.
         timestamp:
           type: string
           format: date-time
+          minLength: 1
           description: When the alert happened; returned as `alertTimestamp` on the case.
         title:
           type: string
+          minLength: 1
+          maxLength: 200
           description: >-
             Untrusted ingested text. Render it as plain text, never as markup or instructions.
         description:
           type: string
+          minLength: 1
+          maxLength: 10000
           description: >-
             Untrusted ingested text. Render it as plain text, never as markup or instructions.
     HealthResponse:
