@@ -102,14 +102,18 @@ info:
       BEFORE the 404, the owner 403, the 409s and the domain 422s. So an Analyst or a Lead who
       sends a bad body to an unknown case gets 422, not 404.
     - A body that is not parseable JSON gives 422 `validation_error` even with no token.
+    - On `ingestAlert` the API key check is a route dependency: a missing or wrong key gives 401
+      `invalid_api_key` before any body validation, provided the body parses as JSON. A body that
+      is not parseable JSON gives 422 `validation_error` even without a key.
     - For well-formed requests the order is unchanged: 401, 404, 403, 409, domain 422.
 
     ## Stated facts
 
     - Login: the username is trimmed before lookup; a wrong username or password is 401
       `invalid_credentials`; login does not clear the session.
-    - A `closingReason` sent with a move that is not a close is ignored (not a 422). The request
-      omits the key when there is no reason.
+    - A valid `closingReason` sent with a move that is not a close is ignored. An unknown value
+      is a schema 422 `validation_error` on any move. The request omits the key when there is no
+      reason.
     - Queue order is severity (Critical first), then oldest alert time (`alertTimestamp`); ties
       after that are broken in a stable order chosen by the server that clients must not infer.
       Two reads of an unchanged queue return the same order. The client never sorts.
@@ -137,8 +141,10 @@ info:
        404, 403 and 409 checks (after 401 and after a case-free role check), while the mock never
        sees a malformed request, so it has no such order.
     5. Error messages: the mock's messages may include the case id (its 404 reads "Case <id> not
-       found."), while the contract says a message never contains submitted values and the backend
-       must not echo them. The mock is unchanged in #9.
+       found."), the owner's display name (its `already_claimed` reads "Case is already owned by
+       <display name>.") and the submitted target status (its `invalid_transition` reads "Cannot
+       move a case from <status> to <target>."), while the contract and the backend must not echo
+       submitted values: a message never contains them. The mock is unchanged in #9.
     6. New (not in the mock): the ingest key header is `X-API-Key`. The mock has no ingest, and
        the issue leaves the header name open.
     7. New (not in the mock): `ingestAlert` and `addNote` return status 201. The mock has no status
@@ -356,8 +362,8 @@ paths:
       description: |
         Only the owner or a Lead may change status. Only New to Investigating and Investigating to
         Closed are legal. Closing needs a `closingReason` (a domain rule, 422 `reason_required`,
-        checked after the 409s). A `closingReason` sent with a move that is not a close is
-        ignored. Order: 401, (schema 422), 404, 403, 409 `invalid_transition`, 422
+        checked after the 409s). A valid `closingReason` sent with a move that is not a close is
+        ignored; an unknown value is a schema 422 `validation_error`. Order: 401, (schema 422), 404, 403, 409 `invalid_transition`, 422
         `reason_required` (only when closing).
       requestBody:
         required: true
@@ -590,9 +596,10 @@ paths:
       description: |
         Called by a source system with the ingest API key in the `X-API-Key` header; no bearer
         token. A missing or wrong key is 401 `invalid_api_key`. A missing required field is 422
-        `validation_error`. Alert text is untrusted input: it is stored and returned as plain
-        text, escaped when shown, and never treated as instructions. Severity is assigned by a
-        fixed rule table, not supplied by the caller.
+        `validation_error`. Order: 401 `invalid_api_key`, then the schema 422. Alert text is
+        untrusted input: it is stored and returned as plain text, escaped when shown, and never
+        treated as instructions. Severity is assigned by a fixed rule table, not supplied by the
+        caller.
       security:
         - ingestKey: []
       requestBody:
@@ -833,7 +840,10 @@ components:
                 instructions.
             severityRule:
               type: string
-              description: The rule that produced the severity, in words.
+              description: >-
+                The rule that produced the severity, in words. It can include text derived from the
+                ingested alert type, so it is untrusted: render it as plain text, never as markup
+                or instructions.
             notes:
               type: array
               items:
@@ -913,8 +923,9 @@ components:
         closingReason:
           description: >-
             Optional. Required in practice only when closing (a domain rule, 422
-            `reason_required`, not a schema rule). Ignored on a move that is not a close. Omit the
-            key when there is no reason.
+            `reason_required`, not a schema rule). A valid value is ignored on a move that is not
+            a close; an unknown value is a schema 422 `validation_error`. Omit the key when there
+            is no reason.
           $ref: "#/components/schemas/ClosingReason"
     ReassignRequest:
       type: object
