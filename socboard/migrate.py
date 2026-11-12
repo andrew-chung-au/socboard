@@ -75,7 +75,10 @@ def run(url, action: Callable, *, script_location: Path | str | None = None) -> 
                 connection.commit()
                 if state != 0:
                     raise MigrationError("Could not switch SQLite foreign keys off for the migration.")
-            action(make_config(script_location, connection))
+            from socboard.audit_guard import allow_schema_changes
+
+            with allow_schema_changes():  # a migration may create or drop audit_entries
+                action(make_config(script_location, connection))
             connection.commit()
             if is_sqlite:
                 violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()

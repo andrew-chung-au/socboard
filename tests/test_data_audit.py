@@ -14,9 +14,12 @@ from data_support import (
     migrated_engine,  # noqa: F401
     no_default_database_file,  # noqa: F401
 )
-from sqlalchemy import delete, event, select, text, update
+from sqlalchemy import DDL, delete, event, insert, select, text, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
+from sqlalchemy.schema import CreateTable, DropTable
 
 from socboard.audit import append_audit
 from socboard.audit_guard import AuditImmutableError
@@ -268,6 +271,157 @@ def test_a_core_delete_on_a_connection_is_refused(seeded):
 def test_updating_another_table_is_not_blocked(seeded):
     with seeded["engine"].begin() as conn:
         conn.execute(update(Case.__table__).values(status="Investigating"))
+
+
+# --- overwriting by INSERT, and DDL on the table (the gap QA found in #11) ----------------------
+
+AUDIT = AuditEntry.__table__
+
+
+def _entry_values(seeded, detail):
+    return dict(
+        id=seeded["entry_id"],
+        case_id=seeded["case_id"],
+        actor_id=seeded["user_id"],
+        action="claimed",
+        detail=detail,
+        at=datetime(2026, 11, 12, 9, 0, tzinfo=UTC),
+    )
+
+
+def _insert_or_replace(seeded):
+    return insert(AUDIT).prefix_with("OR REPLACE").values(**_entry_values(seeded, "replaced"))
+
+
+def _insert_replace_prefix(seeded):
+    return insert(AUDIT).prefix_with("REPLACE").values(**_entry_values(seeded, "replaced"))
+
+
+def _sqlite_upsert(seeded):
+    return (
+        sqlite_insert(AUDIT)
+        .values(**_entry_values(seeded, "upserted"))
+        .on_conflict_do_update(index_elements=["id"], set_={"detail": "upserted"})
+    )
+
+
+def _postgresql_upsert(seeded):
+    return (
+        postgresql_insert(AUDIT)
+        .values(**_entry_values(seeded, "upserted"))
+        .on_conflict_do_update(index_elements=["id"], set_={"detail": "upserted"})
+    )
+
+
+def _orm_sqlite_upsert(seeded):
+    return (
+        sqlite_insert(AuditEntry)
+        .values(**_entry_values(seeded, "upserted"))
+        .on_conflict_do_update(index_elements=["id"], set_={"detail": "upserted"})
+    )
+
+
+OVERWRITING_INSERTS = {
+    "insert_or_replace": _insert_or_replace,
+    "insert_replace_prefix": _insert_replace_prefix,
+    "sqlite_on_conflict_do_update": _sqlite_upsert,
+    "postgresql_on_conflict_do_update": _postgresql_upsert,
+    "orm_sqlite_on_conflict_do_update": _orm_sqlite_upsert,
+}
+
+DDL_STATEMENTS = {
+    "drop_table_construct": lambda: DropTable(AUDIT),
+    "create_table_construct": lambda: CreateTable(AUDIT),
+    "ddl_text_drop_table": lambda: DDL("DROP TABLE audit_entries"),
+    "ddl_text_alter_table": lambda: DDL("ALTER TABLE audit_entries ADD COLUMN extra TEXT"),
+    "ddl_against_the_table": lambda: DDL("DROP TABLE %(table)s").against(AUDIT),
+}
+
+
+@pytest.mark.parametrize("name", OVERWRITING_INSERTS)
+def test_an_overwriting_insert_on_a_connection_is_refused(seeded, name):
+    statement = OVERWRITING_INSERTS[name](seeded)
+    with seeded["engine"].connect() as conn:
+        with pytest.raises(AuditImmutableError):
+            conn.execute(statement)
+        conn.rollback()
+    assert _unchanged(seeded)
+
+
+@pytest.mark.parametrize("name", OVERWRITING_INSERTS)
+def test_an_overwriting_insert_through_the_session_is_refused(seeded, name):
+    statement = OVERWRITING_INSERTS[name](seeded)
+    with Session(seeded["engine"]) as session:
+        with pytest.raises(AuditImmutableError):
+            session.execute(statement)
+        session.rollback()
+    assert _unchanged(seeded)
+
+
+@pytest.mark.parametrize("name", DDL_STATEMENTS)
+def test_ddl_on_the_audit_table_on_a_connection_is_refused(seeded, name):
+    statement = DDL_STATEMENTS[name]()
+    with seeded["engine"].connect() as conn:
+        with pytest.raises(AuditImmutableError):
+            conn.execute(statement)
+        conn.rollback()
+    assert _unchanged(seeded)
+
+
+@pytest.mark.parametrize("name", DDL_STATEMENTS)
+def test_ddl_on_the_audit_table_through_the_session_is_refused(seeded, name):
+    statement = DDL_STATEMENTS[name]()
+    with Session(seeded["engine"]) as session:
+        with pytest.raises(AuditImmutableError):
+            session.execute(statement)
+        session.rollback()
+    assert _unchanged(seeded)
+
+
+def test_dropping_the_table_with_the_metadata_helper_is_refused(seeded):
+    with pytest.raises(AuditImmutableError):
+        AUDIT.drop(seeded["engine"])
+    assert _unchanged(seeded)
+
+
+def test_a_plain_insert_and_append_audit_still_work(seeded):
+    engine = seeded["engine"]
+    with engine.begin() as conn:
+        conn.execute(insert(AUDIT).values(**{**_entry_values(seeded, "plain"), "id": 50}))
+        conn.execute(
+            sqlite_insert(AUDIT)
+            .values(**{**_entry_values(seeded, "ignored"), "id": 51})
+            .on_conflict_do_nothing()
+        )
+    with Session(engine) as session:
+        append_audit(
+            session, case_id=seeded["case_id"], actor_id=seeded["user_id"], action="note_added", detail="n"
+        )
+        session.commit()
+    with engine.connect() as conn:
+        details = conn.execute(select(AuditEntry.detail).order_by(AuditEntry.id)).scalars().all()
+    assert details == ["original", "n", "plain", "ignored"]
+
+
+def test_ddl_on_another_table_is_not_blocked(seeded):
+    with seeded["engine"].begin() as conn:
+        conn.execute(DDL("CREATE TABLE scratch_table (id INTEGER)"))
+        conn.execute(DDL("DROP TABLE scratch_table"))
+
+
+def test_raw_sql_is_not_blocked_which_is_the_exemption_the_record_names(seeded):
+    # exec_driver_sql and text() are raw SQL, which the decision record leaves outside the guard.
+    # If a later change blocks them, this test fails so the record and the module docstring can be
+    # revisited together with the code.
+    engine = seeded["engine"]
+    with engine.begin() as conn:
+        conn.exec_driver_sql("UPDATE audit_entries SET detail = 'raw'")
+    with engine.connect() as conn:
+        assert conn.execute(select(AuditEntry.detail)).scalars().all() == ["raw"]
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE audit_entries SET detail = 'text'"))
+    with engine.connect() as conn:
+        assert conn.execute(select(AuditEntry.detail)).scalars().all() == ["text"]
 
 
 # --- only audit.py constructs an AuditEntry ----------------------------------------------------
