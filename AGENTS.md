@@ -14,7 +14,7 @@ Layout: `socboard/` (application package), `frontend/` (React + TypeScript front
 - **Frontend build:** `make frontend-build`: builds `frontend/` to static files in `frontend/dist` with the mock off; fails if `index.html` is missing, server or worker output appears, a demo credential or hostile fixture is in the bundle, or a Google fonts host is mentioned.
 - **Frontend test:** `make frontend-test`: runs the frontend's Vitest tests; fails if the frontend packages are not installed (run `make frontend-install` first). `make test` runs it after the Python tests.
 - **Frontend dev server:** `make frontend-start` starts it in the background on http://127.0.0.1:5173/ with the mock on (log: `.scratch/frontend.log`); `make frontend-stop` stops the one it started.
-- **Run:** `make backend-run` starts the backend in the background on http://127.0.0.1:8000/ (localhost only: `SOCBOARD_HOST` must be `127.0.0.1`, `localhost` or `::1`; `SOCBOARD_PORT` sets the port; log: `.scratch/backend.log`); starting twice reports that it is already running.
+- **Run:** `make backend-run` starts the backend in the background on http://127.0.0.1:8000/ (localhost only: `SOCBOARD_HOST` must be `127.0.0.1`, `localhost` or `::1`; `SOCBOARD_PORT` sets the port; the backend needs `SOCBOARD_TOKEN_SECRET`, at least 32 characters, or exits 2; log: `.scratch/backend.log`); starting twice reports that it is already running.
 - **Backend stop:** `make backend-stop` stops the backend that `make backend-run` started; it refuses a process that does not look like the backend.
 - **Test (all):** `make test`: the Python tests, then the frontend tests.
 - **Test (one file):** `make test-one FILE=tests/test_socboard.py`
