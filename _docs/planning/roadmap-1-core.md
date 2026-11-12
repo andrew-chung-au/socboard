@@ -35,7 +35,8 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
   10. #60 Protect the frontend dependency files. Any time, and before #21 at the latest.
   11. #73 Add `make issue-body`. Any time; before the next Heavy issue's second QA launch if it can.
   12. #71 Fix the `make contract-check` help and usage text. In the same sitting as #73 (both need the human's approval of a `Makefile` diff).
-  - The epoch batch (#63, #49, #65, and the approved kit edits waiting for it, including #42's item 3) lands once, after the fifth qualifying control issue closes. #9 counts as a control issue (human ruling, 2026-11-12), so the fifth is #11. Until then, Reflection comments carry no commit hashes. #63, #49 and #65 move the ponytail epoch (`_docs/planning/ponytail-trial-protocol.md`, Amendment 2); the others do not.
+  13. #80 Harden `make backend-run` and `make backend-stop`. In the epoch batch (it changes what two existing commands do), so before #22.
+  - The epoch batch (#63, #49, #65, #80, and the approved kit edits waiting for it, including #42's item 3) lands once, after the fifth qualifying control issue closes. #9 counts as a control issue (human ruling, 2026-11-12), so the fifth is #11. Until then, Reflection comments carry no commit hashes. #63, #49 and #65 move the ponytail epoch (`_docs/planning/ponytail-trial-protocol.md`, Amendment 2); the others do not.
 
 - **Not in this phase:** synthetic alert generator and Lead reassignment (Should-haves). Deploy, then DevOps (observability, alerting, on-call agent) are the next two phases, outlined in `_docs/specs.md` §6 and given their own roadmaps when Core is done. Target Enhancements (LangGraph advisory triage, n8n, MCP/VulnTriage) — future roadmap. See `_docs/specs.md` §6–7.
 - **Archive when:** every Core issue is closed and `make run` brings up the full stack.
