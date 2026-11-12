@@ -1,7 +1,9 @@
 """Run the backend: `python -m socboard.server` (started by `make backend-run`).
 
 Host and port come from SOCBOARD_HOST and SOCBOARD_PORT. The server binds to localhost only:
-any other host is refused before anything is imported or started.
+any other host is refused before anything is imported or started. The app also needs
+SOCBOARD_TOKEN_SECRET (#13): without a usable one, or with an invalid SOCBOARD_DATABASE_URL, the
+server prints a message naming the variable (never its value) and exits 2, as for a bad host.
 """
 
 import os
@@ -40,13 +42,21 @@ def main(environ: Mapping[str, str] | None = None) -> int:
         import uvicorn
 
         from socboard.app import create_app
+        from socboard.auth import ConfigError
+        from socboard.database import DatabaseUrlError
     except ImportError as error:
         print(
             f"socboard.server: a backend package is missing ({error}); run make install",
             file=sys.stderr,
         )
         return 1
-    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    try:
+        app = create_app(os.environ if environ is None else environ)
+    except (ConfigError, DatabaseUrlError) as error:
+        # Both messages are fixed text naming the variable, never its value.
+        print(f"socboard.server: {error}", file=sys.stderr)
+        return 2
+    uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
 
 

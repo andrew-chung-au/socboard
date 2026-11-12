@@ -1,32 +1,48 @@
-"""Test-only routes and dependencies for the backend tests (#10).
+"""Test-only routes, test users and tokens for the backend tests (#10, #13).
 
-Authentication and the role check are route DEPENDENCIES here, never inline in a handler: the
-order of checks in the contract (401, then a case-free role check, then the schema 422) holds only
-that way. #13 and #14 replace these dependencies with the real ones; the order tests that use them
-stay.
+The test routes use the REAL authentication dependencies (`socboard.auth.current_user` and
+`require_lead`, #13) as route DEPENDENCIES, never inline in a handler: the order of checks in the
+contract (401, then a case-free role check, then the schema 422) holds only that way.
 
-The dependencies read the `Authorization` header and raise 401 `unauthorized` or 403 `forbidden`
-themselves (FastAPI's own security helpers answer 403 for a missing credential in some versions).
+`ANALYST_TOKEN` and `LEAD_TOKEN` are real tokens, signed with `TEST_TOKEN_SECRET` for the two test
+users that `build_test_database` inserts with fixed ids. `tests/conftest.py` sets the secret in the
+environment and points the `app` fixture at a copy of that database. Every secret and password
+here is synthetic and test-only.
 """
 
+import time
 from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import insert
 
+from socboard import database, migrate
 from socboard.app import create_api_router
-from socboard.errors import FORBIDDEN, NOT_FOUND, UNAUTHORIZED, ApiHTTPException
+from socboard.auth import CurrentUser, current_user, require_lead
+from socboard.errors import NOT_FOUND, ApiHTTPException
+from socboard.models import User
+from socboard.passwords import hash_password
+from socboard.tokens import create_token
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-ANALYST_TOKEN = "test-analyst-token"
-LEAD_TOKEN = "test-lead-token"
+# Synthetic, test-only values (at least 32 characters for the secret, 12 for a password).
+TEST_TOKEN_SECRET = "test-only-signing-secret-0123456789abcdef"
+ANALYST_ID = 1
+LEAD_ID = 2
+ANALYST_USERNAME = "test-analyst"
+LEAD_USERNAME = "test-lead"
+ANALYST_PASSWORD = "test-only-analyst-pw-1"
+LEAD_PASSWORD = "test-only-lead-pw-2"
+
+# Real tokens for the two test users; valid for 8 hours from import, far longer than a test run.
+ANALYST_TOKEN = create_token(ANALYST_ID, TEST_TOKEN_SECRET, now=time.time())
+LEAD_TOKEN = create_token(LEAD_ID, TEST_TOKEN_SECRET, now=time.time())
 KNOWN_CASE_ID = "C-1001"
 MARKER = "zz-marker-7f3a91"
-
-_ROLES = {ANALYST_TOKEN: "analyst", LEAD_TOKEN: "lead"}
 
 
 def load_contract() -> dict:
@@ -35,26 +51,39 @@ def load_contract() -> dict:
         return yaml.safe_load(handle)
 
 
-def authenticate(authorization: Annotated[str | None, Header()] = None) -> str:
-    """Return the caller's role, or raise 401 `unauthorized`."""
-    prefix = "Bearer "
-    if authorization is not None and authorization.startswith(prefix):
-        role = _ROLES.get(authorization[len(prefix) :])
-        if role is not None:
-            return role
-    raise ApiHTTPException(
-        401,
-        UNAUTHORIZED,
-        "Your session has expired. Please sign in again.",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+def sqlite_url(path: Path) -> str:
+    return "sqlite:///" + path.as_posix()
 
 
-def require_lead(role: Annotated[str, Depends(authenticate)]) -> str:
-    """A role check that needs no case lookup: 403 `forbidden` for anyone but a Lead."""
-    if role != "lead":
-        raise ApiHTTPException(403, FORBIDDEN, "You do not have permission to do this.")
-    return role
+def build_test_database(path: Path) -> str:
+    """A migrated database at `path` holding the two test users; returns its URL."""
+    url = sqlite_url(path)
+    migrate.upgrade(url)
+    engine = database.create_db_engine(url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                insert(User.__table__),
+                [
+                    {
+                        "id": ANALYST_ID,
+                        "username": ANALYST_USERNAME,
+                        "display_name": "Test Analyst",
+                        "role": "analyst",
+                        "password_hash": hash_password(ANALYST_PASSWORD),
+                    },
+                    {
+                        "id": LEAD_ID,
+                        "username": LEAD_USERNAME,
+                        "display_name": "Test Lead",
+                        "role": "lead",
+                        "password_hash": hash_password(LEAD_PASSWORD),
+                    },
+                ],
+            )
+    finally:
+        engine.dispose()
+    return url
 
 
 class TransitionBody(BaseModel):
@@ -68,7 +97,7 @@ def create_test_router() -> APIRouter:
     @router.get("/cases")
     def closed_cases(
         status: Literal["Closed"],
-        role: Annotated[str, Depends(require_lead)],
+        user: Annotated[CurrentUser, Depends(require_lead)],
     ) -> list[dict]:
         return []
 
@@ -76,7 +105,7 @@ def create_test_router() -> APIRouter:
     def transition(
         id: str,
         body: TransitionBody,
-        role: Annotated[str, Depends(authenticate)],
+        user: Annotated[CurrentUser, Depends(current_user)],
     ) -> dict:
         if id != KNOWN_CASE_ID:
             raise ApiHTTPException(404, NOT_FOUND, "Case not found.")
