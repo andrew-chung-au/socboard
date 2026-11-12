@@ -422,3 +422,51 @@ def test_the_generated_migration_gives_a_database_the_application_can_use(tmp_pa
             insert_alert(conn)
     finally:
         engine.dispose()
+
+
+# --- `python -m socboard.migrate new NAME` (make migration-new) ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["", "two words", "a$b", "a;b", "a/b", "a.b", "../x", "caf\u00e9", "a\nb"],
+)
+def test_new_refuses_a_bad_name_and_creates_nothing(name, tmp_path, monkeypatch, capsys):
+    folder = tmp_path / "migrations"
+    shutil.copytree(migrate.SCRIPT_LOCATION, folder, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(migrate, "SCRIPT_LOCATION", folder)
+    before = sorted(path.name for path in (folder / "versions").iterdir())
+    env = {database.ENV_NAME: sqlite_url(tmp_path / "new.db")}
+    assert migrate.main(env, ["new", name]) == 2
+    assert sorted(path.name for path in (folder / "versions").iterdir()) == before
+    assert not (tmp_path / "new.db").exists()
+    assert "usage" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("args", [["new"], ["new", "a", "b"], ["old", "a"], ["a"]])
+def test_new_refuses_the_wrong_arguments(args, capsys):
+    assert migrate.main({}, args) == 2
+    assert "usage" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["add_column", "Add-Column-2", "x"])
+def test_the_name_check_accepts_letters_digits_underscore_and_dash(name):
+    assert migrate.is_valid_name(name)
+
+
+def test_new_creates_one_migration_file_after_the_latest(tmp_path, monkeypatch, capsys):
+    folder = tmp_path / "migrations"
+    shutil.copytree(migrate.SCRIPT_LOCATION, folder, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(migrate, "SCRIPT_LOCATION", folder)
+    before = {path.name for path in (folder / "versions").glob("*.py")}
+    env = {database.ENV_NAME: sqlite_url(tmp_path / "new.db")}
+    assert migrate.main(env, ["new", "check_the_command"]) == 0
+    created = {path.name for path in (folder / "versions").glob("*.py")} - before
+    assert len(created) == 1
+    (name,) = created
+    assert "check_the_command" in name
+    source = (folder / "versions" / name).read_text(encoding="utf-8")
+    assert "0001" in source  # it follows the first migration
+    assert "socboard" not in source
+    heads = ScriptDirectory.from_config(migrate.make_config(folder)).get_heads()
+    assert len(heads) == 1

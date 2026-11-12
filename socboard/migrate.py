@@ -4,6 +4,9 @@ The database is `SOCBOARD_DATABASE_URL` (default: `socboard.db` in the repositor
 that is not a valid database URL exits 2 with fixed text that does not print the value (a URL can
 hold a password). A second run changes nothing.
 
+`python -m socboard.migrate new NAME` (run by `make migration-new`) generates a migration file from
+the model changes; NAME is letters, digits, `_` and `-` only, and a bad name creates nothing.
+
 Alembic is configured in code (no `alembic.ini`); the environment is `socboard/migrations/env.py`.
 
 SQLite foreign keys: the engine switches the pragma on for every connection, and this module is
@@ -17,6 +20,7 @@ message here, not a traceback.
 """
 
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -24,7 +28,10 @@ from pathlib import Path
 SCRIPT_LOCATION = Path(__file__).resolve().parent / "migrations"
 
 MISSING_PACKAGE_EXIT = 1
-INVALID_URL_EXIT = 2
+INVALID_URL_EXIT = 2  # also the exit code for a bad command line
+
+NAME_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+USAGE = "usage: python -m socboard.migrate [new NAME]  (NAME: letters, digits, _ and - only)"
 
 
 class MigrationError(Exception):
@@ -89,8 +96,36 @@ def downgrade(url, revision: str, *, script_location: Path | str | None = None) 
     run(url, lambda config: command.downgrade(config, revision), script_location=script_location)
 
 
-def main(environ: Mapping[str, str] | None = None) -> int:
+def is_valid_name(name: str) -> bool:
+    """A migration name: ASCII letters, digits, `_` and `-` only (no `$`, no spaces)."""
+    return NAME_PATTERN.fullmatch(name) is not None
+
+
+def new_revision(url, message: str, *, script_location: Path | str | None = None) -> None:
+    """Generate a migration file from the model changes.
+
+    Alembic compares the models with the database, so the database is brought to the latest
+    migration first.
+    """
+    _database, command, _Config = _load()
+    upgrade(url, script_location=script_location)
+    run(
+        url,
+        lambda config: command.revision(config, message=message, autogenerate=True),
+        script_location=script_location,
+    )
+
+
+def main(environ: Mapping[str, str] | None = None, argv: list[str] | None = None) -> int:
+    """No arguments: apply the migrations. `new NAME`: generate a migration (make migration-new)."""
     source = os.environ if environ is None else environ
+    args = [] if argv is None else list(argv)
+    new_name = None
+    if args:
+        if len(args) != 2 or args[0] != "new" or not is_valid_name(args[1]):
+            print(USAGE, file=sys.stderr)
+            return INVALID_URL_EXIT
+        new_name = args[1]
     try:
         database, _command, _Config = _load()
     except ImportError as error:
@@ -98,7 +133,10 @@ def main(environ: Mapping[str, str] | None = None) -> int:
         return MISSING_PACKAGE_EXIT
     try:
         url = database.resolve_url(source)
-        upgrade(url)
+        if new_name is None:
+            upgrade(url)
+        else:
+            new_revision(url, new_name)
     except database.DatabaseUrlError as error:
         print(f"socboard.migrate: {error}", file=sys.stderr)
         return INVALID_URL_EXIT
@@ -108,9 +146,12 @@ def main(environ: Mapping[str, str] | None = None) -> int:
     except Exception as error:  # fixed text: the class name only, never the message
         print(f"socboard.migrate: the migration failed ({type(error).__name__})", file=sys.stderr)
         return 1
-    print("socboard.migrate: the database is at the latest migration")
+    if new_name is None:
+        print("socboard.migrate: the database is at the latest migration")
+    else:
+        print("socboard.migrate: a new migration file was created; read it before committing")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(argv=sys.argv[1:]))
