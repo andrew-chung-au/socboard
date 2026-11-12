@@ -73,7 +73,7 @@ This release is the whole graded project, aiming for full marks on every criteri
 
 **Phase 1: Core (now)** — the Must-have stories above: API ingest, rule-based scoring, seeded minimal auth, the sorted queue with polling, the claim/investigate/close workflow with blocked-transition errors, notes, and the audit trail. The end-to-end full-stack application, tested with unit, frontend and integration tests, running locally with one command.
 
-**Phase 2: Deploy (outline)** — following `_docs/planning/03_deployment.md`: one container image, Postgres in place of SQLite, the full system including the database started with one Docker Compose command, end-to-end tests, a deployment reachable at a public URL, and CI/CD that runs the tests and deploys.
+**Phase 2: Deploy (outline)** — following `_docs/planning/03_deployment.md`: one container image, Postgres in place of SQLite, login attempt limiting and ingest rate limiting, the full system including the database started with one Docker Compose command, end-to-end tests, a deployment reachable at a public URL, and CI/CD that runs the tests and deploys.
 
 **Phase 3: DevOps (outline)** — following `_docs/planning/04_devops.md`: separate dev and prod with automatic deploy to dev and a manual promotion to prod (with a rollback path), one key journey instrumented with metrics, traces and structured logs sharing a trace id and viewable in a UI, at least one alert on real user impact, and an on-call agent that wakes on that alert and fixes the issue.
 
