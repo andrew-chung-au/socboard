@@ -39,6 +39,8 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
   12. #71 Fix the `make contract-check` help and usage text. In the same sitting as #73 (both need the human's approval of a `Makefile` diff).
   13. #80 Harden `make backend-run` and `make backend-stop`. In the epoch batch (it changes what two existing commands do), so before #22.
   14. #93 Run the frontend lint in `make verify` and CI. After #75 and #31; it moves the epoch, so it joins the next epoch batch after the current one.
+  15. #99 Harden the audit guard's remaining DDL and id gaps (#11's Low QA findings L1 to L5). After #11 closes, before #14 (the first issue that writes audit entries in use); proposed Heavy.
+  16. #100 Pin CI's Python version to the project's 3.12 (CI ran 3.14 on #11). Any time, before #22; needs the human's approval of the workflow diff.
   - The epoch batch (#63, #49, #65, #80, and the approved kit edits waiting for it, including #42's item 3; drafts and rulings in `_docs/planning/epoch-batch-1/README.md`) lands once, after the fifth qualifying control issue closes. #9 counts as a control issue (human ruling, 2026-11-12), so the fifth is #11. Until then, Reflection comments carry no commit hashes. #63, #49, #65 and #80 move the ponytail epoch (`_docs/planning/ponytail-trial-protocol.md`, Amendment 2); the others do not.
 
 - **Not in this phase:** synthetic alert generator and Lead reassignment (Should-haves). Deploy, then DevOps (observability, alerting, on-call agent) are the next two phases, outlined in `_docs/specs.md` §6 and given their own roadmaps when Core is done. Target Enhancements (LangGraph advisory triage, n8n, MCP/VulnTriage) — future roadmap. See `_docs/specs.md` §6–7.
