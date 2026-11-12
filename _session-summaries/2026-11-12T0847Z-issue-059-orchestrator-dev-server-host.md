@@ -66,7 +66,7 @@ none for #59.
 
 ## Follow-ups for the next session
 
-- Human: open the forwarded port in the browser and confirm the SOCBoard page loads (not verified by any agent), then update the runbook's "Traps seen on #51".
+- Human: update the runbook's "Traps seen on #51". The human opened the forwarded port and the SOCBoard page loaded (2026-11-12); no agent ran a browser.
 - Human: push from the clean clone.
 - Human: say when `.scratch/` may be cleaned (`make clean-scratch`), after reading or keeping the #11 advice scripts.
-- #59 is not closed yet: its browser criterion is human-verified and still open.
+- #59 was closed with `make issue-close` after the human confirmed the browser check.
