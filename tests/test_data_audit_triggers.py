@@ -179,6 +179,10 @@ TEXT_REPLACE = (
     "INSERT OR REPLACE INTO audit_entries " + _COLUMNS + " VALUES "
     "(:id, :case_id, :actor_id, 'claimed', 'replaced', '" + AT_TEXT + "')"
 )
+TEXT_REPLACE_BARE = (
+    "REPLACE INTO audit_entries " + _COLUMNS + " VALUES "
+    "(:id, :case_id, :actor_id, 'claimed', 'replaced', '" + AT_TEXT + "')"
+)
 TEXT_UPSERT = (
     "INSERT INTO audit_entries " + _COLUMNS + " VALUES "
     "(:id, :case_id, :actor_id, 'claimed', 'upserted', '" + AT_TEXT + "') "
@@ -477,9 +481,13 @@ OVERWRITING = {
     .prefix_with("OR")
     .prefix_with("REPLACE")
     .values(**_values(seeded, "replaced")),
-    "insert_replace": lambda seeded: insert(AUDIT)
-    .prefix_with("REPLACE")
-    .values(**_values(seeded, "replaced")),
+    # The bare statement `REPLACE INTO ...`. `insert(AUDIT).prefix_with("REPLACE")` cannot give it:
+    # SQLAlchemy always starts with `INSERT ` and then joins the prefixes with a space, so it
+    # compiles to `INSERT REPLACE INTO ...`, which SQLite's parser refuses (`near "REPLACE":
+    # syntax error`) before any trigger runs. The two-prefix form `prefix_with("OR")` then
+    # `prefix_with("REPLACE")` compiles to `INSERT OR REPLACE INTO ...`, which is valid. So the
+    # bare form is sent as text. (The route keeps the name `insert_replace`.)
+    "insert_replace": lambda seeded: text(TEXT_REPLACE_BARE).bindparams(**_named(seeded)),
     "insert_or_replace_from_select": lambda seeded: _from_select(["OR REPLACE"]),
     "insert_or_replace_from_select_two_prefixes": lambda seeded: _from_select(["OR", "REPLACE"]),
     "sqlite_on_conflict_do_update": lambda seeded: _upsert(AUDIT, _values(seeded, "upserted")),
@@ -635,7 +643,8 @@ RECURSIVE = {
 
 OVERWRITE_CASES = {
     "insert_or_replace": lambda seeded: insert(AUDIT).prefix_with("OR REPLACE").values(**_values(seeded, "replaced")),
-    "replace": lambda seeded: insert(AUDIT).prefix_with("REPLACE").values(**_values(seeded, "replaced")),
+    # Bare `REPLACE INTO ...` as text; see OVERWRITING above for why `prefix_with("REPLACE")` is not valid.
+    "replace": lambda seeded: text(TEXT_REPLACE_BARE).bindparams(**_named(seeded)),
     "insert_or_replace_from_select": lambda seeded: _from_select(["OR REPLACE"]),
     "on_conflict_do_update": lambda seeded: _upsert(AUDIT, _values(seeded, "upserted")),
 }
