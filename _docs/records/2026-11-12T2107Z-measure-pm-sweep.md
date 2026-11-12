@@ -169,4 +169,4 @@ Written by the PM role; it proposes, it applies nothing (`_docs/agent-kit/proced
   - Proposal 7: 2c lands as drafted. The #11 PASS that literally met the withdrawal condition was set aside for independence, and the miss was probe coverage, not the stopping rule.
   - Proposals 8 to 14: rejected (8, 11, 12 and 13), or rejected for now (9, 10 and 14).
   - Timing (a separate ruling, the same day): epoch batch 1 is held until #12 closes. #12 runs now under the current epoch, so its trial data does not span an epoch move. Until then, only work that changes no rule a role reads or command a role runs proceeds: this record, the grooming of #80, and drafting items 9 to 11.
-  - Later the same day (after #12 closed), the human said: hold. The ponytail trial and epoch batch 1 are paused, and work focuses on the Core task list (trial protocol, Hold).
+  - Later the same day (after #12 closed), the human first said hold, then shelved the ponytail trial (it can be resumed) and adopted ponytail in normal work (`_docs/decisions/2026-11-12T2300Z-ponytail-adopt.md`). Items 9 to 11 now land on their own when approved, not as part of a batch.

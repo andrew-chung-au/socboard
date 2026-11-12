@@ -2,7 +2,14 @@
 
 Order and status only. Method and criteria: `_docs/planning/ponytail-trial-protocol.md`. Decision (approved): `_docs/decisions/2026-11-06T0024Z-ponytail-trial.md`.
 
-- **Status:** next (Core is now; the baseline runs on Core issues from #2 onward)
+- **Status:** shelved, 2026-11-12. This is a measurement exercise to quantify ponytail's benefit. It was considered and its plumbing built (tasks 3 to 5), but it was not fully implemented: no shadow review ran (protocol Amendment 3). It is kept for review.
+  - **In its place:** ponytail is used in normal work, and a light before-and-after measurement (issues #8 to #12 without it; issues claimed after it is switched on, with it; #13 in neither) gives the human figures to review. The decision record holds the method: `_docs/decisions/2026-11-12T2300Z-ponytail-adopt.md`, "Measurement for review".
+  - **This plan** is kept as it was, so the full controlled measurement can be picked up again if that review is promising.
+- **To resume:** the human decides to resume. Then:
+  1. Take the ponytail skill out of normal Engineer use, so control issues are unprimed again (`AGENTS.md`, Project settings).
+  2. Write a new epoch-start record from the current commit, as in `_docs/records/2026-11-10T1506Z-measure-ponytail-epoch-1-start.md`.
+  3. Restart at task 6 (Phase 1). The protocol, metrics script (`make ponytail-metrics`), reviewer role and vendored files are all still in place.
+  4. Land, or deliberately hold, the process edits in `_docs/planning/epoch-batch-1/` first, so they do not split the new epoch.
 - **Goal:** Learn whether, and for which function, ponytail improves how this project's agents work, measured against our own baseline.
 - **Tasks, in order** (file as issues when groomed; numbers added then):
   1. Human habit, starting now: record tool and model on every `Launch usage` line. The `Assisted-by` commit line is already required.
