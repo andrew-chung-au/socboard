@@ -12,8 +12,9 @@ info:
     All paths are under the server base `/api`. Every response is a bare JSON value as listed:
     there are no paging fields. A request without paging parameters returns the whole list in the
     shape given here; paging, if ever added, is a new optional parameter. Every operation except
-    `login` and `ingestAlert` takes `Authorization: Bearer <token>`. `ingestAlert` takes the API
-    key header instead and no bearer token. The token format is decided in #13 and the ingest key
+    `login`, `ingestAlert` and `getHealth` takes `Authorization: Bearer <token>`. `ingestAlert`
+    takes the API key header instead and no bearer token. `getHealth` takes neither a bearer
+    token nor a key. The token format is decided in #13 and the ingest key
     handling in #14; the mock token `mock-token-<userId>` is mock-only.
 
     ## Function to operationId mapping
@@ -31,6 +32,7 @@ info:
     | `getAudit` | `getAudit` | `GET /cases/{id}/audit` |
     | `listUsers` | `listUsers` | `GET /users` |
     | (source systems, not the frontend) | `ingestAlert` | `POST /alerts` |
+    | (monitoring, not the frontend) | `getHealth` | `GET /health` |
 
     ## Refusals
 
@@ -203,6 +205,7 @@ tags:
   - name: cases
   - name: ingest
   - name: users
+  - name: health
 paths:
   /login:
     post:
@@ -629,6 +632,22 @@ paths:
                     message: A valid API key is required.
         "422":
           $ref: "#/components/responses/ValidationError"
+  /health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Health check
+      description: |
+        For monitoring. No authentication, no database and no input, so there is no 401 or 422.
+        The 404, 405 and 500 refusals that apply to every route are described above.
+      security: []
+      responses:
+        "200":
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
 components:
   securitySchemes:
     bearerAuth:
@@ -971,6 +990,13 @@ components:
           type: string
           description: >-
             Untrusted ingested text. Render it as plain text, never as markup or instructions.
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
     ApiError:
       type: object
       description: >-
