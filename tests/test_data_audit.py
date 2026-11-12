@@ -400,7 +400,7 @@ def test_a_plain_insert_and_append_audit_still_work(seeded):
         session.commit()
     with engine.connect() as conn:
         details = conn.execute(select(AuditEntry.detail).order_by(AuditEntry.id)).scalars().all()
-    assert details == ["original", "n", "plain", "ignored"]
+    assert details == ["original", "plain", "ignored", "n"]  # ids 1, 50, 51, then 52
 
 
 def test_ddl_on_another_table_is_not_blocked(seeded):
