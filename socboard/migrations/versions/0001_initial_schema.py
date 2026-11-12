@@ -8,6 +8,8 @@ Everything here is a literal: names, types and the CHECK text. This file never i
 `socboard.domain` or `socboard.models`, so a later change to either cannot change what this
 migration does. `tests/test_data_schema.py` inserts every allowed value and a set of refused ones
 into the migrated database, because Alembic's autogenerate does not compare CHECK constraints.
+The three SQLite triggers on `audit_entries` are literals too; `tests/test_data_audit_triggers.py`
+and `tests/test_data_migrations.py` check them, because autogenerate does not read triggers.
 """
 
 import sqlalchemy as sa
@@ -17,6 +19,23 @@ revision = "0001"
 down_revision = None
 branch_labels = None
 depends_on = None
+
+
+AUDIT_TRIGGERS = {
+    "audit_entries_no_update": (
+        "CREATE TRIGGER audit_entries_no_update BEFORE UPDATE ON audit_entries "
+        "BEGIN SELECT RAISE(ABORT, 'Audit entries cannot be changed.'); END"
+    ),
+    "audit_entries_no_delete": (
+        "CREATE TRIGGER audit_entries_no_delete BEFORE DELETE ON audit_entries "
+        "BEGIN SELECT RAISE(ABORT, 'Audit entries cannot be removed.'); END"
+    ),
+    "audit_entries_no_reuse_id": (
+        "CREATE TRIGGER audit_entries_no_reuse_id BEFORE INSERT ON audit_entries "
+        "WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM audit_entries WHERE id = NEW.id) "
+        "BEGIN SELECT RAISE(ABORT, 'Audit entries cannot be overwritten.'); END"
+    ),
+}
 
 
 def _id():
@@ -137,9 +156,19 @@ def upgrade() -> None:
         sqlite_autoincrement=True,
     )
     op.create_index(op.f("ix_audit_entries_case_id"), "audit_entries", ["case_id"], unique=False)
+    # The audit trail is append-only in the database (decision record, option B). SQLite's
+    # triggers; Postgres gets equivalents in the Deploy phase. Each message is fixed text with
+    # no value in it. Trigger (c) fires before the insert is attempted, so it also blocks
+    # INSERT OR REPLACE, REPLACE and ON CONFLICT DO UPDATE, whether or not PRAGMA
+    # recursive_triggers is on.
+    for statement in AUDIT_TRIGGERS.values():
+        op.execute(statement)
 
 
 def downgrade() -> None:
+    # The triggers go before the table.
+    for name in AUDIT_TRIGGERS:
+        op.execute("DROP TRIGGER " + name)
     op.drop_index(op.f("ix_audit_entries_case_id"), table_name="audit_entries")
     op.drop_table("audit_entries")
     op.drop_index(op.f("ix_notes_case_id"), table_name="notes")
