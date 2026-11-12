@@ -22,6 +22,7 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
   15. #20 Closed-cases list for Leads.
   16. #21 Connect the frontend to the real API and add the login screen.
   17. #22 Integration tests for both journeys and the one-command `make run`.
+- **Pace (human ruling, 2026-11-12):** CI is the test loop; one pull request per issue; the next two or three Core issues may be groomed ahead and approved together; one small supporting issue may run alongside the main issue while it waits. Details: `.kiro/steering/delivery-pace.md`.
 - **Supporting issues, in order** (tracker issues outside the task list; each lands at its trigger, the Core issue it goes before or the event that brings it up; open or closed is read from the tracker; none changes the Core order). Every new issue is placed in this list, with a trigger, when it is filed, so that it is groomed when its trigger comes and does not wait unseen (added after the 2026-11-12 prioritization review found twelve issues outside any order):
   1. #74 Add the health route to the OpenAPI contract. After #10 closes, before #13.
   2. #63 Make `make issue-close` ignore reflection-only Engineer comments. Epoch batch, first; before Reflections are collected on every issue.
