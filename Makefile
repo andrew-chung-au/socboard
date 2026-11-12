@@ -159,7 +159,7 @@ frontend-test: ## Run the frontend tests (Vitest); run make frontend-install fir
 	@test -x frontend/node_modules/.bin/vitest || { echo "frontend-test: frontend/node_modules/.bin/vitest is missing; run make frontend-install first"; exit 1; }
 	cd frontend && bun run test
 
-frontend-start: ## Start the frontend dev server in the background (mock on; log: .scratch/frontend.log; http://localhost:5173/)
+frontend-start: ## Start the frontend dev server in the background (mock on; log: .scratch/frontend.log; http://127.0.0.1:5173/)
 	@mkdir -p .scratch
 	@test -x frontend/node_modules/.bin/vite || { echo "frontend-start: frontend/node_modules/.bin/vite is missing; run make frontend-install first"; exit 1; }
 	@if [ -f .scratch/frontend.pid ]; then pid=$$(cat .scratch/frontend.pid); case "$$pid" in ''|*[!0-9]*|0*) echo "frontend-start: .scratch/frontend.pid does not hold a plain pid; check it and remove it by hand"; exit 1;; esac; if kill -0 "$$pid" 2>/dev/null; then echo "frontend is already running (pid $$pid)"; exit 1; fi; fi
