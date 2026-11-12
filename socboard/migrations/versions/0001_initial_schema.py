@@ -38,6 +38,14 @@ AUDIT_TRIGGERS = {
 }
 
 
+# One literal DROP per trigger, in the same order as above.
+AUDIT_TRIGGER_DROPS = (
+    "DROP TRIGGER audit_entries_no_update",
+    "DROP TRIGGER audit_entries_no_delete",
+    "DROP TRIGGER audit_entries_no_reuse_id",
+)
+
+
 def _id():
     return sa.BigInteger().with_variant(sa.Integer(), "sqlite")
 
@@ -166,9 +174,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # The triggers go before the table.
-    for name in AUDIT_TRIGGERS:
-        op.execute("DROP TRIGGER " + name)
+    # The triggers go before the table. Literal statements: no query is built by formatting.
+    for statement in AUDIT_TRIGGER_DROPS:
+        op.execute(statement)
     op.drop_index(op.f("ix_audit_entries_case_id"), table_name="audit_entries")
     op.drop_table("audit_entries")
     op.drop_index(op.f("ix_notes_case_id"), table_name="notes")
