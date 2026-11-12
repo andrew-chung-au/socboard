@@ -81,6 +81,57 @@ describe("mock new-alert timer: mock mode", () => {
     expect(await queue(mod)).toHaveLength(before.length + 2);
   });
 
+  it("dates the added alert, its ingested entry and every audit entry at or before now", async () => {
+    vi.stubEnv("VITE_USE_MOCK", "true");
+    const mod = await load();
+    vi.useFakeTimers();
+    const before = await queue(mod);
+    const knownIds = new Set(before.map((c) => c.id));
+
+    mod.startNewAlertTimer();
+    await vi.advanceTimersByTimeAsync(mod.NEW_ALERT_INTERVAL_MS);
+    const added = (await queue(mod)).filter((c) => !knownIds.has(c.id));
+    expect(added).toHaveLength(1);
+    const now = Date.now();
+
+    expect(Date.parse(added[0]!.alertTimestamp)).toBeLessThanOrEqual(now);
+    expect(Date.parse(added[0]!.ingestedAt)).toBeLessThanOrEqual(now);
+    const pending = mod.mockService.getAudit(added[0]!.id);
+    await vi.advanceTimersByTimeAsync(200);
+    const entries = await pending;
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.some((e) => e.action === "ingested")).toBe(true);
+    for (const e of entries) expect(Date.parse(e.at)).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("a claim made right after the alert is added is dated at or after its ingested entry", async () => {
+    vi.stubEnv("VITE_USE_MOCK", "true");
+    const mod = await load();
+    vi.useFakeTimers();
+    const before = await queue(mod);
+    const knownIds = new Set(before.map((c) => c.id));
+
+    mod.startNewAlertTimer();
+    await vi.advanceTimersByTimeAsync(mod.NEW_ALERT_INTERVAL_MS);
+    const added = (await queue(mod)).filter((c) => !knownIds.has(c.id));
+    expect(added).toHaveLength(1);
+    const id = added[0]!.id;
+
+    // The clock has not moved since the alert was added (apart from the 200 ms queue read).
+    const claim = mod.mockService.claimCase(id);
+    await vi.advanceTimersByTimeAsync(200);
+    await claim;
+    const auditPending = mod.mockService.getAudit(id);
+    await vi.advanceTimersByTimeAsync(200);
+    const entries = await auditPending;
+
+    const ingested = entries.find((e) => e.action === "ingested");
+    const claimed = entries.find((e) => e.action === "claimed");
+    expect(ingested).toBeDefined();
+    expect(claimed).toBeDefined();
+    expect(Date.parse(claimed!.at)).toBeGreaterThanOrEqual(Date.parse(ingested!.at));
+  });
+
   it("does not start a timer when the module is loaded", async () => {
     vi.stubEnv("VITE_USE_MOCK", "true");
     const interval = vi.spyOn(globalThis, "setInterval");

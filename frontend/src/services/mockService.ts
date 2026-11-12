@@ -131,7 +131,7 @@ export const NEW_ALERT: Seed = {
   sev: "Medium",
   status: "New",
   owner: null,
-  age: 0,
+  age: 1, // not 0: ingest dates ingestedAt 6 s after the alert, which would be in the future
   desc: "3,200 TXT queries to one domain in 5 minutes. Added by the mock's new-alert timer.",
 };
 
