@@ -1,7 +1,10 @@
 """Refuse any change to `audit_entries` (the audit trail is append-only, spec section 5).
 
-Three guards act at the application layer; there are no database triggers in Core (decision record
-`_docs/decisions/2026-11-12T0834Z-data-model.md`):
+The database is the first layer: migration 0001 creates three SQLite triggers on `audit_entries`
+that abort any UPDATE, any DELETE and any INSERT that reuses an id. This module is the second
+layer, and the only guard against DDL on the table (the triggers cannot stop a DROP) (decision
+record `_docs/decisions/2026-11-12T0834Z-data-model.md`). Three guards act at the application
+layer:
 
 1. Mapper events on `AuditEntry` (registered in `socboard/models.py`) raise on an ORM update or
    delete at flush time.
@@ -17,16 +20,19 @@ Three guards act at the application layer; there are no database triggers in Cor
   on-duplicate-key-update) clause, or with an `OR REPLACE` or `REPLACE` prefix. A plain INSERT
   (what `append_audit` does) and `ON CONFLICT DO NOTHING` pass;
 - a DDL construct aimed at the table (`DropTable`, `CreateTable`, an index or constraint on it,
-  an Alembic `ALTER TABLE` construct, or `DDL(...).against(table)`), and a `DDL("...")` whose text
-  names `audit_entries` as a whole word.
+  an Alembic `ALTER TABLE` construct, or `DDL(...).against(table)`): any object with a string
+  `name` after unwrapping aliases counts, so a lightweight `table("audit_entries")` is covered
+  too; and a `DDL("...")` whose text names `audit_entries` or one of the three trigger names as a
+  whole word.
 
 Migrations are the one legitimate schema change: `socboard.migrate.run` wraps the Alembic command
 in `allow_schema_changes()`, which lifts the DDL check (and only that) for the code inside it.
 
-Raw SQL is not blocked: not `text()`, not `connection.exec_driver_sql(...)` (also raw SQL), and
-not direct access to the database file. The record names these as the only ways around the guard,
-and the module does not try to parse raw SQL. The one string inspected is the text of a `DDL(...)`
-construct, which is a plain whole-word match, not a parse.
+Raw-SQL DDL is not refused: not `text()`, not `connection.exec_driver_sql(...)`, not a DBAPI
+cursor, and not direct access to the database file. So `DROP TRIGGER` sent as raw SQL succeeds;
+that is a recorded known limit, not wanted behaviour. Raw-SQL UPDATE and DELETE are still
+refused, by the triggers. The module does not try to parse raw SQL. The one string inspected is
+the text of a `DDL(...)` construct, which is a plain whole-word match, not a parse.
 """
 
 import re
@@ -41,14 +47,20 @@ require("sqlalchemy")
 from sqlalchemy import event  # noqa: E402
 from sqlalchemy.engine import Engine  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
-from sqlalchemy.schema import DDL, ExecutableDDLElement, Table  # noqa: E402
+from sqlalchemy.schema import DDL, ExecutableDDLElement  # noqa: E402
 from sqlalchemy.sql.dml import Delete, Insert, Update  # noqa: E402
 from sqlalchemy.sql.selectable import AliasedReturnsRows  # noqa: E402
 
 AUDIT_TABLE = "audit_entries"
 IMMUTABLE_MESSAGE = "Audit entries cannot be changed or removed."
 
-_WORD = re.compile(r"\b" + AUDIT_TABLE + r"\b", re.IGNORECASE)
+# The three triggers that make the table append-only (created by migration 0001, which holds
+# their SQL as literals). A `DDL(...)` naming one of them is refused like one naming the table.
+TRIGGER_NAMES = ("audit_entries_no_update", "audit_entries_no_delete", "audit_entries_no_reuse_id")
+
+_WORD = re.compile(
+    r"\b(?:" + "|".join((AUDIT_TABLE, *TRIGGER_NAMES)) + r")\b", re.IGNORECASE
+)
 _REPLACE = re.compile(r"\bREPLACE\b", re.IGNORECASE)
 _UPDATING_CLAUSES = ("DoUpdate", "OnDuplicate")  # class-name parts of the dialect upsert clauses
 
@@ -121,22 +133,33 @@ def overwrites_audit_entry(statement) -> bool:
     return False
 
 
-def _table_name(thing) -> str | None:
+def _names(thing) -> Iterator[str]:
+    """The names `thing` answers to: a string, or any object with a string `name`.
+
+    After unwrapping aliases, any object with a string `name` counts: a `Table`, a lightweight
+    `table("audit_entries")` (a `TableClause`, not a `Table`) or anything shaped like one. An
+    object with a `table` attribute (an Index, a constraint or a column) also answers to its
+    table's name.
+    """
     if isinstance(thing, str):
-        return thing
+        yield thing
+        return
     thing = _unwrap(thing)
-    if isinstance(thing, Table):
-        return thing.name
-    table = _unwrap(getattr(thing, "table", None))  # an Index, a constraint or a column
-    return table.name if isinstance(table, Table) else None
+    name = getattr(thing, "name", None)
+    if isinstance(name, str):
+        yield name
+    table = _unwrap(getattr(thing, "table", None))
+    table_name = getattr(table, "name", None)
+    if isinstance(table_name, str):
+        yield table_name
 
 
 def ddl_targets_audit_table(statement) -> bool:
-    """True for a DDL construct aimed at `audit_entries`."""
+    """True for a DDL construct aimed at `audit_entries`, or a `DDL(...)` naming it or a trigger."""
     if not isinstance(statement, ExecutableDDLElement):
         return False
     for attribute in ("element", "target", "table_name", "table"):
-        if _is_audit_name(_table_name(getattr(statement, attribute, None))):
+        if any(_is_audit_name(name) for name in _names(getattr(statement, attribute, None))):
             return True
     if isinstance(statement, DDL) and _WORD.search(str(statement.statement)):
         return True
