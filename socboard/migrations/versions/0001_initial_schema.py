@@ -21,6 +21,11 @@ branch_labels = None
 depends_on = None
 
 
+# Trigger (c) tests only whether a row with `id = NEW.id` exists. In a BEFORE INSERT trigger SQLite
+# gives NEW.id the value -1 when no id is supplied (its documentation calls that value
+# undefined), so a test of `NEW.id IS NOT NULL` would do nothing. The CHECK `id >= 1` on
+# `audit_entries` keeps a row with id -1 out of the table, so the condition is false for a plain
+# insert and `append_audit` keeps working.
 AUDIT_TRIGGERS = {
     "audit_entries_no_update": (
         "CREATE TRIGGER audit_entries_no_update BEFORE UPDATE ON audit_entries "
@@ -32,7 +37,7 @@ AUDIT_TRIGGERS = {
     ),
     "audit_entries_no_reuse_id": (
         "CREATE TRIGGER audit_entries_no_reuse_id BEFORE INSERT ON audit_entries "
-        "WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM audit_entries WHERE id = NEW.id) "
+        "WHEN EXISTS (SELECT 1 FROM audit_entries WHERE id = NEW.id) "
         "BEGIN SELECT RAISE(ABORT, 'Audit entries cannot be overwritten.'); END"
     ),
 }
@@ -146,6 +151,7 @@ def upgrade() -> None:
         sa.Column("action", sa.String(), nullable=False),
         sa.Column("detail", sa.Text(), nullable=False),
         sa.Column("at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint("id >= 1", name=op.f("ck_audit_entries_id_positive")),
         sa.CheckConstraint(
             "action IN ('ingested', 'claimed', 'status_changed', 'note_added', 'reassigned')",
             name=op.f("ck_audit_entries_action"),

@@ -169,6 +169,10 @@ class AuditEntry(Base):
 
     __tablename__ = "audit_entries"
     __table_args__ = (
+        # Keeps the id-reuse trigger usable: SQLite gives NEW.id the value -1 in a BEFORE INSERT
+        # trigger when no id is supplied, and the trigger only asks whether a row with id = NEW.id
+        # exists. One row with id -1 would make every later plain insert fail. Only this table.
+        CheckConstraint("id >= 1", name="id_positive"),
         CheckConstraint(in_check("action", AUDIT_ACTIONS), name="action"),
         # A null actor is the contract's actor "system", allowed only for `ingested`.
         CheckConstraint(
