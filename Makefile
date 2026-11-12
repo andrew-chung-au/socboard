@@ -177,3 +177,24 @@ frontend-stop: ## Stop the dev server started by frontend-start
 	for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$$pid" 2>/dev/null || break; sleep 1; done; \
 	if kill -0 "$$pid" 2>/dev/null; then echo "frontend (pid $$pid) did not stop within 10 s; not forced; pid file kept"; exit 1; fi; \
 	rm -f .scratch/frontend.pid; echo "frontend stopped"
+
+# --- Backend (issue #10) -----------------------------------------------------
+
+backend-run: ## Start the backend in the background on localhost (SOCBOARD_PORT, default 8000; log: .scratch/backend.log)
+	@mkdir -p .scratch
+	@test -x .venv/bin/python || { echo "backend-run: .venv/bin/python is missing; run make install first"; exit 1; }
+	@if [ -f .scratch/backend.pid ]; then pid=$$(cat .scratch/backend.pid); case "$$pid" in ''|*[!0-9]*|0*) echo "backend-run: .scratch/backend.pid does not hold a plain pid; check it and remove it by hand"; exit 1;; esac; if kill -0 "$$pid" 2>/dev/null; then echo "backend is already running (pid $$pid)"; exit 1; fi; fi
+	@nohup sh -c 'exec .venv/bin/python -m socboard.server' > .scratch/backend.log 2>&1 & echo $$! > .scratch/backend.pid
+	@sleep 2; pid=$$(cat .scratch/backend.pid); if ! kill -0 "$$pid" 2>/dev/null || grep -q '^State:[[:space:]]*Z' "/proc/$$pid/status" 2>/dev/null; then echo "backend-run: the server exited at once; last lines of .scratch/backend.log:"; tail -n 20 .scratch/backend.log; rm -f .scratch/backend.pid; exit 1; fi; echo "backend started (pid $$pid); log: .scratch/backend.log"
+
+backend-stop: ## Stop the backend started by backend-run
+	@if [ ! -f .scratch/backend.pid ]; then echo "backend is not running"; exit 0; fi; \
+	pid=$$(cat .scratch/backend.pid); \
+	case "$$pid" in ''|*[!0-9]*|0*) echo "backend-stop: .scratch/backend.pid does not hold a plain pid; nothing killed; check the file"; exit 1;; esac; \
+	if ! kill -0 "$$pid" 2>/dev/null; then rm -f .scratch/backend.pid; echo "backend was not running (stale pid file removed)"; exit 0; fi; \
+	if [ -r "/proc/$$pid/cmdline" ]; then cmd=$$(tr '\0' ' ' < "/proc/$$pid/cmdline"); elif command -v ps >/dev/null 2>&1; then cmd=$$(ps -o command= -p "$$pid"); else cmd=; fi; \
+	case "$$cmd" in *-m\ socboard.server*) ;; *) echo "backend-stop: pid $$pid does not look like the backend (its command line is not the one backend-run starts, or it cannot be read); nothing killed; stop it by hand if it is yours"; exit 1;; esac; \
+	kill "$$pid" 2>/dev/null; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$$pid" 2>/dev/null || break; sleep 1; done; \
+	if kill -0 "$$pid" 2>/dev/null; then echo "backend (pid $$pid) did not stop within 10 s; not forced; pid file kept"; exit 1; fi; \
+	rm -f .scratch/backend.pid; echo "backend stopped"
