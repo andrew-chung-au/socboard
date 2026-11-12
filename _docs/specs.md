@@ -18,6 +18,8 @@ The core assumption to prove: a shared queue with consistent, rule-based severit
 
 - **Analyst** — works the queue: claims alerts, adds notes, moves cases through the workflow.
 - **Lead** — reviews the queue, reassigns cases, and reads the audit trail; can also claim and work a case like an Analyst.
+- **Operator** — holds the cloud account and the secrets, approves infrastructure applies, and can tear the deployment down (Deploy phase).
+- **Visitor** — opens the public URL and logs in as a seeded user (Deploy phase).
 
 Authentication is minimal: the system is seeded with two Analyst accounts and one Lead account (hashed passwords, bearer token). Two Analysts are needed to show single ownership (a second claim is refused) and reassignment. Source systems are not users: they authenticate ingest with a separate API key set by environment variable, so the public ingest endpoint cannot be filled by anyone. Identity matters because single-ownership, reassignment, and the audit trail ("who decided what") are only meaningful when the system knows who is acting.
 
@@ -25,12 +27,13 @@ Authentication is minimal: the system is seeded with two Analyst accounts and on
 
 1. **Ingest → Queue.** An alert arrives via the API, is scored by fixed rules, and appears in the shared queue within the target latency, sorted by severity then age.
 2. **Claim → Investigate → Close.** An analyst claims an open alert, adds notes, and moves it `New → Investigating → Closed` with a required closing reason. Every step is recorded in the audit trail.
+3. **Deploy → Public URL.** The Operator proposes a change by pull request; CI shows the Terraform plan; the Operator merges; CI passes and CD deploys; a Visitor opens the HTTPS URL and logs in as a seeded user; an alert ingested with the key appears in the queue within N = 5 s.
 
 A Lead variant of journey 2: a Lead reassigns a claimed case to another analyst, and the reassignment is recorded.
 
 ## 4. Requirements (user stories)
 
-Each story is a tracker issue; acceptance criteria are written on the issue. Priority uses MoSCoW; the Must-haves are the Core release (Section 6).
+Each story is a tracker issue; acceptance criteria are written on the issue. Priority uses MoSCoW; the Core Musts are Phase 1 and the Deploy Musts are Phase 2 (Section 6).
 
 **Ingest & scoring**
 - (Must) As a source system, I POST an alert (source, type, affected asset, timestamp, title, description) with the ingest API key so it enters the system; a missing or wrong key is refused.
@@ -53,6 +56,18 @@ Each story is a tracker issue; acceptance criteria are written on the issue. Pri
 - (Must) As a Lead, I read a case's audit trail in order, start to finish: every status change, assignment, and note records who, what, and when.
 - (Must) As a Lead, I list closed cases (with their closing reason) separately from the open queue and open any of them, so a closed case's audit trail stays reachable.
 
+**Deploy (Phase 2)**
+- (Must) As a visitor, when the single container image runs with a database URL, I get the web app at `/` and the API under `/api` from one origin.
+- (Must) As a visitor, a screen route such as `/cases/1` returns the web app's entry page, while a request under `/api` that matches no route returns the JSON 404 `not_found`, never the entry page.
+- (Must) As an operator, I choose the database by environment variable: SQLite is the local default, Postgres the deployed one.
+- (Must) As an operator, one Docker Compose command starts the app and Postgres, and the app waits for the database and its migrations.
+- (Must) As a developer, integration tests run against the Compose stack, and an end-to-end test drives journeys 1 and 2 with two Analysts and a Lead.
+- (Must) As an operator, the application is reachable at a public HTTPS URL on infrastructure that Terraform creates and one documented procedure removes.
+- (Must) As an operator, on every push to `main` CI runs the tests, builds the image and runs the integration and end-to-end tests; CD deploys only if all pass, with a short-lived scoped credential (GitHub OIDC); pull requests never get a deploy credential.
+- (Must) As an operator, infrastructure changes reach the cloud only through Terraform: a pull request shows the plan, and an apply from CI runs only on `main` after I approve it.
+- (Must) As an operator, repeated failed logins for one username, or from one client, are slowed or refused for a time, with a fixed 429 or 401 answer that does not say whether the username exists. The limits are set by configuration, with defaults chosen in the issue.
+- (Must) As an operator, a source system that exceeds a fixed ingest rate is refused with 429 and the excess alerts are not stored. The rate is set by configuration, with a default chosen in the issue.
+
 **Cross-cutting**
 - (Must, DevOps phase) As an operator, one key journey emits metrics, traces, and structured logs sharing a trace id, with no synthetic PII or credentials in telemetry. Detailed when that phase starts (Section 6).
 
@@ -61,11 +76,14 @@ Each story is a tracker issue; acceptance criteria are written on the issue. Pri
 These are the product invariants; agents must keep them (they also appear in `AGENTS.md`):
 
 - A new alert appears in the queue within **5 seconds (N = 5s)** with a severity. The client polls the queue every **3 seconds** (configurable via env var); with ingest + rule scoring taking milliseconds, worst-case visible latency is the poll interval plus processing, comfortably under N. N = 5s is both the product SLO and the threshold the observability alert fires on, so it is chosen with headroom rather than as a best case.
-- An alert has **at most one owner** at a time, including under concurrent claims: of two simultaneous claims, exactly one wins, on any supported database.
+- An alert has **at most one owner** at a time, including under concurrent claims: of two simultaneous claims, exactly one wins, on any supported database (SQLite and Postgres).
 - Closing a case **requires a reason**.
 - The audit trail for a case can be read **in order**, start to finish, and is **append-only**: entries are never edited or deleted.
 - Alert text is **untrusted**: escaped when shown, never treated as instructions.
 - **No machine learning in the critical path.** Every severity and every status change is explainable and testable.
+- **Secrets come only from the environment**, set from the cloud secret store at deploy time: the ingest key, the seeded passwords and the database password never appear in the repository, the image, the frontend bundle or Terraform state outputs. In deployed mode a missing secret stops the app at start-up.
+- **The public deployment holds synthetic data only** (Section 7).
+- No long-lived cloud key exists in the repository or in GitHub secrets. CI cannot change its own permissions; the human applies the definitions of CI's roles.
 
 ## 6. Scope
 
@@ -73,7 +91,7 @@ This release is the whole graded project, aiming for full marks on every criteri
 
 **Phase 1: Core (now)** — the Must-have stories above: API ingest, rule-based scoring, seeded minimal auth, the sorted queue with polling, the claim/investigate/close workflow with blocked-transition errors, notes, and the audit trail. The end-to-end full-stack application, tested with unit, frontend and integration tests, running locally with one command.
 
-**Phase 2: Deploy (outline)** — following `_docs/planning/03_deployment.md`: one container image, Postgres in place of SQLite, login attempt limiting and ingest rate limiting, the full system including the database started with one Docker Compose command, end-to-end tests, a deployment reachable at a public URL, and CI/CD that runs the tests and deploys.
+**Phase 2: Deploy (outline)** — following `_docs/planning/03_deployment.md`: one container image, Postgres in place of SQLite, login attempt limiting and ingest rate limiting, the full system including the database started with one Docker Compose command, end-to-end tests, a deployment reachable at a public URL, and CI/CD that runs the tests and deploys. The boundary: one environment, one server and one Postgres, on AWS, created by Terraform. Container start order uses the Postgres health check in Compose, while `GET /api/health` stays database-free (`openapi.yaml`). The backend binds a non-loopback address only when the container image opts in explicitly; `make backend-run` stays loopback-only and refuses any other host.
 
 **Phase 3: DevOps (outline)** — following `_docs/planning/04_devops.md`: separate dev and prod with automatic deploy to dev and a manual promotion to prod (with a rollback path), one key journey instrumented with metrics, traces and structured logs sharing a trace id and viewable in a UI, at least one alert on real user impact, and an on-call agent that wakes on that alert and fixes the issue.
 
@@ -90,6 +108,7 @@ This release is the whole graded project, aiming for full marks on every criteri
 - Any AI-generated verdict in the critical path (the LangGraph step, when added, is advisory only).
 - Multi-tenant orgs, SSO, or a full user-management system.
 - Rich RBAC beyond the Analyst/Lead distinction.
+- In the Deploy phase: a second environment and promotion, rollback (Phase 3), autoscaling, load balancing, a managed or replicated database, a custom domain, high availability, and SSH access to the server.
 
 ## 8. Documentation approach
 
