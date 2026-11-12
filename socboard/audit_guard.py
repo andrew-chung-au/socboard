@@ -43,6 +43,7 @@ from sqlalchemy.engine import Engine  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.schema import DDL, ExecutableDDLElement, Table  # noqa: E402
 from sqlalchemy.sql.dml import Delete, Insert, Update  # noqa: E402
+from sqlalchemy.sql.selectable import AliasedReturnsRows  # noqa: E402
 
 AUDIT_TABLE = "audit_entries"
 IMMUTABLE_MESSAGE = "Audit entries cannot be changed or removed."
@@ -72,8 +73,26 @@ def allow_schema_changes() -> Iterator[None]:
         _schema_changes_allowed.reset(token)
 
 
+def _unwrap(table):
+    """Follow an alias (and any nested alias) to the table underneath."""
+    for _ in range(100):  # a bound, so a cyclic object cannot loop forever
+        if not isinstance(table, AliasedReturnsRows):
+            break
+        table = table.element
+    return table
+
+
+def _is_audit_name(name) -> bool:
+    """SQLite treats table names case-insensitively, even when quoted."""
+    return isinstance(name, str) and name.lower() == AUDIT_TABLE
+
+
+def _names_audit_table(table) -> bool:
+    return _is_audit_name(getattr(_unwrap(table), "name", None))
+
+
 def targets_audit_table(statement) -> bool:
-    """True for an UPDATE or DELETE whose table is `audit_entries`."""
+    """True for an UPDATE or DELETE whose table (behind any alias) is `audit_entries`."""
     if not isinstance(statement, (Update, Delete)):
         return False
     table = None
@@ -83,14 +102,14 @@ def targets_audit_table(statement) -> bool:
         table = None
     if table is None:
         table = getattr(statement, "table", None)
-    return getattr(table, "name", None) == AUDIT_TABLE
+    return _names_audit_table(table) or _names_audit_table(getattr(statement, "table", None))
 
 
 def overwrites_audit_entry(statement) -> bool:
     """True for an INSERT into `audit_entries` with an update-on-conflict clause or a REPLACE prefix."""
     if not isinstance(statement, Insert):
         return False
-    if getattr(getattr(statement, "table", None), "name", None) != AUDIT_TABLE:
+    if not _names_audit_table(getattr(statement, "table", None)):
         return False
     clause = getattr(statement, "_post_values_clause", None)
     if clause is not None and any(part in type(clause).__name__ for part in _UPDATING_CLAUSES):
@@ -105,9 +124,10 @@ def overwrites_audit_entry(statement) -> bool:
 def _table_name(thing) -> str | None:
     if isinstance(thing, str):
         return thing
+    thing = _unwrap(thing)
     if isinstance(thing, Table):
         return thing.name
-    table = getattr(thing, "table", None)  # an Index, a constraint or a column
+    table = _unwrap(getattr(thing, "table", None))  # an Index, a constraint or a column
     return table.name if isinstance(table, Table) else None
 
 
@@ -116,7 +136,7 @@ def ddl_targets_audit_table(statement) -> bool:
     if not isinstance(statement, ExecutableDDLElement):
         return False
     for attribute in ("element", "target", "table_name", "table"):
-        if _table_name(getattr(statement, attribute, None)) == AUDIT_TABLE:
+        if _is_audit_name(_table_name(getattr(statement, attribute, None))):
             return True
     if isinstance(statement, DDL) and _WORD.search(str(statement.statement)):
         return True
