@@ -8,6 +8,10 @@ Human rulings of 2026-11-12 (this session) are applied: items 5, 6, 6b and 7 app
 - **Checks run** (`apply-check.sh`, `check-batch.py`, both read-only, in this folder; re-run 2026-11-12 after rewriting 2a): `git status --short` was empty before and after; `git apply --check` on each patch against the tree passed (output below); `check-batch.py` applied each patch in memory to the `origin/main` blob and counted words (`len(text.split())`, equal to `wc -w`).
 - **Not checked:** patches that touch the same file (2a and 4 on `process.md`; 2c and 3 on `qa-engineer.md`; 6 and 7 on `agent-kit.conf`) were each checked alone against the original, not applied in sequence. Their hunks are far apart (git handles the line offset), so I expect them to stack, but I did not prove it. I did not run `make contract-check`, `make verify` or the tests (Kiro Web, no package index).
 
+**Held (human ruling, 2026-11-12):** the whole batch, items 1 to 11, is held until #12 closes. #12 runs under the current epoch, so its trial data does not span an epoch move. Until then, nothing in this batch is committed; items 9 to 11 were only drafted.
+
+Items 9 to 11 were added the same day, from sweep 4's proposals 1, 2 and 3 (accepted in the Human ruling at the end of `_docs/records/2026-11-12T2107Z-measure-pm-sweep.md`). Their checks (`.scratch/epoch9-11-check.py`, run from the working tree on `sweep-4-record`, base `origin/main` = `2f78f88`): each patch passes `git apply --check` alone; applied for real to a copy under `.scratch/`, 2c, 3, 9, 10 stack on `qa-engineer.md` (675, 724, 752, 764, 791 words) and 1, 11 stack on `software-engineer.md` (483, 497, 517). No stack failed, so no patch was regenerated.
+
 ## Table
 
 Words are `wc -w` of the whole file, before (`origin/main`) and after. "Epoch" is the Amendment 2 test (`_docs/planning/ponytail-trial-protocol.md`, line 105): the change alters what an existing command a role runs does, or adds or changes a rule sentence a role reads. `KIT_VERSION` alone does not.
@@ -25,6 +29,9 @@ Words are `wc -w` of the whole file, before (`origin/main`) and after. "Epoch" i
 | 6 | `agent-kit.conf` (project, protected) | `LINT_CMD="make contract-check"`, so `make verify` and CI run it | 356 to 357 (+1) | **Yes, via `LINT_CMD` for now** (human, 2026-11-12); to be moved when #75's lint target arrives (see below) | Yes (changes what `make verify` runs) | OK |
 | 6b | `AGENTS.md` (project, protected) | Verify line says it includes the OpenAPI contract check | 1403 to 1407 (+4) | **Yes**, goes with 6 (human, 2026-11-12) | With 6 | OK |
 | 7 | `agent-kit.conf` (project, protected) | `KIT_VERSION` `1.10+socboard.1` to `1.10+socboard.2` (local counter only) | 356 to 356 (0) | **Yes** (human, 2026-11-12). The base `1.10` names the parent agent kit and stays; only `<n>` moves; `<base>+<repo>.<n>` kept as `kit-check.py` requires | No (Amendment 2, "a `KIT_VERSION` bump on its own") | OK |
+| 9 | `_docs/agent-kit/team/qa-engineer.md` (kit) | Code review reads the diff with three dots (`git diff origin/main...HEAD --stat`, full diff the same way), so files main changed since the branch started do not show | 675 to 687 (+12; about +12). In order 2c, 3, 9: 764 | **Yes, sweep 4**, `_docs/records/2026-11-12T2107Z-measure-pm-sweep.md`, Human ruling; wording chosen by the PM, the human reads the exact diff at landing | Yes (rule sentence) | OK alone; OK stacked in order 2c, 3, 9, 10 |
+| 10 | `_docs/agent-kit/team/qa-engineer.md` (kit) | A probe or bypass attempt counts as refused only when the error class and message are the expected refusal; a probe's own error counts as not run | 675 to 702 (+27; about +26). In order 2c, 3, 9, 10: 791 | **Yes, sweep 4**, `_docs/records/2026-11-12T2107Z-measure-pm-sweep.md`, Human ruling; wording chosen by the PM, the human reads the exact diff at landing | Yes (rule sentence) | OK alone; OK stacked in order 2c, 3, 9, 10 |
+| 11 | `_docs/agent-kit/team/software-engineer.md` (kit) | Human-task bullet: when a check cannot run here, the Engineer drafts the human-task file as soon as it knows, listing each unconfirmed guess, not at hand-over | 483 to 503 (+20; about +20). In order 1, 11: 517 | **Yes, sweep 4**, `_docs/records/2026-11-12T2107Z-measure-pm-sweep.md`, Human ruling; wording chosen by the PM, the human reads the exact diff at landing | Yes (rule sentence) | OK alone; OK stacked in order 1, 11 |
 
 ### Apply-check output (`bash .scratch/epoch-batch/apply-check.sh`, 2026-11-12, after the 2a rewrite)
 
@@ -250,6 +257,51 @@ diff --git a/agent-kit.conf b/agent-kit.conf
 - **Epoch (Amendment 2):** not a move: it changes `make tier-check TIER=light`'s result only for those paths, and roles run it only on Light issues, which are not control issues. A strict reading could count it; it lands in the batch either way, so the cost is nil.
 - Light still needs its own `approved` issue and the human's `tier:light` label (`process.md`, Tiers).
 
+### 9. QA: three-dot diff (`9-qa-three-dot-diff.patch`) — wording chosen by the PM; the human reads the exact diff at landing
+
+Source: sweep 4, proposal 1. A two-dot diff against the tip of `origin/main` shows files main changed after the branch started; five QA launches on three issues lost time to that.
+
+```diff
+diff --git a/_docs/agent-kit/team/qa-engineer.md b/_docs/agent-kit/team/qa-engineer.md
+--- a/_docs/agent-kit/team/qa-engineer.md
++++ b/_docs/agent-kit/team/qa-engineer.md
+@@ -21,3 +21,3 @@
+ 
+-The orchestrator asks for this in every Standard QA launch. For Heavy issues, a second, fresh launch does only this. Read the diff (`git diff origin/main --stat`, then the full diff) and answer each item, with the file and line for any problem:
++The orchestrator asks for this in every Standard QA launch. For Heavy issues, a second, fresh launch does only this. Read the diff (`git diff origin/main...HEAD --stat`, then the full diff the same way; three dots leave out what main has changed since) and answer each item, with the file and line for any problem:
+ - Bugs: logic errors, unhandled bad input, failing underlying commands
+```
+
+### 10. QA: a probe counts only on the expected refusal (`10-probe-counts-only-expected-refusal.patch`) — wording chosen by the PM; the human reads the exact diff at landing
+
+Source: sweep 4, proposal 2. On #11, probes that broke on the reviewer's own closure looked like refusals and were nearly counted as covered. Same family as item 3, a different case, so it stays a separate sentence. It sits after the Code review item list, in its own paragraph, clear of 2c's hunk on the next paragraph.
+
+```diff
+diff --git a/_docs/agent-kit/team/qa-engineer.md b/_docs/agent-kit/team/qa-engineer.md
+--- a/_docs/agent-kit/team/qa-engineer.md
++++ b/_docs/agent-kit/team/qa-engineer.md
+@@ -27,2 +27,4 @@
+ - Docs the change made out of date
++
++A probe or bypass attempt counts as refused only when the error class and message are the expected refusal; a probe's own error counts as not run.
+ 
+```
+
+### 11. Engineer: draft the human task early (`11-engineer-human-task-early.patch`) — wording chosen by the PM; the human reads the exact diff at landing
+
+Source: sweep 4, proposal 3. The rule to draft a human-task file already exists on this line; this adds when. It does not overlap item 1, which edits the completion-comment bullet further down.
+
+```diff
+diff --git a/_docs/agent-kit/team/software-engineer.md b/_docs/agent-kit/team/software-engineer.md
+--- a/_docs/agent-kit/team/software-engineer.md
++++ b/_docs/agent-kit/team/software-engineer.md
+@@ -13,3 +13,3 @@
+ - Do not close the issue, and do not push
+-- If the human must run or check something by hand, draft a task file from `_docs/agent-kit/templates/human-task.md` and return it to the orchestrator instead of listing the steps in a comment
++- If the human must run or check something by hand, draft a task file from `_docs/agent-kit/templates/human-task.md` and return it to the orchestrator instead of listing the steps in a comment. When a check cannot run here, draft it as soon as you know, listing each unconfirmed guess, not at hand-over
+ - Do not edit protected files (listed in `agent-kit.conf`). If your change affects how the project is installed, run, tested or configured, put the exact proposed change under "Proposed AGENTS.md changes" in your issue comment
+```
+
 ## Epoch effect
 
 Under Amendment 2 every item above except 7 (and 6b on its own) moves the epoch, and so do #63, #49, #65 and #80. The epoch moves once if all of them are on `main`, with the epoch-start record written, before the first counted issue launches. Nothing here moves it by itself while the batch is held back.
@@ -259,7 +311,7 @@ Under Amendment 2 every item above except 7 (and 6b on its own) moves the epoch,
 Precondition: #11 is closed and its session summary is merged (the fifth qualifying control issue; `_docs/planning/roadmap-1-core.md`, line 39). No counted issue is claimed until step 6. Re-run `bash .scratch/epoch-batch/apply-check.sh` before each protected commit: #63, #49 and #65 edit kit scripts and `agent-kit.conf`, and may shift lines.
 
 1. **#63** (Engineer, QA): `make issue-close` ignores reflection-only Engineer comments. First, because the roadmap holds Reflection hashes back until it lands, and patch 2a asks for Reflections on every issue. It edits a kit script, so it is protected.
-2. **Doc edits 1, 2a, 2b, 2c, 2d, 3, 4, 5** (no Engineer or QA work; the human approves each exact diff; one `HUMAN_APPROVED=1` commit each, or one commit for the lot if the human prefers). Landing them before #65, #49 and #80 means those issues run under the new launch checklist, the stopping rule and the unrun-checks list. If the human wants the plumbing issues run under the old text instead, move this step after step 5; the epoch still moves once.
+2. **Doc edits 1, 2a, 2b, 2c, 2d, 3, 4, 5, 9, 10, 11** (apply `qa-engineer.md` edits in the order 2c, 3, 9, 10 and `software-engineer.md` edits in the order 1, 11; no Engineer or QA work; the human approves each exact diff; one `HUMAN_APPROVED=1` commit each, or one commit for the lot if the human prefers). Landing them before #65, #49 and #80 means those issues run under the new launch checklist, the stopping rule and the unrun-checks list. If the human wants the plumbing issues run under the old text instead, move this step after step 5; the epoch still moves once.
 3. **#65 then #49** (Engineer, QA, both Heavy, together as the roadmap says): the CI base in `.github/workflows/verify.yml` first, then the markers in `verify.sh`, `verify.md` and `agent-kit.conf` (`TEST_FILES`). #65 first so that #49's own `make verify` in CI compares against the merge base.
 4. **Patches 6 and 6b (contract-check in verify)**, after #49. Both #49 and patch 6 edit `agent-kit.conf` (lines 25 and 29 are four lines apart, so the contexts may touch): re-run the apply check after #49 and regenerate patch 6 if it fails. If #75's lint target has landed by then, wire the check there instead of `LINT_CMD`.
 5. **#80** (Engineer, QA): harden `make backend-run` and `make backend-stop` (a `Makefile` change). It moves the epoch (roadmap line 39 is out of date, see Notes). It must land before #22.
@@ -274,7 +326,8 @@ Not drafted here: #63, #49, #65 and #80 are Engineer issues; their texts are not
 1. Read the exact diffs of items 3 and 4 at landing (wording is the PM's).
 2. Say whether the doc edits (step 2) go before or after #65, #49 and #80.
 3. Before landing 6: run `make contract-check` and `make verify BASE=origin/main` in the dev container.
+4. Items 9 to 11: read the exact wording at landing (the PM chose it).
 
 ## Files in this folder
 
-`1-unrun-checks-clause.patch`, `2a-launch-message-checklist.patch`, `2b-human-task-wording.patch`, `2c-heavy-stopping-rule.patch`, `2d-grooming-counting-words.patch`, `3-qa-not-run.patch`, `4-backlog-order.patch`, `5-launch-environment-line.patch`, `6-contract-check-in-verify.patch`, `6b-agents-verify-line.patch`, `7-kit-version.patch`. Helper scripts: `apply-check.sh`, `check-batch.py` (read-only). Apply one with `git apply <file>` from the project folder.
+`1-unrun-checks-clause.patch`, `2a-launch-message-checklist.patch`, `2b-human-task-wording.patch`, `2c-heavy-stopping-rule.patch`, `2d-grooming-counting-words.patch`, `3-qa-not-run.patch`, `4-backlog-order.patch`, `5-launch-environment-line.patch`, `6-contract-check-in-verify.patch`, `6b-agents-verify-line.patch`, `7-kit-version.patch`, `9-qa-three-dot-diff.patch`, `10-probe-counts-only-expected-refusal.patch`, `11-engineer-human-task-early.patch`. Helper scripts: `apply-check.sh`, `check-batch.py` (read-only). Apply one with `git apply <file>` from the project folder.
