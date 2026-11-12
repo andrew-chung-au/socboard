@@ -225,6 +225,31 @@ diff --git a/agent-kit.conf b/agent-kit.conf
  
 ```
 
+### 8. Light tier for docs-only changes (`8-light-allowed.patch`) — human ruling of 2026-11-12: option 1, the narrow list
+
+Sets `LIGHT_ALLOWED` in `agent-kit.conf` (protected) to `_docs/planning/roadmap-*.md`, `_docs/planning/epoch-batch-*/*.md` and `_docs/runbooks/*.md`, so a small edit to a roadmap, an epoch-batch note or a runbook can pass `make tier-check TIER=light`. The trial protocol, `rubric.md`, `task.md`, records, session summaries and the spec stay outside the list. Source: the delivery-pace ruling (`.kiro/steering/delivery-pace.md`, item 5) and the human's choice of option 1. Words 359 to 363 (+4).
+
+```diff
+diff --git a/agent-kit.conf b/agent-kit.conf
+--- a/agent-kit.conf
++++ b/agent-kit.conf
+@@ -40,7 +40,7 @@
+ # check's fixed escalation list (scripts, hooks, tool settings, Makefile, this file,
+ # CI, test files, FORBIDDEN) is ignored. Example, Markdown docs only:
+ # LIGHT_ALLOWED=( 'README.md' 'docs/*.md' )
+-LIGHT_ALLOWED=()
++LIGHT_ALLOWED=( '_docs/planning/roadmap-*.md' '_docs/planning/epoch-batch-*/*.md' '_docs/runbooks/*.md' )
+ # Most changed lines a Light change may have (default 20).
+ # LIGHT_MAX_LINES=20
+ 
+```
+
+- **Pattern syntax:** a bash glob tested with `[[ "$path" == $pattern ]]` (`_docs/agent-kit/scripts/lib.sh`); `*` crosses `/`. A `.patch` or `.gitattributes` in an epoch-batch folder does not match `*.md`. `_docs/planning/deploy-draft/*` does not match either.
+- **Limits:** `LIGHT_MAX_LINES` stays 20 and counts untracked files, so Light fits small edits to existing files, not new documents. The escalation list (`Makefile`, `agent-kit.conf`, CI, hooks, scripts, test files) always wins.
+- **Checks (PM, 2026-11-12):** the patch applies alone and after items 6 and 7 in the order 6, 7, 8 on a copy of `origin/main`'s `agent-kit.conf`; a pattern check passes the four example roadmap, epoch-batch and runbook files and leaves the protocol, rubric, task, a patch file, a summary, a record and the spec outside.
+- **Epoch (Amendment 2):** not a move: it changes `make tier-check TIER=light`'s result only for those paths, and roles run it only on Light issues, which are not control issues. A strict reading could count it; it lands in the batch either way, so the cost is nil.
+- Light still needs its own `approved` issue and the human's `tier:light` label (`process.md`, Tiers).
+
 ## Epoch effect
 
 Under Amendment 2 every item above except 7 (and 6b on its own) moves the epoch, and so do #63, #49, #65 and #80. The epoch moves once if all of them are on `main`, with the epoch-start record written, before the first counted issue launches. Nothing here moves it by itself while the batch is held back.
