@@ -8,5 +8,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [tanstackRouter({ target: "react", autoCodeSplitting: true }), react(), tailwindcss()],
   resolve: { tsconfigPaths: true },
+  // Dev server only: IPv4 loopback so the dev container's forwarded port reaches it, and nothing else can.
+  server: { host: "127.0.0.1" },
   build: { outDir: "dist", emptyOutDir: true },
 });
