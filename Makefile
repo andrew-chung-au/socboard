@@ -198,3 +198,16 @@ backend-stop: ## Stop the backend started by backend-run
 	for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$$pid" 2>/dev/null || break; sleep 1; done; \
 	if kill -0 "$$pid" 2>/dev/null; then echo "backend (pid $$pid) did not stop within 10 s; not forced; pid file kept"; exit 1; fi; \
 	rm -f .scratch/backend.pid; echo "backend stopped"
+
+# --- Database (issue #11) ----------------------------------------------------
+
+migration-name-chars := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 _ -
+migration-name-ok = $(and $(filter 1,$(words $(1))),$(if $(call kit-other-strip,$(1),$(migration-name-chars)),,ok),$(if $(subst x$(strip $(1))x,,x$(1)x),,ok))
+
+migrate: ## Apply all database migrations to SOCBOARD_DATABASE_URL (default: socboard.db in the repository root)
+	uv run --locked python -m socboard.migrate
+
+migration-new: ## Create a migration file from the model changes: make migration-new NAME=<letters, digits, _ and ->
+	$(if $(findstring $$,$(value NAME)),$(error Usage: make migration-new NAME=<words> - NAME must not contain $$))
+	$(if $(call migration-name-ok,$(value NAME)),,$(error Usage: make migration-new NAME=<words> - one word of letters, digits, _ and - only))
+	uv run --locked python -m socboard.migrate new "$$NAME"
