@@ -45,6 +45,20 @@ Blocked transitions, such as closing a New alert without investigating it, retur
 - The audit trail for a case can be read in order, start to finish.
 - Alert text is untrusted input: it is escaped when shown and never treated as instructions.
 
+## Severity rules
+
+Severity comes from a fixed table of alert type and asset criticality (`socboard/scoring.py`). There is no machine learning: the same inputs always give the same severity and the same rule text.
+
+| Type | Low | Medium | High | Critical |
+|---|---|---|---|---|
+| failed_login | Low | Low | Medium | High |
+| malware_detection | Medium | High | Critical | Critical |
+| unusual_network_traffic | Low | Medium | High | High |
+
+- Defaults: an alert type that is not in the table gets Medium (rule `unknown type, default -> Medium`). An asset that is not in the inventory is scored as criticality Medium (rule `malware_detection x Medium (asset unknown, criticality Medium) -> High`, for example).
+- Matching is exact and case-sensitive, with no trimming, for both the alert type and the asset name: `Malware_Detection` and `malware_detection ` are unknown types.
+- Asset criticality comes from the seeded inventory (`make seed`, after `make migrate`).
+
 ## Development
 
 Requires Python 3.12, uv, bun and make. From the project folder:
