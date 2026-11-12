@@ -167,10 +167,13 @@ def test_entries_read_back_in_insertion_order_even_when_the_times_tie_or_run_bac
 
 
 def test_an_id_is_never_reused(seeded):
-    # Raw SQL through text() is not blocked (see the decision record); this is the only way in a
-    # test to remove a row, and it shows the table does not reuse the highest id.
+    # Option B: the delete trigger refuses a DELETE, so the test first drops that trigger with
+    # raw-SQL DDL, which the guard does not refuse (the recorded known limit in
+    # tests/test_data_audit_ddl.py). Then it removes the row, which is the only way to show that
+    # the table does not reuse the highest id.
     engine = seeded["engine"]
     with engine.begin() as conn:
+        conn.execute(text("DROP TRIGGER audit_entries_no_delete"))
         last = insert_audit_row(conn, case_id=seeded["case_id"], actor_id=seeded["user_id"])
         conn.execute(text("DELETE FROM audit_entries WHERE id = :id"), {"id": last})
         again = insert_audit_row(conn, case_id=seeded["case_id"], actor_id=seeded["user_id"])
@@ -409,19 +412,22 @@ def test_ddl_on_another_table_is_not_blocked(seeded):
         conn.execute(DDL("DROP TABLE scratch_table"))
 
 
-def test_raw_sql_is_not_blocked_which_is_the_exemption_the_record_names(seeded):
-    # exec_driver_sql and text() are raw SQL, which the decision record leaves outside the guard.
-    # If a later change blocks them, this test fails so the record and the module docstring can be
-    # revisited together with the code.
+def test_raw_sql_update_passes_the_guard_but_the_database_trigger_refuses_it(seeded):
+    # Option B: exec_driver_sql and text() are raw SQL, which the application guard does not
+    # inspect, so the refusal here comes from the database trigger (an IntegrityError carrying the
+    # fixed trigger message), not from AuditImmutableError. The full list of routes is in
+    # tests/test_data_audit_triggers.py.
     engine = seeded["engine"]
-    with engine.begin() as conn:
-        conn.exec_driver_sql("UPDATE audit_entries SET detail = 'raw'")
-    with engine.connect() as conn:
-        assert conn.execute(select(AuditEntry.detail)).scalars().all() == ["raw"]
-    with engine.begin() as conn:
-        conn.execute(text("UPDATE audit_entries SET detail = 'text'"))
-    with engine.connect() as conn:
-        assert conn.execute(select(AuditEntry.detail)).scalars().all() == ["text"]
+    for run in (
+        lambda conn: conn.exec_driver_sql("UPDATE audit_entries SET detail = 'raw'"),
+        lambda conn: conn.execute(text("UPDATE audit_entries SET detail = 'text'")),
+    ):
+        with engine.connect() as conn:
+            with pytest.raises(IntegrityError, match="Audit entries cannot be changed."):
+                run(conn)
+            conn.rollback()
+        with engine.connect() as conn:
+            assert conn.execute(select(AuditEntry.detail)).scalars().all() == ["original"]
 
 
 # --- only audit.py constructs an AuditEntry ----------------------------------------------------
