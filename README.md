@@ -71,6 +71,11 @@ make verify    # run tests, whitespace and weakened-test checks
 
 The web application is not built yet, so there is no `make run` target.
 
+Sign-in needs four environment variables, set once (names only here; never commit values):
+
+- `SOCBOARD_TOKEN_SECRET`: the token signing secret, at least 32 characters. The backend refuses to start without it.
+- `SOCBOARD_SEED_PASSWORD_ANALYST_A`, `SOCBOARD_SEED_PASSWORD_ANALYST_B` and `SOCBOARD_SEED_PASSWORD_LEAD`: the passwords `make seed` gives the users `analyst-a`, `analyst-b` and `lead`, at least 12 characters each. Seeding fails, and adds nothing, if one is missing or short.
+
 ## Currently Out of Scope
 
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
