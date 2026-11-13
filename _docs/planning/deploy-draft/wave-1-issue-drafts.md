@@ -25,6 +25,8 @@ One approved decision record in `_docs/decisions/` states the nine decisions bel
 - [ ] It records the limit decision (proposal question 2): login and ingest limits are counted in the process, reset on restart, and are not shared between replicas; the record names the defaults' owner (the D8 and D9 issues) and states this as a known limit.
 - [ ] It records the region (human, 2026-11-13): the deployment runs in `us-east-1`. It is the human's own AWS account, whose home region is `ap-southeast-2`; the human has used `us-east-1` before. It says which resources follow the region: every regional resource (server, volume, snapshots, Secrets Manager secret, the Terraform state bucket unless the human picks otherwise) is in `us-east-1`; IAM, the GitHub OIDC provider and roles are global; budget notifications are account-wide. It tells the Terraform and the operator to name `us-east-1` explicitly, never rely on a default region setting.
 - [ ] It lists the accepted risks (single server, no high availability, Postgres on the same host, a public URL on a shared wildcard-DNS name, and that reviewers in Australia reach a US-east server, which adds latency but not a correctness risk against the 5 second target; the smoke check measures it).
+- [ ] It records the amendment to the 2026-11-12 decision on the CI-applied "server part" (human, 2026-11-13): the instance role and profile, any role the snapshot schedule needs (`VERIFY:`), and the budgets are applied only by the human, together with the CI-access part. The CI apply role may only attach that one role to the instance and has a deny on other IAM writes (exact permission unverified until the first apply). The cost is stated: any later change to the instance's permissions is a manual apply.
+- [ ] It pins one Postgres major version, used in the dev container, the CI service and the Compose stack.
 - [ ] It states what Terraform state, GitHub secrets and the image must never hold (no long-lived cloud key, no seeded password, no ingest key, no token secret, no database password in state outputs), matching spec §5.
 - [ ] `_docs/index.md` lists the record.
 - [ ] `make verify` passes.
@@ -162,7 +164,7 @@ None.
 
 ## D5
 
-Title: Run the backend and migrations on Postgres, chosen by the database URL
+Title: Run the backend and migrations on Postgres, chosen by the database URL (driver, schema, CI job)
 
 ## Why
 
@@ -170,7 +172,7 @@ The spec says the database is chosen by environment variable: SQLite locally, Po
 
 ## Goal
 
-With `SOCBOARD_DATABASE_URL` set to a Postgres URL, `make migrate` and `make seed` succeed, the backend serves every route, and CI runs the backend tests against a Postgres service; SQLite stays the default and its behaviour is unchanged.
+With `SOCBOARD_DATABASE_URL` set to a Postgres URL, `make migrate` and `make seed` succeed, the backend starts and answers health and login, and CI runs those steps against a Postgres service; SQLite stays the default and its behaviour is unchanged. Making the whole test suite run on Postgres is D5b, a separate issue.
 
 ## Acceptance criteria
 - [ ] The Postgres driver is added with `uv add` after the human's approval (the dependency is the first step; `pyproject.toml` and `uv.lock` are committed).
@@ -178,30 +180,30 @@ With `SOCBOARD_DATABASE_URL` set to a Postgres URL, `make migrate` and `make see
 - [ ] `make migrate` twice changes nothing on Postgres; `make seed` inserts only missing rows and a second run changes nothing.
 - [ ] Time values keep their meaning: a stored timestamp reads back as an aware UTC datetime on Postgres as on SQLite (`socboard/db_types.py` is checked, with a round-trip test on both).
 - [ ] Ordering is the same: the queue and closed list order rows alike on both databases (the code comments say NULLs are ordered explicitly; a test with a NULL-bearing case shows it on Postgres).
-- [ ] The test fixtures choose the database from the URL: a Postgres run gets an isolated database or schema per test, or a documented cheaper isolation, without copying a file. The default run (no Postgres URL) is unchanged and still does not need Postgres.
-- [ ] CI starts a Postgres service container and runs the backend tests against it as a second job alongside `make verify`. Tests that are SQLite-only by nature (the trigger and `sqlite_sequence` tests, owned by D6) are marked as such with a visible reason, not skipped silently: the issue comment lists each by name and `make verify` reports no new unexplained skips.
-- [ ] The NUL-in-text check noted in `socboard/schemas.py` is covered: a note or alert text containing NUL returns 422 on both databases, not 500 (a test on Postgres).
-- [ ] `make verify` passes; no test is weakened or deleted. The Engineer cannot run Postgres in the sandbox, so CI's result on the pull request is the evidence (run id and log lines in the comment).
+- [ ] The default run (no Postgres URL) is unchanged and still passes without Postgres: the push check has no database service.
+- [ ] CI starts a Postgres service container (the major version pinned in D1) as a second job alongside `make verify` and runs `make migrate`, `make seed`, and a start, health and login smoke against it. CI's result is the evidence of record; if the dev-container database (D0) exists, the Engineer uses it for iteration.
+- [ ] `make verify` passes; no test is weakened or deleted. The pull request's CI run (id and log lines in the comment) is the evidence.
 
 ## Out of scope
 - The Postgres append-only rule for the audit trail, and review of `socboard/audit_guard.py` (D6).
 - The concurrency test for claims (D7).
+- The fixtures across the test files, the SQLite-only test markers and the NUL-in-text check on Postgres (D5b).
 - Mapping a lock timeout to a retryable response (#112).
 - Docker, Compose and Terraform.
 
 ## Design
 
-How Postgres test isolation works is the Engineer's proposal, posted before implementing (per-test schema, per-test database from a template, or transaction rollback). The proposal says which keeps `make test` fast and which survives the code's explicit commits.
+None here. How Postgres test isolation works is D5b's design question.
 
 ## Constraints
 - Files: `pyproject.toml` and `uv.lock` (protected: the human approves the exact diff and commits with `HUMAN_APPROVED=1`), `socboard/migrations/versions/0001_initial_schema.py` (only guards, no change to its SQLite output), `socboard/migrate.py`, `socboard/database.py`, `socboard/db_types.py` if needed, `tests/conftest.py`, `tests/data_support.py`, the migration and engine tests, `.github/workflows/verify.yml` (protected: the human approves the diff), and `README.md`.
 - An existing migration is edited here only to branch on the dialect; its SQLite behaviour must not change. If an edit to `0001` is judged unsafe, add migration `0002` instead and say why in the comment.
-- Ask before installing anything large. The Postgres service runs in CI only.
-- Depends on: #104 (it touches `seed.py` and the missing-database behaviour), D1 (approved record), #100 (the CI job should run the pinned Python).
+- Ask before installing anything large.
+- Depends on: #104 (it touches `seed.py` and the missing-database behaviour), D1 (approved record, which pins the Postgres version), #100 (the CI job should run the pinned Python), and D0, the dev-container sitting (done between issues).
 - Proposed tier: heavy (it changes the data layer and the migration that every database starts from). Expected paths: as listed above.
 
 ---
 
-## What these five leave for later
+## What these five leave for later (D5 above is D5a)
 
-D6 (Postgres append-only) starts when D5 is merged and D1 is approved. D8 and D9 start after D3. D10 starts after D2, D3 and D4. The full list and the order are in `_docs/planning/deploy-backlog-proposal.md`.
+D5b (Postgres test fixtures) follows D5a. D6a (Postgres append-only triggers and tests) starts when D5a and D5b are merged and D1 is approved; D6b (guard review) waits for #107. D8 and D9 start after D3. D10 starts after D2, D3 and D4. The full list and the order are in `_docs/planning/deploy-backlog-proposal.md`.

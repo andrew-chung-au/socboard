@@ -1,6 +1,6 @@
 # Deploy phase: backlog proposal (draft, for the human's approval)
 
-**Human ruling, 2026-11-13:** the recommendations in section 6 (questions 1 to 5) are approved: trigger functions for the Postgres audit rule, in-process login and ingest limits, frontend settings as build arguments, lanes A and C may run in parallel, D2 is Heavy. Region: the deployment runs in `us-east-1`; it is the human's own AWS account (home region `ap-southeast-2`) and the human has used `us-east-1` before, so no organisation policy is expected to block it. Wave 1 is filed from this list: D1 is #139, D2 is #140, D3 is #141, D4 is #142, D5 is #143 (no label added; the human approves each after grooming); D6 onward is written in full after wave 1 is under way. Spec notes A and B (section 7) are read as approved; `_docs/specs.md` is protected, so the exact diff is for the human to commit.
+**Human ruling, 2026-11-13:** the recommendations in section 6 (questions 1 to 5) are approved: trigger functions for the Postgres audit rule, in-process login and ingest limits, frontend settings as build arguments, lanes A and C may run in parallel, D2 is Heavy. Region: the deployment runs in `us-east-1`; it is the human's own AWS account (home region `ap-southeast-2`) and the human has used `us-east-1` before, so no organisation policy is expected to block it. Wave 1 is filed from this list: D1 is #139, D2 is #140, D3 is #141, D4 is #142, D5 is #143 (no label added; the human approves each after grooming); D6 onward is written in full after wave 1 is under way. Questions 6 to 8 are approved with conditions (section 6). Spec notes A and B (section 7) are read as approved; `_docs/specs.md` is protected, so the exact diff is for the human to commit.
 
 PM-style proposal. **No issue is filed and no roadmap, spec or decision file is changed by this document.** It reviews `roadmap-3-deploy.md` against `main` at `5d0ffa6` (Core #7 to #21 closed; #22 re-groomed but its new body not yet confirmed), proposes changes to that roadmap, drafts the issues, and states what #22 means for them. Issue bodies are written in full only after the human approves the list and answers the questions in section 6. Numbers are `D1` to `D23` until the tracker gives them real ones.
 
@@ -70,16 +70,20 @@ Related, not blocking: #104 (before #22, by the human's order) touches `make see
 ## 4. Order and lanes
 
 ```
-Lane A (app):       D2  D3  D4 -> D5a -> D5b -> D6 -> D7 -> D10 -> D11 -> D12 -> D13 -> D14
-Lane B (hardening):          D8, D9, #144 (after D3; touch auth.py and ingest.py)
-Lane C (infra):     D1 -> D15 -> D16, D17a, D17b, D17c (parallel) -> D18a -> D19 (human) -> D18b
-Join:      D6..D9 + #144 + D14 + D19 + D21 -> D20 -> D22a -> D22b -> D23, D24
+Human sitting:       D0 (dev-container Postgres) between issues, after D4, before D5a
+Lane A (app):        D2  D3  D4 -> D0 -> D5a -> D5b -> D6a -> D7 -> D10 -> D11 -> D12 -> D13 -> D14
+Guard review:        #107 -> D6b (before D20; run against the current guard if #107 is not approved when D6a merges)
+Lane B (hardening):  D8, D9, #144 (after D3; touch auth.py and ingest.py)
+Lane C (infra):      D1 -> D15 -> D18a (format and validate, as soon as D15 exists)
+                     D1 -> D15 -> D17a -> D17b -> D17c (also needs D11)    D16 (after D15)
+                     D16 + D17a + D17b + D17c -> D19 (human) -> D18b
+Join:       D6a, D6b, D7, D8, D9, #144, D14, D17c, D19, D21 -> D20 -> D22a -> D22b -> D23 (also D24)
 ```
 
 - Lane C touches `terraform/` only, apart from three shared files: the `AGENTS.md` Layout line (D15), and the workflows (D18a, D18b, D22a, D22b). Give each lane its own workflow file so they do not collide. Start D1 first because AWS account and budget setup depend on the human, and that has the longest wait.
 - `delivery-pace.md` says never two Engineer launches on Core issues at once. Lanes A and C use disjoint files; the human decides whether to relax the rule for Deploy (question 4).
-- Do D5 before D6 and D7. D5 and D8 and D9 do not overlap in files, except `socboard/auth.py` between D3, D8 and #104; serialize those.
-- Human needed: D1 (approve), D4 and D10 to D11 (protected files; one local Docker check), D15 to D17c (apply), D19, D20 (first run), D22a and D22b (variables, environment approval), D23 (teardown). Also, on every Postgres iteration (D5a to D7), the human's fetch, review and push, unless the Compose dev-container variant is set up (question 7).
+- Do D5a and D5b before D6a and D7. D5 and D8 and D9 do not overlap in files, except `socboard/auth.py` between D3, D8 and #104; serialize those.
+- Human needed: D0 (the dev-container sitting), D1 (approve), D4 and D10 to D11 (protected files; one local Docker check), D15 to D17c (apply), D19, D20 (first run), D22a and D22b (variables, environment approval), D23 (teardown). Each issue still ends with the human's push; the dev-container database (D0) only speeds iteration within it.
 
 ## 5. Issue drafts
 
@@ -92,6 +96,7 @@ Tier is proposed, not final. Model: **S** stronger, **M** middle, **W** weaker (
 **D1 Record the deploy decision (Heavy, docs; roadmap 1).** Who: PM drafts, human approves. Model S.
 - A record in `_docs/decisions/` holds the seven decisions of 2026-11-12 with reasons, the region (deployment `us-east-1`; the human's own account, home region `ap-southeast-2`), and the accepted risks, plus the two decisions of section 6 (Postgres audit approach, rate-limit design). Status line `approved` only after the human says so; `make decisions` lists it.
 - It states what Terraform state and Secrets Manager hold and what they must never hold.
+- It records the amendment to the 2026-11-12 decision on the CI-applied "server part" (question 6) and pins one Postgres major version for the dev container, the CI service and the Compose stack (question 7).
 
 **D2 Serve the built frontend from FastAPI (Heavy: a new interface; roadmap 2).** Model M.
 - Depends on: nothing open (#21 closed). `make frontend-build` output is the source.
@@ -111,21 +116,32 @@ Tier is proposed, not final. Model: **S** stronger, **M** middle, **W** weaker (
 - The opt-in is a command-line flag of `python -m socboard.server`, passed only by the image's start command; no environment variable can enable it. `make backend-run` and its probe (`scripts/backend_probe.py` reads the inherited environment) therefore stay loopback-only with no Makefile change. A test shows `SOCBOARD_HOST=0.0.0.0` without the flag exits 2 even with every `SOCBOARD_*` variable set.
 - The refusal message and the `AGENTS.md` gotcha are updated to say who may opt in.
 
-**D5a Run on Postgres: driver and portable schema (Heavy: data model; roadmap 4, first part).** Model S. **D5b Postgres test fixtures and CI job (Standard; split from D5 by the outside review).** Model M. D5a is the driver, the dialect guards in migration `0001`, `make migrate` and `make seed` on Postgres; D5b is the fixtures across the test files (about 42, copied from one migrated SQLite file today) and the CI service job. D5b depends on D5a.
+**D0 Dev-container Postgres service (a human sitting, not an Engineer issue; new).** Do it between issues, after D4 and before D5a, never during one.
+- The human copies the recipe from `_docs/agent-kit/environments/local-sandbox/compose/` into `.devcontainer/` from a clean clone, as `environments.md` says; the agent does not. `.devcontainer/*` is protected, so the human approves the exact diff.
+- One Postgres major version, chosen in D1, is used in the dev container, the CI service and the Compose stack (D11).
+- The database password in the dev container is a throwaway and is never reused in the deployment.
+- CI stays the evidence of record; the sandbox database is for iteration speed. The push check has no `db`, so the default test run must still pass without Postgres.
+- It does not give the sandbox Docker, so D10 to D13 still need the human or CI.
+
+**D5a Run on Postgres: driver and portable schema (Heavy: data model; roadmap 4, first part).** Model S. Depends on: D0, D1, #104, #100. **D5b Postgres test fixtures and CI job (Standard; split from D5 by the outside review).** Model M. D5a is the driver, the dialect guards in migration `0001`, `make migrate` and `make seed` on Postgres, and a CI Postgres service job that runs migrate, seed and a health and login smoke; D5b is the fixtures across the test files (about 42, copied from one migrated SQLite file today) with the SQLite-only tests marked. D5b depends on D5a.
 - A dependency approval for the driver comes first (`uv add`, lockfile committed).
 - `SOCBOARD_DATABASE_URL` chooses the database; SQLite stays the local default; `make migrate` and `make seed` work on both.
 - Migration `0001` runs on Postgres with the same tables, constraints and ids (`audit_entries` ids keep ascending, with no gaps promised).
-- CI runs the backend tests against a Postgres service container; the test fixtures take the database from the URL (D5b). The planning sandbox cannot run Postgres, so evidence is CI's Postgres job, or the kit's Compose dev-container variant with a `db` service if the human sets it up (question 7); otherwise each iteration needs the human's fetch, review and push.
+- CI runs a Postgres service container (D5a: migrate, seed, smoke; D5b: the backend tests, with fixtures taking the database from the URL). Evidence of record is CI; the dev-container `db` (D0) is for iteration speed.
 - Known failing SQLite-only tests (trigger tests) are named and handled by D6, not skipped silently: `make verify` reports no new skips.
 
-**D6 Append-only audit trail on Postgres (Heavy: security boundary; roadmap 4, second part).** Model S. Depends on: D5, D1 (approved record).
+**D6a Append-only audit trail on Postgres: triggers and tests (Heavy: security boundary; roadmap 4, second part).** Model S. Depends on: D5a, D5b, D1 (approved record). Does not wait for #107.
 - On Postgres an UPDATE, DELETE or overwrite of an `audit_entries` row is refused by the database (one test per case, mirroring `tests/test_data_audit_triggers.py`), and `append_audit` still works.
-- `socboard/audit_guard.py` is reviewed for SQLite-only parts; each stays, is made dialect-aware, or is recorded as an open limit. The data-model record states the Postgres limits (for example what a superuser can still do).
-- Postgres `TRUNCATE` does not fire row triggers, so a `BEFORE TRUNCATE` statement trigger refuses it (a test). The official Postgres image's default user is a superuser who can disable triggers, so D11 creates a non-superuser application role and the app connects as it; the record states what the owner and superusers can still do.
-- Order: the DB-level triggers do not depend on #107. The review of `socboard/audit_guard.py` (open issue #107 rewrites it) waits for #107 (question 8).
+- Postgres `TRUNCATE` does not fire row triggers, so a `BEFORE TRUNCATE` statement trigger refuses it (a test).
+- The current `socboard/audit_guard.py` lets a normal audit insert through on Postgres (a test). The guard refuses a statement it cannot compile, and that path has never run on Postgres, so this is shown, not assumed.
+- The official Postgres image's default user is a superuser who can disable triggers, so D11 creates a non-superuser application role and the app connects as it; the record states what the owner and superusers can still do.
 - The SQLite behaviour and its tests are unchanged.
 
-**D7 Prove single ownership on Postgres (Standard; roadmap 5).** Model M. Depends on: D5.
+**D6b Audit guard review for Postgres (Heavy; split from D6).** Model S. Depends on: D6a, #107 (see below). Before D20.
+- `socboard/audit_guard.py` is reviewed for SQLite-only parts (`sqlite_sequence`, the pragma words, the SQLite dialect compile); each stays, is made dialect-aware, or is recorded as an open limit, and the data-model record states the Postgres limits. The guard is the only layer that refuses DDL on the table, so this is not optional.
+- Order: #107 (simplify the audit guard) comes first, because it rewrites the code this issue reviews. #107 gains a constraint: it introduces no new SQLite-only assumptions, or D6b redoes the work. If #107 is not approved by the time D6a merges, D6b runs against the current guard and #107 follows.
+
+**D7 Prove single ownership on Postgres (Standard; roadmap 5).** Model M. Depends on: D5a, D5b.
 - Two simultaneous claims of one case leave exactly one owner and one `claimed` audit entry on Postgres (a test using real concurrent connections, repeated enough to catch a race).
 - The loser gets the contract's 409; nothing about the winner's state changes.
 
@@ -145,10 +161,10 @@ Tier is proposed, not final. Model: **S** stronger, **M** middle, **W** weaker (
 - No secret, env file or demo credential is in the image or the bundle (a check lists the image's files, as `frontend-build` does for the bundle).
 - The start command runs one worker (the in-process limits of D8 and D9 assume it) and passes D4's flag. `VITE_API_BASE_URL` stays unset in the build, so the client uses `/api`.
 
-**D11 Compose stack (Standard; roadmap 8).** Model M. Depends on: D5, D10, #22. Protected: `Makefile`.
-- `make compose-up` and `make compose-down` start and stop the app and Postgres; Postgres has a health check; its data directory is a configurable host path (so D17b can mount the encrypted volume there) and defaults to a named volume locally; a one-shot step migrates and seeds before the app starts; the app waits for it. It creates a non-superuser application role (D6).
+**D11 Compose stack (Standard; roadmap 8).** Model M. Depends on: D5a, D6a, D10, #22. Protected: `Makefile`. Owns the Compose file in the repository.
+- `make compose-up` and `make compose-down` start and stop the app and Postgres; Postgres has a health check; its data directory is a configurable host path (so D17c can mount the encrypted volume there) and defaults to a named volume locally; a one-shot step migrates and seeds before the app starts; the app waits for it. It creates a non-superuser application role (D6).
 - Required variables come from the single list (D3). On a fresh clone the first `make compose-up` generates random local secrets into a git-ignored file (values never printed), so the single command works; in deployed mode a missing one fails naming it.
-- The app port is published on the host's loopback only.
+- The app port is published on the host's loopback only. The stack includes a reverse proxy in front of the app (plain HTTP, local configuration only; the deployed Caddy configuration is D17c's), so D12 can test the forwarded-address rule of D8 with a proxy in the path. Postgres major version is the one D1 pins.
 
 **D12 Integration tests against the Compose stack (Standard; roadmap 9).** Model M. Depends on: D11, #22.
 - #22's journeys run against `SOCBOARD_BASE_URL` unchanged: ingest to queue, login, claim, move, note, close, audit read, and the refusals.
@@ -175,26 +191,32 @@ All use `VERIFY:` markers for unverified AWS details; CI runs `fmt` and `validat
 **D16 Terraform: CI access (Heavy: IAM; roadmap 13).** Model S. Depends on: D1, D15.
 - OIDC provider and three roles (plan read-only, apply, deploy), each trusted for this repository and a named GitHub Environment; no stored keys. A job that names an Environment gets an OIDC subject with the Environment name, not the branch, so any branch's workflow could assume the role unless the Environment restricts deployment branches (D19): a test or manual check shows a non-`main` branch cannot assume either role. Whether the trust policy can also check the numeric repository ids is `VERIFY:` (it may need the subject claim customised). The deploy role may only run one custom Systems Manager document with a fixed script and one validated parameter (the image digest), and read that command's result; a generic shell document would make the role root on the server. The plan role is denied the secret's value. The human applies it; CI cannot change its own roles.
 
-**D17a Terraform: instance and volume; D17b: bootstrap and Caddy; D17c: budgets (all Heavy together as a set; split from D17 by the outside review; roadmap 14).** Model M. Depends on: D1, D15.
-- D17a: one instance with no key pair, an Elastic IP, a security group for 80 and 443 only, an encrypted data volume with daily snapshots that holds the Postgres data and the env file, the metadata service set to require tokens with a hop limit of 1 (so a container cannot read the instance's credentials), and the `project=socboard` tag on every resource.
-- D17b: a bootstrap that installs Docker, Compose and Caddy; the Caddy configuration with certificate storage on the data volume; the server's Compose file delivered at the deployed commit; containers restart after a reboot; log rotation; old images pruned.
-- D17c: budget notifications at three thresholds.
-- The instance role and its profile (Systems Manager plus read of the one named secret) are in the human-applied part, not the CI-applied one: an apply role that can write IAM could widen its own permissions (spec §5; question 6). The apply role gets pass-role on that one role and a deny on other IAM writes.
+**D17a Terraform: instance IAM and budgets, human-applied (Heavy: IAM; roadmap 14, first part).** Model S. Depends on: D1, D15.
+- Every IAM resource of the server lives here with the CI-access part, applied only by the human: the instance role and profile (Systems Manager plus read of the one named secret), and, if the daily snapshot schedule needs its own role, that role (`VERIFY:`). Budget notifications at three thresholds are also here (account-level, human-applied).
+- Recorded in D1 as an amendment to the 2026-11-12 decision. Cost: any later change to the instance's permissions is a manual apply by the human.
 
-**D18a CI: Terraform format and validate (Standard; roadmap 15, first part).** Model M. Depends on: D15 to D17c. Protected: workflow (its own file).
+**D17b Terraform: instance, network, volume and snapshots, CI-applied server part (Standard; second part).** Model M. Depends on: D17a.
+- One instance with no key pair, an Elastic IP, a security group for 80 and 443 only, an encrypted data volume holding the Postgres data and the env file, the daily snapshot schedule, the `project=socboard` tag on every resource, and the metadata service set to require tokens with a hop limit of 1 (so a container cannot read the instance's credentials).
+- The apply role may attach the one instance role (and the snapshot role, if any) to the instance and has an explicit deny on other IAM writes (`VERIFY:` the exact permission and its conditions until the first apply).
+
+**D17c Terraform: bootstrap and Caddy (Standard; third part).** Model M. Depends on: D17b, D11 (the Postgres data-directory setting).
+- A bootstrap that installs Docker, Compose and Caddy and mounts the encrypted volume at the data directory the Compose stack uses; the deployed Caddy configuration with certificate storage on the data volume; containers restart after a reboot; log rotation; old images pruned.
+- It does not deliver the Compose file: D20 owns delivering the file at the deployed commit.
+
+**D18a CI: Terraform format and validate (Standard; roadmap 15, first part).** Model M. Depends on: D15 only, so every later Terraform issue gets format and validate feedback from CI as it is written. Protected: workflow (its own file).
 - Pull requests that touch `terraform/` run `fmt -check`, `init -backend=false` and `validate` without credentials. The Terraform version is pinned.
 
-**D18b CI: read-only plan on pull requests (Standard; second part).** Model M. Depends on: D19 (the plan role exists only after the first apply).
+**D18b CI: read-only plan on pull requests (Standard; second part).** Model M. Depends on: D19 (the plan role exists only after the first apply), D16.
 - A read-only `plan` is shown on the pull request; forks get no role; state locking and what the plan role may read are `VERIFY:`.
 
-**D19 First apply, by the human (checklist; roadmap 16).** Who: human; Eng drafts the checklist.
+**D19 First apply, by the human (checklist; roadmap 16).** Who: human; Eng drafts the checklist. Depends on: D16, D17a to D17c.
 - Before any apply: check that the provider and the state backend both name `us-east-1` (the account's home region is `ap-southeast-2`, so a default region setting in the AWS CLI or console can point elsewhere). Then account and budget notifications, GitHub Environments (`infra` needs a named reviewer and administrators not exempt; both `infra` and `deploy` allow deployment only from `main`), the three applies in order, the secret created, the container registry package confirmed public (`VERIFY:`: new packages may default to private), the IP and hostname noted, and a second `plan` shows no changes.
 
 ### Join
 
-**D20 Deploy script and first deploy (Heavy: a root script that holds every secret; roadmap 17).** Model S. Depends on: D6 to D9, #144, D10, D11, D14, D17b, D19, D21, #22.
+**D20 Deploy script and first deploy (Heavy: a root script that holds every secret; roadmap 17).** Model S. Depends on: D6a, D6b, D7, D8, D9, #144, D10, D11, D14, D17c, D19, D21, #22.
 - The fixed script behind the Systems Manager document (D16) pulls the image by digest, reads the secret with the instance role, writes the env file with restrictive permissions, migrates before stopping the old container, runs Compose and reloads Caddy. If the image cannot be fetched, or the new one starts and exits, or the migration fails, the current release keeps serving. The human runs it once and the HTTPS URL loads.
-- The Compose file is the one at the deployed commit, fetched with the script. A certificate failure on the shared DNS name has a fallback in the runbook (D23).
+- It owns delivering the Compose file: the file at the deployed commit is fetched with the script (D17c does not deliver it). A certificate failure on the shared DNS name has a fallback in the runbook (D23).
 
 **D21 Post-deploy smoke check (Standard; roadmap 18).** Model W-M. Depends on: D3.
 - `make smoke URL=<url>` checks `/api/health`, a login, one ingest, and that the alert is in the queue within 5 seconds; it exits non-zero with a message naming the failed step. It reads credentials from the environment only. In CD the authenticated steps run on the server inside the deploy command, and CI checks that result and the public `/api/health`, so no seeded password or ingest key is stored as a GitHub secret. Done before D20.
@@ -205,7 +227,7 @@ All use `VERIFY:` markers for unverified AWS details; CI runs `fmt` and `validat
 **D22b Terraform apply from CI (Heavy; second part).** Model S. Depends on: D18b, D22a.
 - Apply covers only the server part, only on `main`, applies the reviewed plan file, and runs after the named reviewer approves in the `infra` Environment.
 
-**D23 Deploy and teardown runbook (Standard, docs; roadmap 20).** Model W-M. Depends on: D19, D22.
+**D23 Deploy and teardown runbook (Standard, docs; roadmap 20).** Model W-M. Depends on: D19, D22a, D22b, D24.
 - How to deploy, where the URL is, how reviewers get credentials (not in the README), how to restore Postgres from a snapshot (rehearsed once, result recorded), how to rotate each secret (seeding never changes an existing user and the Postgres password is set only at first start, so each needs its own steps), the certificate-failure fallback, and the ordered deletion of every cloud resource (server, then CI access, then snapshots and secrets, state bucket last).
 - Because idle teardown can leave no URL at grading, it records the URL, a passing CI run and a short demo recording.
 
@@ -220,10 +242,10 @@ All use `VERIFY:` markers for unverified AWS details; CI runs `fmt` and `validat
 4. **May lanes A and C run in parallel,** relaxing the "never two Engineer launches on Core issues at once" rule for Deploy? Recommendation: yes; their files are disjoint (`socboard/`, `tests/` and `Dockerfile` versus `terraform/`).
 5. **Where does D2 sit on the tier scale?** #22's PM treated "the backend serves the build" as a new interface, which would make it Heavy. Recommendation: Heavy, as above.
 
-6. **Outside review, round 1: three decisions it raised.**
-   - Question 6. Move the instance role and profile out of the CI-applied server part (apply role then cannot write IAM beyond passing that one role)? This changes the 2026-11-12 decision "apply from CI only for the server part". Recommendation: yes.
-   - Question 7. Set up the kit's Compose dev-container variant (an app container plus a `db` Postgres service) so Postgres iterations do not need your fetch and push each time? It is a protected-file change under `.devcontainer/` and needs you to rebuild the container. Recommendation: yes, before D5a; if not, say so, and D5a and D5b are paced by your pushes.
-   - Question 8. Do #107 (simplify the audit guard) before D6's guard review, moving it from deferred to a Deploy prerequisite? The DB-level triggers do not depend on it. Recommendation: yes, but only the guard-review half of D6 waits.
+6. **Outside review, round 1: three decisions it raised. All approved by the human on 2026-11-13, with conditions.**
+   - **Question 6, instance role: yes.** A CI apply role that can write IAM for the instance role can widen its own reach, which breaks spec §5. The change narrows the "server part" but keeps the purpose of the 2026-11-12 decision, so D1 records it as an amendment. Condition: every other IAM resource of the server part moves with it (the daily snapshot schedule may need its own role, `VERIFY:`). The apply role keeps only the right to attach that one role to the instance, plus a deny on other IAM writes (exact permission unverified until the first apply). Cost: any later change to the instance's permissions is a manual apply by the human. See D17a and D17b.
+   - **Question 7, dev-container Postgres: yes, before D5a.** Condition: done between issues, not during one (D0). CI stays the evidence of record; the default test run must still pass without Postgres because the push check has no `db`. One Postgres major version is pinned across the dev container, the CI service and the Compose stack. The human copies the recipe from a clean clone; its password is a throwaway never reused in the deployment. It does not give the sandbox Docker, so D10 to D13 still need the human or CI.
+   - **Question 8, #107 first: yes, and D6 is split.** D6a (triggers and tests on Postgres, and a test that the current guard lets a normal audit insert through) starts after D5a and D5b and does not wait for #107. D6b (guard review) waits for #107, which gets a constraint: no new SQLite-only assumptions. #107 had no approved label when the issues were listed; if it is not approved by the time D6a merges, D6b runs against the current guard and #107 follows. D6a and D6b both come before D20, because the guard is the only layer that refuses DDL on the table.
 
 ## 7. Spec notes to propose (the human decides; `_docs/specs.md` is protected)
 
@@ -252,11 +274,11 @@ An independent reviewer read this branch at `86e8240` (verdict: ready after chan
 | D20 does not depend on D6 to D9 or #144 | Accepted: D20 dependencies now list them. #144 (a login password with trailing NUL bytes is accepted) is open and unapproved, and is added to lane B. |
 | No item pushes the image to a registry | Accepted: D14 pushes the tested image on `main`; D20 pulls by digest; D19 confirms the package is public (`VERIFY:`). |
 | OIDC subject carries the Environment name, not the branch | Accepted: D19 limits both Environments to `main`; D16 adds a check that a non-`main` branch cannot assume either role. |
-| Instance role in the CI-applied part lets the apply role widen permissions | Accepted in the plan (D17a to D17c); it changes a 2026-11-12 decision, so it is question 6. |
+| Instance role in the CI-applied part lets the apply role widen permissions | Accepted (D17a, D17b); it amends a 2026-11-12 decision, approved as question 6. |
 | D4's env opt-in cannot be refused under `make backend-run` | Confirmed (`Makefile` recipe and `scripts/backend_probe.py` read the inherited environment). D4 now uses a command-line flag; no Makefile change. |
 | Smoke check needs secrets CI should not hold | Accepted: authenticated steps run on the server inside the deploy command (D21). |
 | "The one Systems Manager command" names no mechanism | Accepted: a custom document with a fixed script and one validated parameter (D16). |
-| Unowned deployed pieces (Caddy config, Compose file delivery, Postgres volume mapping, reboot, log rotation, pruning) | Accepted: assigned to D11, D17b and D20. |
+| Unowned deployed pieces (Caddy config, Compose file delivery, Postgres volume mapping, reboot, log rotation, pruning) | Accepted: assigned to D11, D17c and D20 (the Compose file is owned by D11 and delivered by D20; Caddy and the host setup by D17c). |
 | D8 per-username lockout lets anyone lock out the public seeded users | Confirmed (`socboard/seed.py` lists the three usernames). D8 revised. |
 | D6: `TRUNCATE` bypasses row triggers; superuser can disable triggers; #107 rewrites the guard | Accepted (D6, D11, question 8). |
 | D5 to D7 "CI is the only evidence" ignores the kit's Compose variant | Confirmed (`_docs/agent-kit/environments.md`). Question 7. |
@@ -265,10 +287,26 @@ An independent reviewer read this branch at `86e8240` (verdict: ready after chan
 | No rotation path | Accepted: D23 steps and new D24. |
 | D3 requires seed passwords the app never reads | Confirmed. D3 corrected. |
 | Fresh clone has no env file; teardown can leave no URL at grading | Accepted: D11 generates local secrets on first run; D23 records URL, CI run and demo. |
-| Sizing (D17, D22, D20, D5) | Accepted: D17a to c, D22a and b, D20 Heavy, D5a and b. Filed issue #143 is D5 as one issue; the human decides whether to edit it to D5a. |
-| Metadata service tokens and hop limit | Accepted (D17a). |
+| Sizing (D17, D22, D20, D5) | Accepted: D17a to c, D22a and b, D20 Heavy, D5a and b. Filed issue #143 is D5 as one issue; it needs editing to D5a (see round 2). |
+| Metadata service tokens and hop limit | Accepted (D17b). |
 | Pin actions by commit; missing asset returns 404; smoke before deploy | Accepted (D14, D2, D21). |
 | Missing: restore rehearsal, migrate before stopping old container, container that exits, certificate failure | Accepted (D20, D23). |
 | `socboard/migrate.py` "assumes SQLite" | Confirmed wrong: it already branches by dialect. Corrected in the wave 1 drafts. |
 
 Left as `VERIFY:` (not checkable here, as the reviewer said): whether the trust policy can use numeric repository ids; what a read-only plan policy may read; document-level limits on the send-command permission; state locking under a read-only role; the registry package's default visibility; which peer address the app sees behind Caddy. A first apply and one failed assume-role from a branch settle most of them.
+
+### Round 2: the reviewer's check of the revised plan (commit `9b73286`)
+
+The reviewer answered yes to questions 6 to 8 (conditions in section 6) and listed what the revision still got wrong. Dispositions:
+
+| Finding | Result |
+|---|---|
+| The filed issues #141, #142, #143 still carry the old criteria | Confirmed. The drafts (`wave-1-issue-drafts.md`) are corrected; the filed bodies still need editing before grooming (the human or a PATCH; the kit has no script that edits an issue). |
+| D6 half-waits and cannot pass QA | Fixed: D6a and D6b. |
+| No item adds the proxy to the Compose stack | Fixed: D11 includes it. |
+| Compose file delivery has two owners | Fixed: D11 owns the file, D20 delivers it, D17c does not. |
+| D17 split in name only; D17b not parallel; budgets not human-applied | Fixed: three issues with their own tier, model and dependencies; budgets in D17a, human-applied; D17c depends on D17b and D11. |
+| D18a waits too long | Fixed: depends on D15 only. |
+| Stale references to D5, D22 | Fixed: D5a and D5b, D22a and D22b; D23 depends on D24. |
+
+New: D0, the dev-container sitting (question 7), and the #107 constraint and fallback (question 8). The constraint on #107 is an edit to that issue, which the human or the PM makes.
