@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, StringConstraints
 
+from socboard.domain import AUDIT_ACTIONS
 from socboard.ids import to_public_id
 
 Role = Literal["analyst", "lead"]
@@ -180,3 +181,17 @@ class IngestRequest(BaseModel):
     timestamp: Annotated[datetime, BeforeValidator(_parse_timestamp)]
     title: Text200
     description: Text10000
+
+
+# Audit trail (#19)
+AuditAction = Literal[*AUDIT_ACTIONS]
+
+
+class AuditEntry(BaseModel):
+    """One audit entry. `actor` is the user, or the string "system" (an ingest has no user)."""
+
+    id: str
+    at: datetime
+    actor: User | Literal["system"]
+    action: AuditAction
+    detail: str

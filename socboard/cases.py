@@ -58,6 +58,7 @@ from socboard.schemas import (
     QueueResponse,
     TransitionRequest,
 )
+from socboard.schemas import AuditEntry as AuditEntryOut
 from socboard.schemas import Note as NoteOut
 from socboard.schemas import User
 from socboard.sessions import get_session
@@ -326,6 +327,40 @@ def create_cases_router(prefix: str) -> APIRouter:
             .order_by(closed_at.c.closed_at.is_(None), closed_at.c.closed_at.desc(), Case.id.desc())
         ).all()
         return [CaseSummary(**_summary_fields(*row)) for row in rows]
+
+    # Audit trail (#19)
+    # Read-only and Lead-only. `require_lead` is a route dependency, so 403 comes before 404 (an
+    # Analyst asking about an unknown id gets 403). There is no write route: PUT, PATCH, POST and
+    # DELETE to this path get the app's 405.
+    @router.get(
+        "/cases/{id}/audit",
+        response_model=list[AuditEntryOut],
+        dependencies=[Depends(require_lead)],
+        responses={403: {"model": ApiError}, 404: {"model": ApiError}, 422: {"model": ApiError}},
+        operation_id="getAudit",
+    )
+    def get_audit(
+        id: str, session: Annotated[Session, Depends(get_session)]
+    ) -> list[AuditEntryOut]:
+        case_id = from_public_id(id)
+        if case_id is None or session.scalar(select(Case.id).where(Case.id == case_id)) is None:
+            raise _not_found()
+        rows = session.execute(
+            select(AuditEntry, UserRow)
+            .outerjoin(UserRow, UserRow.id == AuditEntry.actor_id)
+            .where(AuditEntry.case_id == case_id)
+            .order_by(AuditEntry.at, AuditEntry.id)
+        ).all()
+        return [
+            AuditEntryOut(
+                id=to_public_id(entry.id),
+                at=entry.at,
+                actor="system" if actor is None else User.from_row(actor),
+                action=entry.action,
+                detail=entry.detail,
+            )
+            for entry, actor in rows
+        ]
 
     return router
 
