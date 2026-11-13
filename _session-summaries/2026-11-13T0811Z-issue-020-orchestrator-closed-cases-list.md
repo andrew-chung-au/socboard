@@ -13,6 +13,7 @@ Tier: Standard (from the PM proposal; no tier label). Claude Code worked it in t
 - **QA:** PASS at `0d5e2e5`, then at `590bf92`; `make assert-clean` passed after each.
 - **Round 3 (Reviewer findings, approved):** the real-route test closes case 3 before case 1, so it fails if the list stops using the closing entry; the `startswith("Investigating -> Closed (")` condition is deleted (the close time is the latest `status_changed` entry, which holds while no reopen feature exists); the unused `close()` parameter is dropped; the one-SELECT test counts all SELECTs and asserts exactly 2. Finding 5 (paging) skipped.
 - **Follow-up filed:** #120 (remove the dead test-only `GET /api/cases` route from `tests/backend_support.py`), placed in the supporting list before #22.
+- **Closure and this summary:** the Claude Code session reached its usage limit while writing the documentation. With the human's ruling, the Kiro Web orchestrator closed #20 on 2026-11-13 at 07:39Z without this summary, so that #21 could proceed, and filed #125 to track the summary. The human pushed `main` up to the roadmap commit (`eac622e`; CI and `make verify` passed there). When the session resumed, it had already written this summary (committed after that push), posted its own `Orchestrator: Close` comment on the already-closed issue, and `make issue-close` refused ("the issue is not open"). That Close comment is therefore a duplicate of Kiro's, with the same facts plus the QA PASS and Verify lines; nothing else was closed or changed. This file satisfies #125's purpose; whether to close #125 is the human's call.
 
 **What I learned:** a status check on a shared file is not enough for a parallel pair: the other session's note on #20 (and my own fetch) arrived while a QA launch ran. Do git fetch between launches, and read the other session's issue comment before the merge.
 
@@ -65,6 +66,7 @@ Tool: Claude Code. Figures copied from the completion notifications; a resumed l
 - Run #19 (Kiro) and #20 (Claude Code) in parallel, with the agreed shared names; build every criterion except the audit half first.
 - Reviewer findings: applied 1 to 4 (finding 2 by deleting the condition), skipped 5; file the dead-route follow-up as an issue before #22 (not folded into #114); close #54 in parallel.
 - Sequence: merge `origin/main` into `main` before closing, and add #20's deferred test then.
+- After the usage limit: close #20 from Kiro without the summary so #21 can proceed (the human's ruling, recorded in the Kiro `Orchestrator: Close (#20)` comment and in #125), and push `main` to `eac622e` before the summary was committed.
 
 ## Mismatches with the spec or design docs
 
@@ -81,11 +83,11 @@ none. (The Reflection proposals touch `_docs/agent-kit/` files; they are for the
 
 ## Temporary changes
 
-none. No processes started. The orchestrator runs `make clean-scratch` after this summary is committed and the issue is closed.
+none. No processes started. `make clean-scratch` ran at the end of the session (after the summary text was final, with no process running); it covers the `.scratch/` files of #20 and #54, including the QA and Engineer scripts.
 
 ## Interruptions
 
-none.
+The Claude Code session stopped at its usage limit after the roadmap commit and before this summary was committed. Left behind: a clean tree on `main` with #20's work and QA evidence committed, the Reflection comments already posted on #20 (the Engineer's and QA's), no running process, and no summary. It was checked on resume with `git status`, `git log` and the issue timeline: nothing was half-edited, and #20 had been closed by the Kiro Web orchestrator in the meantime.
 
 ## Unrelated problems noticed but not fixed
 
@@ -95,6 +97,7 @@ none.
 
 ## Follow-ups for the next session
 
+- #125 (the deferred #20 summary): this file is that summary, committed on `main` after the human's push; the human decides whether to close #125 (it has no label and was not worked).
 - #120 needs grooming (its mutation-check step must not leave a `socboard/` change; confirm independence from #114 and #110).
 - After #20: #75, then #31, if the human allows them.
 - #19's Reviewer and QA follow-ups are in its own summary (merged).
