@@ -3,6 +3,7 @@ import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/rea
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { clearCacheOnLogout } from "@/router";
 import { routeTree } from "@/routeTree.gen";
 import { api, config, session } from "@/services";
 import { httpService } from "@/services/httpService";
@@ -213,6 +214,28 @@ describe("queue polling", () => {
     const shown = screen.getAllByTitle(/literal|Order test/).map((el) => el.textContent);
     expect(shown).toEqual(["<b>literal</b> low", "Order test critical"]);
   }, TEST_TIMEOUT);
+});
+
+describe("the query cache does not outlive the session", () => {
+  // Log out and any 401 both end the session with session.set(null), so one call covers both.
+  it("ending the session empties the cache; signing in does not", () => {
+    const queryClient = new QueryClient();
+    const unsubscribe = clearCacheOnLogout(queryClient);
+    try {
+      signIn(LEE);
+      queryClient.setQueryData(["audit", ID], [{ id: "a1" }]);
+      queryClient.setQueryData(["closed"], [makeCase({ status: "Closed" })]);
+      signIn(BEN);
+      expect(queryClient.getQueryCache().getAll()).toHaveLength(2);
+
+      session.set(null);
+
+      expect(queryClient.getQueryData(["audit", ID])).toBeUndefined();
+      expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
+    } finally {
+      unsubscribe();
+    }
+  });
 });
 
 describe("controls the role cannot use are hidden", () => {
