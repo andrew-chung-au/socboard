@@ -184,7 +184,8 @@ def test_alembic_style_ddl_on_an_upper_case_name_is_refused(seeded):
 
 def test_a_plain_insert_and_append_audit_still_pass(seeded):
     with seeded["engine"].begin() as conn:
-        conn.execute(insert(AUDIT).values(**{**_values(seeded, "plain"), "id": 50}))
+        plain = {key: value for key, value in _values(seeded, "plain").items() if key != "id"}
+        conn.execute(insert(AUDIT).values(**plain))  # no explicit id: the guard refuses one (#99)
     with Session(seeded["engine"]) as session:
         append_audit(
             session, case_id=seeded["case_id"], actor_id=seeded["user_id"], action="note_added", detail="n"

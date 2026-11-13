@@ -390,12 +390,11 @@ def test_dropping_the_table_with_the_metadata_helper_is_refused(seeded):
 def test_a_plain_insert_and_append_audit_still_work(seeded):
     engine = seeded["engine"]
     with engine.begin() as conn:
-        conn.execute(insert(AUDIT).values(**{**_entry_values(seeded, "plain"), "id": 50}))
-        conn.execute(
-            sqlite_insert(AUDIT)
-            .values(**{**_entry_values(seeded, "ignored"), "id": 51})
-            .on_conflict_do_nothing()
-        )
+        # No explicit id: the guard refuses one (#99), so the database assigns 2 and 3.
+        plain = {key: value for key, value in _entry_values(seeded, "plain").items() if key != "id"}
+        ignored = {key: value for key, value in _entry_values(seeded, "ignored").items() if key != "id"}
+        conn.execute(insert(AUDIT).values(**plain))
+        conn.execute(sqlite_insert(AUDIT).values(**ignored).on_conflict_do_nothing())
     with Session(engine) as session:
         append_audit(
             session, case_id=seeded["case_id"], actor_id=seeded["user_id"], action="note_added", detail="n"
@@ -403,7 +402,7 @@ def test_a_plain_insert_and_append_audit_still_work(seeded):
         session.commit()
     with engine.connect() as conn:
         details = conn.execute(select(AuditEntry.detail).order_by(AuditEntry.id)).scalars().all()
-    assert details == ["original", "plain", "ignored", "n"]  # ids 1, 50, 51, then 52
+    assert details == ["original", "plain", "ignored", "n"]  # ids 1 to 4
 
 
 def test_ddl_on_another_table_is_not_blocked(seeded):

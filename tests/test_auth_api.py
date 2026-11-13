@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 
 import pytest
@@ -21,6 +22,7 @@ from backend_support import (
     LEAD_PASSWORD,
     LEAD_TOKEN,
     LEAD_USERNAME,
+    MARKER,
     TEST_TOKEN_SECRET,
 )
 from fastapi.testclient import TestClient
@@ -444,3 +446,43 @@ def test_the_session_rolls_back_what_a_route_did_not_commit(real_app, app_databa
         engine.dispose()
     assert "test-asset-True" in names
     assert "test-asset-False" not in names
+
+
+# --- a body that cannot be parsed is 422 validation_error, never 500 (#102) --------------------
+
+VALIDATION_BODY = {"code": "validation_error", "message": "The request is not valid."}
+JSON_TYPE = {"Content-Type": "application/json"}
+VALID_LOGIN_JSON = f'{{"username": "{MARKER}", "password": "{MARKER}"}}'
+
+# (content, headers). Each carries MARKER where the syntax allows, to prove it is never echoed.
+UNPARSEABLE_BODIES = {
+    "invalid-json": (f'{{not json {MARKER}', JSON_TYPE),
+    "truncated-json": (f'{{"username": "{MARKER}", "pass', JSON_TYPE),
+    "invalid-utf8": (b'{"username": "\xff", "password": "' + MARKER.encode() + b'"}', JSON_TYPE),
+    "nested-50000-deep": (f'{"[" * 50_000}"{MARKER}"{"]" * 50_000}', JSON_TYPE),
+    "5000-digit-number": (f'{{"username": {"9" * 5000}, "password": "{MARKER}"}}', JSON_TYPE),
+    "empty-body": (b"", JSON_TYPE),
+    "no-body": (None, {}),
+    "text-plain": (VALID_LOGIN_JSON, {"Content-Type": "text/plain"}),
+    "form-encoded": (
+        f"username={MARKER}&password={MARKER}",
+        {"Content-Type": "application/x-www-form-urlencoded"},
+    ),
+    "array": (f'["{MARKER}"]', JSON_TYPE),
+    "string": (f'"{MARKER}"', JSON_TYPE),
+    "number": ("12345", JSON_TYPE),
+    "null": ("null", JSON_TYPE),
+}
+
+
+@pytest.mark.parametrize("name", list(UNPARSEABLE_BODIES))
+def test_an_unparseable_login_body_is_422_validation_error(safe_client, caplog, name):
+    content, headers = UNPARSEABLE_BODIES[name]
+    caplog.set_level(logging.DEBUG)
+    response = safe_client.post("/api/login", content=content, headers=headers)
+    assert response.status_code == 422
+    assert response.json() == VALIDATION_BODY
+    assert MARKER not in response.text
+    assert MARKER not in caplog.text
+    assert "has no contract code" not in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]

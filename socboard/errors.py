@@ -37,6 +37,10 @@ INTERNAL_ERROR = "internal_error"
 VALIDATION_MESSAGE = "The request is not valid."
 INTERNAL_MESSAGE = "Something went wrong."
 
+# shortcut: matches FastAPI's detail text for a body it cannot parse; a FastAPI upgrade that
+# changes the text makes the tests in test_backend_errors.py fail, so update it there.
+_BODY_PARSE_DETAIL = "There was an error parsing the body"
+
 # Code and fixed message for a plain HTTPException, by status.
 _BY_STATUS: dict[int, tuple[str, str]] = {
     401: (UNAUTHORIZED, "Your session has expired. Please sign in again."),
@@ -87,6 +91,10 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     """Unknown route, wrong method and raised HTTP exceptions, all as `{ code, message }`."""
     if isinstance(exc, ApiHTTPException):
         return error_response(exc.status_code, exc.code, exc.message, exc.headers)
+    if exc.status_code == 400 and exc.detail == _BODY_PARSE_DETAIL:
+        # FastAPI's own failure to parse a body (bad UTF-8, too deep, a huge number): it is a
+        # schema failure for the client, not a server error. Only this 400 is mapped.
+        return error_response(422, VALIDATION_ERROR, VALIDATION_MESSAGE)
     known = _BY_STATUS.get(exc.status_code)
     if known is None:
         # The contract has no code for this status: a route should raise ApiHTTPException.
