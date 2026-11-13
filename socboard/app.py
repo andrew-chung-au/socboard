@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from socboard import __version__, database
 from socboard.auth import add_login_route, create_users_router, resolve_token_secret
+from socboard.cases import create_cases_router
 from socboard.errors import ApiError, register_error_handlers
 from socboard.ingest import add_ingest_route, resolve_ingest_key
 from socboard.sessions import DatabaseState
@@ -85,4 +86,5 @@ def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     add_ingest_route(ingest_router)
     app.include_router(ingest_router)
     app.include_router(create_users_router(API_PREFIX))
+    app.include_router(create_cases_router(API_PREFIX))
     return app

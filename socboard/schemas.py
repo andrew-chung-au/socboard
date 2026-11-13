@@ -63,6 +63,26 @@ class CaseSummary(BaseModel):
     closingReason: ClosingReason | None
 
 
+class Note(BaseModel):
+    id: str
+    author: User
+    text: str
+    createdAt: datetime
+
+
+class CaseDetail(CaseSummary):
+    """`CaseSummary` plus the alert's description, the severity rule and the notes (#15)."""
+
+    description: str
+    severityRule: str
+    notes: list[Note]
+
+
+class QueueResponse(BaseModel):
+    cases: list[CaseSummary]
+    servedAt: datetime
+
+
 # RFC 3339 `date-time`: seconds and an offset are required. Plain ASCII digits only; Python's own
 # ISO parser also takes a date alone, no offset and other forms that the contract refuses.
 _RFC3339 = re.compile(
