@@ -145,6 +145,23 @@ Text10000 = Annotated[
 ]
 
 
+# Notes (#18)
+NOTE_MAX_LENGTH = 5_000
+
+
+def _note_text(text: str) -> str:
+    """The length limit is a validator, not `max_length`, so the generated schema keeps the
+    contract's `NoteRequest` (no length keyword). Over the limit is a schema 422 (checked before
+    the 404, as the contract orders it). Emptiness is a domain rule in the handler."""
+    if len(text) > NOTE_MAX_LENGTH:
+        raise ValueError("The note is too long.")
+    return _storable(text)
+
+
+class NoteRequest(BaseModel):
+    text: Annotated[str, AfterValidator(_note_text)]
+
+
 class IngestRequest(BaseModel):
     """The ingest body (`openapi.yaml` `IngestRequest`, limits from #86). Unknown keys, such as a
     `severity` or `status` from the caller, are ignored."""

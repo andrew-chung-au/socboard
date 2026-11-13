@@ -35,6 +35,8 @@ ALREADY_CLAIMED = "already_claimed"
 METHOD_NOT_ALLOWED = "method_not_allowed"
 VALIDATION_ERROR = "validation_error"
 INTERNAL_ERROR = "internal_error"
+# Notes (#18)
+EMPTY_NOTE = "empty_note"
 
 VALIDATION_MESSAGE = "The request is not valid."
 INTERNAL_MESSAGE = "Something went wrong."
