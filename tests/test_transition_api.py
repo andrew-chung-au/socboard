@@ -25,7 +25,7 @@ from sqlalchemy.engine import Engine
 from test_queue_api import add_case, run
 
 from socboard import database
-from socboard.models import AuditEntry, Case, User
+from socboard.models import AuditEntry, Case, Note, User
 from socboard.tokens import create_token
 
 ANALYST = {"Authorization": f"Bearer {ANALYST_TOKEN}"}
@@ -331,6 +331,76 @@ def test_two_simultaneous_closes_have_exactly_one_winner(real_app, app_database)
         ("Closed", reason, ANALYST_ID),
         [(actor, "status_changed", f"Investigating -> Closed ({reason})")],
     )
+
+
+def test_a_note_and_a_close_at_the_same_time_never_leave_a_note_after_the_close(
+    real_app, app_database
+):
+    """Race 18-3: a note and a close wait behind a held row lock, then race (as the test above).
+    The note either commits before the close or is refused 409; never a note after the close."""
+    new_case(app_database, status="Investigating")
+    barrier = threading.Barrier(3, timeout=10)  # a failing thread can't hang the run
+    responses = {}
+
+    def attempt(name):
+        client = TestClient(real_app)
+        barrier.wait()
+        if name == "note":
+            responses[name] = client.post(
+                "/api/cases/1/notes", json={"text": "racing note"}, headers=LEAD
+            )
+        else:
+            responses[name] = move(client, 1, "Closed", "duplicate")
+
+    threads = [threading.Thread(target=attempt, args=(name,)) for name in ("note", "close")]
+    blocker = database.create_db_engine(app_database)
+    try:
+        with blocker.connect() as conn:
+            conn.execute(update(Case).where(Case.id == 1).values(status=Case.status))
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            time.sleep(0.5)  # well inside the 5 s busy timeout; both requests are now waiting
+            conn.rollback()
+        for thread in threads:
+            thread.join(timeout=30)
+    finally:
+        blocker.dispose()
+
+    assert responses["close"].status_code == 200
+    note = responses["note"]
+    assert note.status_code in (201, 409)
+    audit = run(
+        app_database,
+        lambda conn: conn.execute(
+            select(AuditEntry.action).where(AuditEntry.case_id == 1).order_by(AuditEntry.id)
+        ).scalars().all(),
+    )
+    notes = run(app_database, lambda conn: conn.execute(select(Note.id)).scalars().all())
+    if note.status_code == 201:
+        assert audit == ["note_added", "status_changed"]
+        assert len(notes) == 1
+    else:
+        assert note.json()["code"] == "case_closed"
+        assert audit == ["status_changed"]
+        assert notes == []
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [(None, (422, "reason_required")), ("duplicate", (409, "invalid_transition"))],
+)
+def test_a_lost_close_that_sent_a_reason_is_409_not_reason_required(reason, expected):
+    """17-2: the re-read after a 0-row UPDATE sees Investigating (another move landed in between,
+    possible on Postgres only). A close that sent a reason lost a race; only a missing one is 422."""
+    from socboard.auth import CurrentUser
+    from socboard.cases import _transition_refusal
+
+    analyst = CurrentUser(id=ANALYST_ID, role="analyst")
+    refusal = _transition_refusal(
+        ("Investigating", ANALYST_ID), analyst, "Closed", "Investigating", reason
+    )
+    assert (refusal.status_code, refusal.code) == expected
 
 
 # --- queue and detail --------------------------------------------------------------------------

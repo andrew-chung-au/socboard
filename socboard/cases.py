@@ -12,8 +12,9 @@ Queue order is a backend rule: severity by an explicit rank (Critical first), th
 timestamp oldest first, then case id ascending. The rank is a SQL CASE built from the constant
 below, so SQLite and Postgres order alike and no text is formatted into a query.
 
-Notes (#18): `POST /api/cases/{id}/notes` commits once, with its audit entry. The two reads above
-still write nothing.
+Notes (#18): `POST /api/cases/{id}/notes` commits once, with its audit entry. It starts with a
+no-op conditional UPDATE on the case, so a close cannot slip in before the note (#17). The two
+reads above still write nothing.
 
 Transitions (#17): `POST /api/cases/{id}/transition` is, like the claim, one conditional UPDATE
 that checks the current status (and the owner, for an Analyst); only a refused move reads the case,
@@ -185,14 +186,23 @@ def create_cases_router(prefix: str) -> APIRouter:
     ) -> NoteOut:
         # Order (contract): 401 (dependency), schema 422 (body), 404, 409, empty_note 422.
         case_id = from_public_id(id)
-        status = None if case_id is None else session.execute(
-            select(Case.status).where(Case.id == case_id)
-        ).scalar_one_or_none()
-        if status is None:
-            raise ApiHTTPException(404, NOT_FOUND, NOT_FOUND_MESSAGE)
-        if status == STATUS_CLOSED:
+        # A no-op conditional UPDATE takes the case row's write lock (SQLite and Postgres) before
+        # the check, so a close cannot commit between the check and the insert (as the claim).
+        is_open = case_id is not None and session.execute(
+            update(Case)
+            .where(Case.id == case_id, Case.status != STATUS_CLOSED)
+            .values(status=Case.status)
+        ).rowcount == 1
+        if not is_open:
+            exists = case_id is not None and session.scalar(
+                select(Case.id).where(Case.id == case_id)
+            ) is not None
+            session.rollback()
+            if not exists:
+                raise ApiHTTPException(404, NOT_FOUND, NOT_FOUND_MESSAGE)
             raise ApiHTTPException(409, CASE_CLOSED, NOTE_CASE_CLOSED_MESSAGE)
         if not body.text.strip():
+            session.rollback()
             raise ApiHTTPException(422, EMPTY_NOTE, EMPTY_NOTE_MESSAGE)
         author = session.execute(select(UserRow).where(UserRow.id == user.id)).scalar_one()
         try:
@@ -262,7 +272,7 @@ def create_cases_router(prefix: str) -> APIRouter:
                 select(Case.status, Case.owner_id).where(Case.id == case_id)
             ).one_or_none()
             session.rollback()
-            raise _transition_refusal(row, user, body.to, source)
+            raise _transition_refusal(row, user, body.to, source, reason)
         detail_text = f"{source} -> {body.to}" + (f" ({reason})" if closing else "")
         append_audit(
             session,
@@ -279,14 +289,17 @@ def create_cases_router(prefix: str) -> APIRouter:
     return router
 
 
-def _transition_refusal(row, user: CurrentUser, to: str, source: str | None) -> ApiHTTPException:
+def _transition_refusal(
+    row, user: CurrentUser, to: str, source: str | None, reason: str | None
+) -> ApiHTTPException:
     """The refusal for a move that changed nothing, in the contract's order: 404, 403, 409, 422."""
     if row is None:
         return _not_found()
     status, owner_id = row
     if user.role != ROLE_LEAD and owner_id != user.id:
         return forbidden()
-    if status == source and to == STATUS_CLOSED:
+    # A close that sent a reason lost a race (the status changed after the UPDATE): 409, not 422.
+    if status == source and to == STATUS_CLOSED and reason is None:
         return ApiHTTPException(422, REASON_REQUIRED, REASON_REQUIRED_MESSAGE)
     return ApiHTTPException(409, INVALID_TRANSITION, INVALID_TRANSITION_MESSAGE)
 
