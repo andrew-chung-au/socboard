@@ -189,16 +189,32 @@ backend-run: ## Start the backend in the background on localhost (SOCBOARD_PORT,
 	@mkdir -p .scratch
 	@test -x .venv/bin/python || { echo "backend-run: .venv/bin/python is missing; run make install first"; exit 1; }
 	@if [ -f .scratch/backend.pid ]; then pid=$$(cat .scratch/backend.pid); case "$$pid" in ''|*[!0-9]*|0*) echo "backend-run: .scratch/backend.pid does not hold a plain pid; check it and remove it by hand"; exit 1;; esac; if kill -0 "$$pid" 2>/dev/null; then echo "backend is already running (pid $$pid)"; exit 1; fi; fi
+	@.venv/bin/python scripts/backend_probe.py port; rc=$$?; if [ "$$rc" != 0 ] && [ "$$rc" != 3 ]; then exit 1; fi
 	@nohup sh -c 'exec .venv/bin/python -m socboard.server' > .scratch/backend.log 2>&1 & echo $$! > .scratch/backend.pid
-	@sleep 2; pid=$$(cat .scratch/backend.pid); if ! kill -0 "$$pid" 2>/dev/null || grep -q '^State:[[:space:]]*Z' "/proc/$$pid/status" 2>/dev/null; then echo "backend-run: the server exited at once; last lines of .scratch/backend.log:"; tail -n 20 .scratch/backend.log; rm -f .scratch/backend.pid; exit 1; fi; echo "backend started (pid $$pid); log: .scratch/backend.log"
+	@pid=$$(cat .scratch/backend.pid); \
+	alive() { kill -0 "$$pid" 2>/dev/null && ! grep -q '^State:[[:space:]]*Z' "/proc/$$pid/status" 2>/dev/null; }; \
+	end=$$(( $$(date +%s) + 30 )); \
+	while [ "$$(date +%s)" -lt "$$end" ]; do \
+		if ! alive; then echo "backend-run: the server exited before it answered /api/health; last lines of .scratch/backend.log:"; tail -n 20 .scratch/backend.log; rm -f .scratch/backend.pid; exit 1; fi; \
+		if .venv/bin/python scripts/backend_probe.py health && alive; then echo "backend started (pid $$pid); log: .scratch/backend.log"; exit 0; fi; \
+		sleep 1; \
+	done; \
+	echo "backend-run: no healthy answer from /api/health within 30 s; last lines of .scratch/backend.log:"; tail -n 20 .scratch/backend.log; \
+	kill "$$pid" 2>/dev/null; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do alive || break; sleep 1; done; \
+	if alive; then echo "backend (pid $$pid) did not stop within 10 s; not forced; pid file kept"; exit 1; fi; \
+	rm -f .scratch/backend.pid; exit 1
 
 backend-stop: ## Stop the backend started by backend-run
 	@if [ ! -f .scratch/backend.pid ]; then echo "backend is not running"; exit 0; fi; \
 	pid=$$(cat .scratch/backend.pid); \
 	case "$$pid" in ''|*[!0-9]*|0*) echo "backend-stop: .scratch/backend.pid does not hold a plain pid; nothing killed; check the file"; exit 1;; esac; \
-	if ! kill -0 "$$pid" 2>/dev/null; then rm -f .scratch/backend.pid; echo "backend was not running (stale pid file removed)"; exit 0; fi; \
+	if ! kill -0 "$$pid" 2>/dev/null && [ ! -d "/proc/$$pid" ]; then rm -f .scratch/backend.pid; echo "backend was not running (stale pid file removed)"; exit 0; fi; \
 	if [ -r "/proc/$$pid/cmdline" ]; then cmd=$$(tr '\0' ' ' < "/proc/$$pid/cmdline"); elif command -v ps >/dev/null 2>&1; then cmd=$$(ps -o command= -p "$$pid"); else cmd=; fi; \
 	case "$$cmd" in *-m\ socboard.server*) ;; *) echo "backend-stop: pid $$pid does not look like the backend (its command line is not the one backend-run starts, or it cannot be read); nothing killed; stop it by hand if it is yours"; exit 1;; esac; \
+	root=$$(readlink -f . 2>/dev/null); raw=$$(readlink "/proc/$$pid/cwd" 2>/dev/null); cwd=$$(readlink -f "/proc/$$pid/cwd" 2>/dev/null); \
+	if [ -z "$$root" ] || [ -z "$$raw" ] || [ -z "$$cwd" ]; then echo "backend-stop: the working directory of pid $$pid could not be read (/proc/$$pid/cwd); nothing killed; stop it by hand if it is yours"; exit 1; fi; \
+	if [ "$$cwd" != "$$root" ]; then echo "backend-stop: the working directory of pid $$pid is not this checkout; nothing killed; pid file kept; stop it by hand if it is yours"; exit 1; fi; \
 	kill "$$pid" 2>/dev/null; \
 	for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$$pid" 2>/dev/null || break; sleep 1; done; \
 	if kill -0 "$$pid" 2>/dev/null; then echo "backend (pid $$pid) did not stop within 10 s; not forced; pid file kept"; exit 1; fi; \
