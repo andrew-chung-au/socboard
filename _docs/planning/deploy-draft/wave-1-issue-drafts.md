@@ -100,7 +100,7 @@ A single list names every runtime variable, deployed mode refuses to start with 
 ## Acceptance criteria
 - [ ] One module lists each runtime variable: its name, whether it is a secret, whether deployed mode requires it, and its minimum rule. The list is the source for the README's variable table; a test fails if a name in the list is missing from `README.md` or a documented name is not in the list. If #22 has landed, its preflight list is reused, not copied.
 - [ ] A single explicit setting turns on deployed mode (the Engineer proposes its name in the issue comment; it defaults to off, so `make run`, tests and `make backend-run` behave as before).
-- [ ] In deployed mode, a missing, empty or too-short value for each of: the token secret, the ingest key, the three seed passwords, and the database URL stops the app at start-up, exit code 2, with a message that names the variable and never prints its value. One test per variable.
+- [ ] In deployed mode, a missing, empty or too-short value for each of: the token secret, the ingest key and the database URL stops the app at start-up, exit code 2, with a message that names the variable and never prints its value. One test per variable. The three seed passwords are required by the one-shot seed step only (the app never reads them); `make seed` already refuses a missing or short one.
 - [ ] A secret that is only whitespace, or one repeated character, is refused in every mode for the token secret and in deployed mode for the others (#104 item 5). The rule is stated in the README. A test covers 32 spaces and 32 of one character.
 - [ ] Outside deployed mode nothing changes: the ingest key stays optional with its single warning, and the existing tests pass unchanged.
 - [ ] No value appears in a log line, error message or the README. A test sets distinctive values and fails if any is found in captured output.
@@ -139,9 +139,8 @@ The server binds a non-loopback address only when an explicit opt-in is set, whi
 
 ## Acceptance criteria
 - [ ] With no opt-in, `SOCBOARD_HOST=0.0.0.0` (and `::`, and a real interface address) still exits 2 with the existing message, and the existing server tests pass unchanged.
-- [ ] With the opt-in set, `SOCBOARD_HOST=0.0.0.0` is accepted by `resolve_bind`; a value that is not an address (a name, an empty string, whitespace, a URL) is still refused. A test for each.
-- [ ] The opt-in is one named variable, off by default, that must hold one exact value (not any non-empty string). A value such as `0`, `false`, `no`, ` 1` or `yes ` does not enable it. One test per case.
-- [ ] `make backend-run` never passes the opt-in and refuses a non-loopback host even if the variable is set in the caller's shell (the Makefile recipe is read in the issue comment and a test or script shows it).
+- [ ] The opt-in is a command-line flag of `python -m socboard.server`, not an environment variable. With the flag, `SOCBOARD_HOST=0.0.0.0` is accepted by `resolve_bind`; a value that is not an address (a name, an empty string, whitespace, a URL) is still refused. A test for each.
+- [ ] The flag is off by default and takes no value. No environment variable can enable it: `SOCBOARD_HOST=0.0.0.0` without the flag exits 2 even with every `SOCBOARD_*` variable set (a test). `make backend-run` and `scripts/backend_probe.py` read the inherited environment, so they stay loopback-only with no Makefile change; the Engineer reads the recipe and the probe in the issue comment to show it.
 - [ ] The refusal message names the setting to change, but not any value, and the server prints no secret.
 - [ ] The README states who may set the opt-in (the image only) and why.
 - [ ] `make verify` passes.
@@ -155,7 +154,7 @@ The server binds a non-loopback address only when an explicit opt-in is set, whi
 None.
 
 ## Constraints
-- Files: `socboard/server.py`, `tests/test_backend_server.py`, `README.md`. `AGENTS.md` holds the rule that `make backend-run` is loopback-only; if its wording needs a change, list the exact diff in the comment for the human (protected).
+- Files: `socboard/server.py`, `tests/test_backend_server.py`, `README.md`. `scripts/backend_probe.py` is read, not changed. `AGENTS.md` holds the rule that `make backend-run` is loopback-only; if its wording needs a change, list the exact diff in the comment for the human (protected).
 - Depends on: #80 (closed), which hardened `backend-run` and `backend-stop`.
 - Proposed tier: heavy (it relaxes a security limit). Expected paths: `socboard/server.py`, `tests/test_backend_server.py`, `README.md`, possibly `AGENTS.md`.
 
@@ -167,7 +166,7 @@ Title: Run the backend and migrations on Postgres, chosen by the database URL
 
 ## Why
 
-The spec says the database is chosen by environment variable: SQLite locally, Postgres when deployed. `socboard/database.py` already branches on the dialect for the engine, but nothing else is ready: `pyproject.toml` has no Postgres driver; migration `0001` creates the audit triggers in SQLite syntax and sets `sqlite_autoincrement` on `audit_entries`; `socboard/migrate.py` and the test fixtures assume a SQLite file (the `template_database` fixture copies a migrated SQLite file per test). The append-only rule itself is D6 and is not in this issue; this issue gets everything else to run, and keeps the rest of the schema identical.
+The spec says the database is chosen by environment variable: SQLite locally, Postgres when deployed. `socboard/database.py` already branches on the dialect for the engine, but nothing else is ready: `pyproject.toml` has no Postgres driver; migration `0001` creates the audit triggers in SQLite syntax and sets `sqlite_autoincrement` on `audit_entries`; `socboard/migrate.py` already branches by dialect (it switches the SQLite foreign-key pragma off and checks it afterwards only on SQLite), but the test fixtures assume a SQLite file (the `template_database` fixture copies a migrated SQLite file per test). The append-only rule itself is D6 and is not in this issue; this issue gets everything else to run, and keeps the rest of the schema identical.
 
 ## Goal
 
