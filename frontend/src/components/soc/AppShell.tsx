@@ -50,9 +50,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Link to="/" className={navCls} activeOptions={{ exact: true }} activeProps={{ className: "bg-secondary !text-foreground" }}>
               Queue
             </Link>
-            <Link to="/closed" className={navCls} activeProps={{ className: "bg-secondary !text-foreground" }}>
-              Closed
-            </Link>
+            {s.user.role === "lead" && (
+              <Link to="/closed" className={navCls} activeProps={{ className: "bg-secondary !text-foreground" }}>
+                Closed
+              </Link>
+            )}
           </nav>
           <div className="ml-auto flex items-center gap-2">
             <div className="text-right leading-tight">

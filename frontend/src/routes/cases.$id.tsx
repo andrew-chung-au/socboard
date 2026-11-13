@@ -56,12 +56,14 @@ function Panel({ title, children, right }: { title: string; children: ReactNode;
 
 function CasePage() {
   const { id } = Route.useParams();
-  const { session } = useSession();
+  const { hydrated, session } = useSession();
   const me = session?.user;
   const qc = useQueryClient();
   const caseQ = useQuery({ queryKey: ["case", id], queryFn: () => api.getCase(id), retry: false });
-  const auditQ = useQuery({ queryKey: ["audit", id], queryFn: () => api.getAudit(id), retry: false });
-  const usersQ = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers(), enabled: me?.role === "lead", retry: false });
+  const isLead = me?.role === "lead";
+  // The audit trail is Lead-only (the backend answers an Analyst with 403), so it is not requested.
+  const auditQ = useQuery({ queryKey: ["audit", id], queryFn: () => api.getAudit(id), enabled: isLead, retry: false });
+  const usersQ = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers(), enabled: isLead, retry: false });
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
@@ -88,7 +90,7 @@ function CasePage() {
     },
   });
 
-  if (caseQ.isPending) return <div className="rounded-md border bg-card p-8 text-center text-muted-foreground">Loading case…</div>;
+  if (!hydrated || caseQ.isPending) return <div className="rounded-md border bg-card p-8 text-center text-muted-foreground">Loading case…</div>;
   if (caseQ.isError)
     return (
       <div className="space-y-3">
@@ -100,7 +102,6 @@ function CasePage() {
     );
 
   const c: CaseDetail = caseQ.data;
-  const isLead = me?.role === "lead";
   const isOwner = !!c.owner && c.owner.id === me?.id;
   const closed = c.status === "Closed";
   const canClaim = !c.owner && !closed;
@@ -110,7 +111,7 @@ function CasePage() {
 
   return (
     <div className="space-y-3">
-      <BackLink closed={closed} />
+      <BackLink closed={closed && isLead} />
 
       <div className="flex flex-wrap items-start gap-3">
         <SeverityBadge severity={c.severity} className="mt-0.5" />
@@ -183,6 +184,7 @@ function CasePage() {
             )}
           </Panel>
 
+          {isLead && (
           <Panel title="Audit trail">
             {auditQ.isPending ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
@@ -215,6 +217,7 @@ function CasePage() {
               </div>
             )}
           </Panel>
+          )}
         </div>
 
         <aside>

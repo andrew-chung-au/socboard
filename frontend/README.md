@@ -36,6 +36,8 @@ The screens call `api` from `src/services`, which is the mock or the HTTP client
 
 A refused call throws `ApiError` (`status`, `code` and a `message` the screens show). The other types are `Role`, `Severity`, `AssetCriticality`, `AuditAction`.
 
+With the mock off, the dev server proxies `/api` to the backend on `http://127.0.0.1:8000` (`vite.config.ts`). The sign-in token is held in memory and in session storage, never in local storage, never logged (see the root `README.md`). The closed-cases view and the audit trail are Lead-only: an Analyst sees neither and the client does not request them.
+
 ## Tests
 
 Run `make frontend-test` from the repository root. In a fresh environment run `make install` once first; `make frontend-test`, `make test` and `make verify` fail until the frontend packages are installed. Tests are `*.test.ts` and `*.test.tsx` files under `src/` (Vitest with jsdom and Testing Library).

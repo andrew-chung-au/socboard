@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [tanstackRouter({ target: "react", autoCodeSplitting: true }), react(), tailwindcss()],
   resolve: { tsconfigPaths: true },
   // Dev server only: IPv4 loopback so the dev container's forwarded port reaches it, and nothing else can.
-  server: { host: "127.0.0.1" },
+  // /api goes to the backend (make backend-run, 127.0.0.1:8000), so the backend needs no CORS setup.
+  server: { host: "127.0.0.1", proxy: { "/api": "http://127.0.0.1:8000" } },
   build: { outDir: "dist", emptyOutDir: true },
 });
