@@ -33,6 +33,9 @@ NOT_FOUND = "not_found"
 METHOD_NOT_ALLOWED = "method_not_allowed"
 VALIDATION_ERROR = "validation_error"
 INTERNAL_ERROR = "internal_error"
+# Notes (#18)
+CASE_CLOSED = "case_closed"
+EMPTY_NOTE = "empty_note"
 
 VALIDATION_MESSAGE = "The request is not valid."
 INTERNAL_MESSAGE = "Something went wrong."

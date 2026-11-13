@@ -7,6 +7,9 @@ frontend's job.
 Queue order is a backend rule: severity by an explicit rank (Critical first), then the alert's own
 timestamp oldest first, then case id ascending. The rank is a SQL CASE built from the constant
 below, so SQLite and Postgres order alike and no text is formatted into a query.
+
+Notes (#18): `POST /api/cases/{id}/notes` is the one write here; it commits once, with its audit
+entry. The two reads above still write nothing.
 """
 
 from datetime import UTC, datetime
@@ -15,15 +18,17 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy import case as sql_case
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from socboard.auth import current_user
+from socboard.audit import append_audit
+from socboard.auth import CurrentUser, current_user
 from socboard.domain import SEVERITIES, STATUS_CLOSED
-from socboard.errors import NOT_FOUND, ApiError, ApiHTTPException
+from socboard.errors import CASE_CLOSED, EMPTY_NOTE, NOT_FOUND, ApiError, ApiHTTPException
 from socboard.ids import from_public_id, to_public_id
 from socboard.models import Alert, Case, Note
 from socboard.models import User as UserRow
-from socboard.schemas import CaseDetail, CaseSummary, QueueResponse
+from socboard.schemas import CaseDetail, CaseSummary, NoteRequest, QueueResponse
 from socboard.schemas import Note as NoteOut
 from socboard.schemas import User
 from socboard.sessions import get_session
@@ -32,6 +37,10 @@ from socboard.sessions import get_session
 SEVERITY_RANK = {name: rank for rank, name in enumerate(reversed(SEVERITIES))}
 
 NOT_FOUND_MESSAGE = "Case not found."
+
+# Notes (#18)
+CASE_CLOSED_MESSAGE = "Notes cannot be added to a closed case."
+EMPTY_NOTE_MESSAGE = "Note text cannot be empty."
 
 
 def _summary_fields(case: Case, alert: Alert, owner: UserRow | None) -> dict:
@@ -117,5 +126,61 @@ def create_cases_router(prefix: str) -> APIRouter:
                 for note, author in notes
             ],
         )
+
+    # Notes (#18)
+    @router.post(
+        "/cases/{id}/notes",
+        status_code=201,
+        response_model=NoteOut,
+        responses={404: {"model": ApiError}, 409: {"model": ApiError}, 422: {"model": ApiError}},
+        operation_id="addNote",
+    )
+    def add_note(
+        id: str,
+        body: NoteRequest,
+        user: Annotated[CurrentUser, Depends(current_user)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> NoteOut:
+        # Order (contract): 401 (dependency), schema 422 (body), 404, 409, empty_note 422.
+        case_id = from_public_id(id)
+        status = None if case_id is None else session.execute(
+            select(Case.status).where(Case.id == case_id)
+        ).scalar_one_or_none()
+        if status is None:
+            raise ApiHTTPException(404, NOT_FOUND, NOT_FOUND_MESSAGE)
+        if status == STATUS_CLOSED:
+            raise ApiHTTPException(409, CASE_CLOSED, CASE_CLOSED_MESSAGE)
+        if not body.text.strip():
+            raise ApiHTTPException(422, EMPTY_NOTE, EMPTY_NOTE_MESSAGE)
+        author = session.execute(select(UserRow).where(UserRow.id == user.id)).scalar_one()
+        try:
+            note = Note(
+                case_id=case_id,
+                author_id=user.id,
+                text=body.text,  # as sent, spaces kept
+                created_at=datetime.now(UTC),
+            )
+            session.add(note)
+            session.flush()
+            # The detail names the note, never its text.
+            append_audit(
+                session,
+                case_id=case_id,
+                actor_id=user.id,
+                action="note_added",
+                detail=f"Note {to_public_id(note.id)} added",
+            )
+            # Built before the commit, which expires the rows.
+            response = NoteOut(
+                id=to_public_id(note.id),
+                author=User.from_row(author),
+                text=note.text,
+                createdAt=note.created_at,
+            )
+            session.commit()
+        except SQLAlchemyError:
+            session.rollback()  # any refused flush or commit leaves nothing; the error is not mapped
+            raise
+        return response
 
     return router
