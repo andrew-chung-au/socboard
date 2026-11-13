@@ -8,7 +8,7 @@ Check by hand the criteria of #75 that need `frontend/node_modules` and the npm 
 
 ## Where to run it
 
-The dev container, in a checkout of branch `issue-75-frontend-lint-format` with the #75 commit, after `make frontend-install` (except Step 5, which needs a clone without `frontend/node_modules`). Not here: `main`, for any step that writes (Step 4). `make frontend-format` rewrites files, so never run it on this branch or on `main`.
+The dev container, in a checkout of branch `issue-75-frontend-lint-format` with the #75 commit, after `make frontend-install` (except Step 5, which needs a clone without `frontend/node_modules`). Not here: `main`, for any step that writes (Step 5). `make frontend-format` rewrites files, so never run it on this branch or on `main`.
 
 If a tool shows a permission prompt, reject one prompt at a time; rejecting ends the agent's turn, so tell it to continue.
 
@@ -91,7 +91,7 @@ make frontend-format
 git status --short
 ```
 
-Expected: changed files listed under `frontend/` (the target rewrites files). Then discard them and leave the branch:
+Expected: changed files listed under `frontend/` (the target rewrites files). Write down whether the list includes `frontend/package.json` (a protected file) or any file under `frontend/src/test/` or any `*.test.*` file (the weakened-test guard watches those); tell the orchestrator either way. Then discard them and leave the branch:
 
 ```
 git restore frontend
