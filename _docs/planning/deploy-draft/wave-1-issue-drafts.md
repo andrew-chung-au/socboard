@@ -70,7 +70,7 @@ When `frontend/dist` is present, the app serves the built site and falls back to
 - [ ] `make verify` passes; no test is weakened or deleted.
 
 ## Out of scope
-- The Dockerfile, Compose and Caddy (D10, D11, D17).
+- The Dockerfile, Compose and Caddy (D10, D11, D17c).
 - Any change to `openapi.yaml` or to the frontend.
 - Server-side rendering, and serving the Vite dev server (the dev proxy stays as is).
 
@@ -185,7 +185,7 @@ With `SOCBOARD_DATABASE_URL` set to a Postgres URL, `make migrate` and `make see
 - [ ] `make verify` passes; no test is weakened or deleted. The pull request's CI run (id and log lines in the comment) is the evidence.
 
 ## Out of scope
-- The Postgres append-only rule for the audit trail, and review of `socboard/audit_guard.py` (D6).
+- The Postgres append-only rule for the audit trail, and review of `socboard/audit_guard.py` (D6a and D6b).
 - The concurrency test for claims (D7).
 - The fixtures across the test files, the SQLite-only test markers and the NUL-in-text check on Postgres (D5b).
 - Mapping a lock timeout to a retryable response (#112).

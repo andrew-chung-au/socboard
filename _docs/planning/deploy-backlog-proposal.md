@@ -128,7 +128,7 @@ Tier is proposed, not final. Model: **S** stronger, **M** middle, **W** weaker (
 - `SOCBOARD_DATABASE_URL` chooses the database; SQLite stays the local default; `make migrate` and `make seed` work on both.
 - Migration `0001` runs on Postgres with the same tables, constraints and ids (`audit_entries` ids keep ascending, with no gaps promised).
 - CI runs a Postgres service container (D5a: migrate, seed, smoke; D5b: the backend tests, with fixtures taking the database from the URL). Evidence of record is CI; the dev-container `db` (D0) is for iteration speed.
-- Known failing SQLite-only tests (trigger tests) are named and handled by D6, not skipped silently: `make verify` reports no new skips.
+- Known failing SQLite-only tests (trigger tests) are named and handled by D6a, not skipped silently: `make verify` reports no new skips.
 
 **D6a Append-only audit trail on Postgres: triggers and tests (Heavy: security boundary; roadmap 4, second part).** Model S. Depends on: D5a, D5b, D1 (approved record). Does not wait for #107.
 - On Postgres an UPDATE, DELETE or overwrite of an `audit_entries` row is refused by the database (one test per case, mirroring `tests/test_data_audit_triggers.py`), and `append_audit` still works.
