@@ -65,6 +65,7 @@ When `frontend/dist` is present, the app serves the built site and falls back to
 - [ ] A request under `/api` that matches no route returns the existing JSON 404 `not_found` with the contract's `ApiError` body, never the entry page. A wrong method on an existing `/api` route still gets the existing 405. One test for each.
 - [ ] No `/api` route changes status, body or order of checks: the existing contract and order tests pass unchanged, and `create_app().openapi()` is identical to before (the comparison test passes).
 - [ ] Traversal is refused: requests such as `/..%2f..%2fsocboard.db`, `/%2e%2e/pyproject.toml` and an absolute path return the entry page or 404, never a file outside `dist`. A test for each.
+- [ ] A missing path that looks like a file (its last segment has an extension, for example `/assets/missing.js`) returns 404, not the entry page; only extension-less screen routes fall back to the entry page (a test for each).
 - [ ] Without a `dist` folder the app starts and behaves exactly as before (`make backend-run` is unchanged and `GET /` is the existing 404); the folder is read from a setting with a documented default, and a missing folder is not an error.
 - [ ] The site is served without interpreting alert text and adds no cookie; response headers for the entry page and assets are listed in the issue comment (the Engineer chooses cache headers and says why).
 - [ ] `make verify` passes; no test is weakened or deleted.
