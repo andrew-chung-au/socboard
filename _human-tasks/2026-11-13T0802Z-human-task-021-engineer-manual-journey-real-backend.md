@@ -36,7 +36,7 @@ export SOCBOARD_INGEST_API_KEY='<16 or more characters>'
 export VITE_USE_MOCK=false
 ```
 
-Expected: no output. Remember the three passwords; you type them into the browser. Set the ingest key before Step 4, because the backend reads it at start.
+Expected: no output. Remember the three passwords; you type them into the browser. Set the ingest key before Step 3, because the backend reads it at start.
 
 For a clean start, remove an old local database first (it is git-ignored): `rm -f socboard.db`.
 
@@ -107,7 +107,13 @@ Expected: `"severity":"Low"`, `"status":"New"`, then `HTTP 201`. If you get `HTT
 
 Sign in as `analyst-a` with the password you chose for `SOCBOARD_SEED_PASSWORD_ANALYST_A`.
 
-1. The queue shows both cases within about 3 seconds, without a reload: "Malware on domain controller" (Critical) first, then "Failed logins on kiosk" (Low). That is the server's order; nothing re-sorts it. Open the Critical case.
+1. The queue shows "Malware on domain controller" (Critical) first, then "Failed logins on kiosk" (Low). That is the server's order; nothing re-sorts it. Now test polling: with the queue still open, post a third alert in the terminal and do not reload.
+
+```
+curl -s -w "\nHTTP %{http_code}\n" -X POST http://127.0.0.1:8000/api/alerts -H "X-API-Key: $SOCBOARD_INGEST_API_KEY" -H "Content-Type: application/json" -d "{\"source\":\"NDR\",\"type\":\"unusual_network_traffic\",\"asset\":\"web-prod-01\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"title\":\"Unusual traffic on web server\",\"description\":\"Manual journey test, expected High.\"}"
+```
+
+   Expected: `"severity":"High"`, `HTTP 201`, and within about 3 seconds a High row appears between the Critical and the Low, without a reload. Then open the Critical case.
 2. Click **Claim case**. Expected: the owner shows `Ana Alvarez`.
 3. Click **Start investigating**. Expected: the status shows Investigating.
 4. Type a note such as `<b>plain</b> text` and click **Add note**. Expected: it appears in the Notes list as the literal characters `<b>plain</b> text`, not bold.
@@ -120,7 +126,7 @@ Sign in as `analyst-a` with the password you chose for `SOCBOARD_SEED_PASSWORD_A
 Click **Log out**, then sign in as `lead` with the password you chose for `SOCBOARD_SEED_PASSWORD_LEAD`.
 
 1. The **Closed** link is now in the top bar. Open it. Expected: the case you closed is listed, with its reason.
-2. Open that case. Expected: the **Audit trail** panel lists, oldest first: ingested (actor: system), claimed (Ana Alvarez), status changed (twice: to Investigating, then to Closed), note added.
+2. Open that case. Expected: the **Audit trail** panel lists the raw action codes in time order. For the steps above it reads: `ingested` (actor: system), `claimed` (Ana Alvarez), `status_changed` (to Investigating), `note_added`, `status_changed` (to Closed). The note sits between the two status changes.
 
 ## Step 8: the wrong-password check (browser)
 
@@ -175,7 +181,7 @@ Paste on #21 a pass or fail for each row, and anything unexpected. Do NOT paste 
 | 3 backend-run, health `{"status":"ok"}` | | |
 | 4 frontend-start, no mock box, no mock badge | | |
 | 5 both alerts HTTP 201, Critical and Low | | |
-| 6.1 queue: both cases by polling, Critical first | | |
+| 6.1 queue: Critical first; the third (High) alert appears by polling, no reload | | |
 | 6.2 to 6.5 claim, Investigating, literal note, close with reason | | |
 | 6.6 Analyst: no Audit panel, no Closed link; back link text: | | |
 | 6.7 token in Session storage only | | |
