@@ -198,6 +198,15 @@ def test_a_body_that_fails_the_schema_is_422_validation_error_and_stores_nothing
     assert nothing_written(app_database)
 
 
+def test_a_nul_character_in_a_note_is_422_validation_error_and_stores_nothing(
+    real_client, app_database
+):
+    add_case(app_database, 1)
+    response = post(real_client, 1, {"text": "a\u0000b"})
+    assert (response.status_code, response.json()) == (422, INVALID_BODY)
+    assert nothing_written(app_database)
+
+
 def test_a_note_on_a_closed_case_is_409_case_closed_and_stores_nothing(real_client, app_database):
     add_case(app_database, 1, status="Closed", closing_reason="duplicate")
     response = post(real_client, 1, {"text": "too late"})
