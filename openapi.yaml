@@ -97,8 +97,8 @@ info:
 
     - A request with no token gets 401 `unauthorized` even when its body is schema-invalid,
       provided the body parses as JSON.
-    - A role check that needs no case (today only `GET /cases`, Lead-only) gives 403 `forbidden`
-      BEFORE the schema 422. An Analyst calling `GET /cases` with no `status`, or with a wrong
+    - A role check that needs no case (`GET /cases` and `GET /cases/{id}/audit`, Lead-only; the
+      audit role check comes before the 404) gives 403 `forbidden` BEFORE the schema 422. An Analyst calling `GET /cases` with no `status`, or with a wrong
       `status`, gets 403, not 422; a Lead with no `status` gets 422 `validation_error`.
     - For a route with a body, a schema-invalid body gives the generic 422 `validation_error`
       BEFORE the 404, the owner 403, the 409s and the domain 422s. So an Analyst or a Lead who
@@ -124,7 +124,6 @@ info:
     - When several claims for one unowned case arrive together, exactly one returns 200 and every
       other returns 409 `already_claimed`. Which one wins is not defined. A repeat of the winning
       claim also returns 409.
-    - The audit read is allowed for any authenticated user (to be confirmed in #19).
     - `GET /cases/{id}` is open to any authenticated user.
 
     ## Differences from the mock
