@@ -170,3 +170,8 @@ Written by a fresh PM launch following `_docs/agent-kit/procedures/sweep.md`. I 
     - 10: lessons go to #107.
     - 14: a launch-message line only.
   - **Parked:** 6.
+- **Carried to sweep 6** (from #17's session summary, which arrived after this sweep's cutoff; not weighed here):
+  - Three of #16 and #17's four Reflection proposals are already decided above: items 1, 2 (#114) and 3.
+  - **New, for sweep 6:**
+    - A one-command check for QA's merge re-checks, so a branch merged after QA is checked the same way each time.
+    - Each Engineer launch reads the issue's comments that ask something of the issue. In round 1, #17's Engineer missed the 18-3 request posted on #17.
