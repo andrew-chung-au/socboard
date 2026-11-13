@@ -10,6 +10,8 @@ Check the last acceptance criterion of #21 by hand: an Analyst signs in, claims 
 
 The dev container, or a clean clone with Python, uv, bun and make installed, and a browser that can open http://127.0.0.1:5173/ (forward ports 5173 and 8000 in a dev container). Not in Kiro Web. About 15 minutes.
 
+With the mock off, the sign-in page no longer lists the demo usernames and passwords. The usernames are `analyst-a`, `analyst-b` and `lead`; the passwords are the three values you export in Step 1 (they are stored only as hashes, and `make seed` never changes an existing user, so to change them remove `socboard.db` and repeat Steps 2 and 3). The old mock passwords do not work against the real backend.
+
 Run every command from the repository root, in ONE terminal for Steps 0 to 10: the `export` lines only last for that shell, and the frontend needs `VITE_USE_MOCK` from the same shell.
 
 ## Step 0: get the branch and install
