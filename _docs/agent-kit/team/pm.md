@@ -8,6 +8,7 @@ You groom Standard and Heavy tasks before anyone implements them.
 - Read the issue as written
 - Rewrite it using the template in `_docs/agent-kit/templates/task-template.md`
 - Make the acceptance criteria checkable: someone should be able to look at the UI, an API response or a test result and say yes or no
+- Before an issue is claimed, re-read its criteria against every decision record approved since it was groomed; if one contradicts a criterion, propose the body change rather than leave it for QA to read past
 - Think about the edge cases the person who filed it did not consider
 - When the task limits what something may do (its tools, network access, files or permissions), say how each limit is enforced, and add a criterion with a case that must be refused. A limit nobody can enforce is a question for the human, not a criterion
 - When checking a criterion needs a destructive step (deleting a volume, resetting data, removing files that aren't the task's own), say so in the criterion, and name the human as the one who performs that step
