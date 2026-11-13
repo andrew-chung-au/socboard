@@ -5,7 +5,7 @@ built field by field from the database row, never from the row object as a whole
 """
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, StringConstraints
@@ -66,9 +66,10 @@ class CaseSummary(BaseModel):
 # RFC 3339 `date-time`: seconds and an offset are required. Plain ASCII digits only; Python's own
 # ISO parser also takes a date alone, no offset and other forms that the contract refuses.
 _RFC3339 = re.compile(
-    r"(?P<stamp>[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-5][0-9]:[0-5][0-9])"
+    r"(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})[Tt]"
+    r"(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2})"
     r"(?:\.(?P<fraction>[0-9]+))?"
-    r"(?P<offset>[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])"
+    r"(?P<offset>[Zz]|(?P<sign>[+-])(?P<off_hour>[0-9]{2}):(?P<off_minute>[0-9]{2}))"
 )
 _BAD_TIMESTAMP = "The timestamp must be an RFC 3339 date-time with an offset."
 
@@ -78,12 +79,29 @@ def _parse_timestamp(value: object) -> datetime:
     match = _RFC3339.fullmatch(value) if isinstance(value, str) else None
     if match is None:
         raise ValueError(_BAD_TIMESTAMP)
-    # Rebuilt with exactly six fraction digits (extra digits cut), so the parse never depends on
-    # which fraction lengths this Python version accepts.
-    fraction = (match["fraction"] or "")[:6].ljust(6, "0")
-    offset = "+00:00" if match["offset"] in ("Z", "z") else match["offset"]
+    # The parts go to `datetime` and `timezone` as integers, so they refuse hour 24, a minute or
+    # second over 59, a day or month out of range and an offset of a day or more. Python's ISO
+    # parser is not used: it takes hour 24. Extra fraction digits are cut to microseconds.
+    microsecond = int((match["fraction"] or "")[:6].ljust(6, "0"))
     try:
-        parsed = datetime.fromisoformat(f"{match['stamp'].upper()}.{fraction}{offset}")
+        if match["sign"] is None:
+            zone = UTC
+        else:
+            off_hour, off_minute = int(match["off_hour"]), int(match["off_minute"])
+            if off_minute > 59:  # `timedelta` would take it as carry into the hour
+                raise ValueError(_BAD_TIMESTAMP)
+            shift = timedelta(hours=off_hour, minutes=off_minute)
+            zone = timezone(-shift if match["sign"] == "-" else shift)
+        parsed = datetime(
+            int(match["year"]),
+            int(match["month"]),
+            int(match["day"]),
+            int(match["hour"]),
+            int(match["minute"]),
+            int(match["second"]),
+            microsecond,
+            tzinfo=zone,
+        )
         # OverflowError: the UTC instant is outside years 1 to 9999 (for example 0001-01-01+10:00).
         return parsed.astimezone(UTC)
     except (ValueError, OverflowError):

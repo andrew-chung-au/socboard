@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event, func, insert, select
 from test_auth_api import OPEN_ROUTES, _every_route
 
-from socboard import database, ingest, scoring
+from socboard import auth, database, ingest, scoring
 from socboard.errors import INVALID_API_KEY, VALIDATION_MESSAGE
 from socboard.ids import to_public_id
 from socboard.models import Alert, Asset, AuditEntry, Case
@@ -30,7 +30,7 @@ HEADERS = {"X-API-Key": KEY}
 ENV_NAME = "SOCBOARD_INGEST_API_KEY"
 
 VALIDATION_BODY = {"code": "validation_error", "message": VALIDATION_MESSAGE}
-KEY_BODY = {"code": INVALID_API_KEY, "message": ingest.INVALID_API_KEY_MESSAGE}
+KEY_BODY = {"code": INVALID_API_KEY, "message": auth.INVALID_API_KEY_MESSAGE}
 FIELDS = ["source", "type", "asset", "timestamp", "title", "description"]
 TEXT_FIELDS = ["source", "type", "asset", "title", "description"]
 
@@ -174,6 +174,7 @@ def test_rfc_3339_forms_are_accepted(ingest_client, timestamp):
         "2026-11-12T24:00:00Z",
         "2026-11-12T09:00:60Z",
         "2026-11-12T09:00:00+24:00",
+        "2026-11-12T09:00:00+10:75",
         "0000-01-01T00:00:00Z",
         "10000-01-01T00:00:00Z",
         "0001-01-01T00:00:00+10:00",
