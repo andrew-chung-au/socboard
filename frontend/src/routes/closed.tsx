@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/soc/AppShell";
 import { CaseTable } from "@/components/soc/CaseTable";
+import { useSession } from "@/lib/auth";
 import { useNow } from "@/lib/useNow";
 import { api } from "@/services";
 
@@ -23,7 +24,12 @@ export const Route = createFileRoute("/closed")({
 
 function ClosedPage() {
   const now = useNow(30_000);
-  const q = useQuery({ queryKey: ["closed"], queryFn: () => api.getClosedCases(), retry: false });
+  const { session } = useSession();
+  const isLead = session?.user.role === "lead";
+  // Lead-only: the backend answers an Analyst with 403, so the list is not requested.
+  const q = useQuery({ queryKey: ["closed"], queryFn: () => api.getClosedCases(), enabled: isLead, retry: false });
+  if (!isLead)
+    return <div className="rounded-md border border-dashed bg-card p-8 text-center text-muted-foreground">Only a Lead can see closed cases.</div>;
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3">

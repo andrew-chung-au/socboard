@@ -60,8 +60,10 @@ function CasePage() {
   const me = session?.user;
   const qc = useQueryClient();
   const caseQ = useQuery({ queryKey: ["case", id], queryFn: () => api.getCase(id), retry: false });
-  const auditQ = useQuery({ queryKey: ["audit", id], queryFn: () => api.getAudit(id), retry: false });
-  const usersQ = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers(), enabled: me?.role === "lead", retry: false });
+  const isLead = me?.role === "lead";
+  // The audit trail is Lead-only (the backend answers an Analyst with 403), so it is not requested.
+  const auditQ = useQuery({ queryKey: ["audit", id], queryFn: () => api.getAudit(id), enabled: isLead, retry: false });
+  const usersQ = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers(), enabled: isLead, retry: false });
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
@@ -100,7 +102,6 @@ function CasePage() {
     );
 
   const c: CaseDetail = caseQ.data;
-  const isLead = me?.role === "lead";
   const isOwner = !!c.owner && c.owner.id === me?.id;
   const closed = c.status === "Closed";
   const canClaim = !c.owner && !closed;
@@ -183,6 +184,7 @@ function CasePage() {
             )}
           </Panel>
 
+          {isLead && (
           <Panel title="Audit trail">
             {auditQ.isPending ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
@@ -215,6 +217,7 @@ function CasePage() {
               </div>
             )}
           </Panel>
+          )}
         </div>
 
         <aside>
