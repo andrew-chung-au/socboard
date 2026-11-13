@@ -10,10 +10,12 @@ closes the session, which rolls back anything left uncommitted.
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import Request
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session
+from sqlalchemy.util import asbool
 
 from socboard import database
 
@@ -28,14 +30,32 @@ class MissingDatabaseError(RuntimeError):
 def _refuse_missing_sqlite_file(url: URL) -> None:
     """SQLite creates a missing file on first connect; a request must not do that (#104).
 
-    Only a SQLite URL with a file path is checked; `:memory:`, no file name, a `file:` URI and
-    every other backend go to the driver unchanged.
+    Only a SQLite URL that names a file is checked. `uri` is read the way the SQLite dialect reads
+    it (`asbool`), so `?uri=false` is a plain path. With `uri` on, a name starting `file:` is a
+    SQLite URI: the path is what follows `file:` (an `//authority` dropped, percent-decoded), and
+    `mode=memory`, `mode=ro` and `mode=rw` go to the driver unchanged (memory has no file; `ro` and
+    `rw` fail on a missing file without creating one). `:memory:`, no file name and every other
+    backend go to the driver unchanged too.
     """
-    if url.get_backend_name() != "sqlite" or url.query.get("uri"):
+    if url.get_backend_name() != "sqlite":
         return
     name = url.database
+    if not name:
+        return
+    options = url.query
+    if asbool(_last(options.get("uri", "false"))) and name.startswith("file:"):
+        if _last(options.get("mode", "rwc")) != "rwc":
+            return
+        name = name[len("file:") :]
+        if name.startswith("//"):
+            name = "/" + name[2:].partition("/")[2]
+        name = unquote(name)
     if name and name != ":memory:" and not Path(name).exists():
         raise MissingDatabaseError(MISSING_DATABASE_MESSAGE)
+
+
+def _last(value: str | tuple[str, ...]) -> str:
+    return value if isinstance(value, str) else value[-1]
 
 
 class DatabaseState:

@@ -102,6 +102,77 @@ def test_an_existing_file_works_as_before(app_database, real_client):
     assert response.status_code == 200
 
 
+def _state_for(raw):
+    from socboard import database
+
+    return sessions.DatabaseState(database.parse_url(raw))
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param("{path}?uri=false", id="uri=false"),
+        pytest.param("{path}?uri=0", id="uri=0"),
+        pytest.param("file:{path}?uri=true", id="file URI"),
+        pytest.param("file:{path}?uri=true&mode=rwc", id="file URI mode=rwc"),
+        pytest.param("file://{path}?uri=true", id="file URI with empty authority"),
+        pytest.param("file:{encoded}?uri=true", id="file URI percent-encoded"),
+    ],
+)
+def test_a_missing_file_is_refused_in_every_spelling_and_not_created(tmp_path, form):
+    path = tmp_path / "a b.db"
+    encoded = (tmp_path / "a%20b.db").as_posix()
+    state = _state_for("sqlite:///" + form.format(path=path.as_posix(), encoded=encoded))
+    with pytest.raises(sessions.MissingDatabaseError) as error:
+        state.engine()
+    assert str(error.value) == sessions.MISSING_DATABASE_MESSAGE
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_existing_file_through_a_file_uri_is_accepted(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "there.db"
+    sqlite3.connect(path).close()
+    state = _state_for("sqlite:///file:" + path.as_posix() + "?uri=true")
+    try:
+        with state.engine().connect():
+            pass
+    finally:
+        state.dispose()
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param("sqlite:///file::memory:?cache=shared&uri=true", id="shared memory"),
+        pytest.param("sqlite:///:memory:", id="plain memory"),
+        pytest.param("sqlite:///file:{path}?mode=memory&uri=true", id="missing file, mode=memory"),
+    ],
+)
+@pytest.mark.filterwarnings("ignore:Selection of the SingletonThreadPool:DeprecationWarning")
+def test_memory_forms_are_accepted_and_create_no_file(tmp_path, form):
+    state = _state_for(form.format(path=(tmp_path / "m.db").as_posix()))
+    try:
+        with state.engine().connect():
+            pass
+    finally:
+        state.dispose()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_read_only_file_uri_of_a_missing_file_fails_in_the_driver_and_creates_none(tmp_path):
+    from sqlalchemy.exc import OperationalError
+
+    state = _state_for("sqlite:///file:" + (tmp_path / "r.db").as_posix() + "?mode=ro&uri=true")
+    try:
+        with pytest.raises(OperationalError):
+            state.engine().connect()
+    finally:
+        state.dispose()
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_a_url_that_is_not_sqlite_is_not_checked(tmp_path):
     from sqlalchemy.engine import make_url
 
