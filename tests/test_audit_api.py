@@ -273,7 +273,7 @@ def test_the_data_layer_refuses_to_change_or_remove_an_entry_after_a_journey(jou
 WRITE_CALLS = {"update", "delete", "merge", "bulk_update_mappings", "bulk_save_objects"}
 RAW_SQL_CALLS = {"text", "exec_driver_sql", "execute"}
 # The guard and the model name the table to refuse changes to it; migrations are not code paths.
-EXEMPT = {"audit_guard.py", "models.py"}
+EXEMPT = {"audit_guard.py", "models.py"}  # top-level only: compared as a path under socboard/
 
 
 def _names_model(node):
@@ -312,7 +312,7 @@ def test_no_code_path_updates_or_deletes_an_audit_entry():
     offenders = []
     for path in sorted(PACKAGE.rglob("*.py")):
         relative = path.relative_to(PACKAGE)
-        if relative.parts[0] == "migrations" or path.name in EXEMPT:
+        if relative.parts[0] == "migrations" or relative.as_posix() in EXEMPT:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         offenders += [f"{relative}:{node.lineno}" for node in _audit_writers(tree)]
