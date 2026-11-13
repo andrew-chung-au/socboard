@@ -164,10 +164,7 @@ def test_absolute_path_is_refused(client, site):
 
 def test_symlink_out_of_dist_is_refused(client, site):
     link = site / "assets" / "link.js"
-    try:
-        os.symlink(site.parent.parent / "secret.txt", link)
-    except OSError:
-        pytest.skip("symlinks are not available here")
+    os.symlink(site.parent.parent / "secret.txt", link)
     assert_no_leak(client.get("/assets/link.js"))
     assert client.get("/assets/link.js").status_code == 404
 
