@@ -193,15 +193,16 @@ backend-run: ## Start the backend in the background on localhost (SOCBOARD_PORT,
 	@nohup sh -c 'exec .venv/bin/python -m socboard.server' > .scratch/backend.log 2>&1 & echo $$! > .scratch/backend.pid
 	@pid=$$(cat .scratch/backend.pid); \
 	alive() { kill -0 "$$pid" 2>/dev/null && ! grep -q '^State:[[:space:]]*Z' "/proc/$$pid/status" 2>/dev/null; }; \
-	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do \
+	end=$$(( $$(date +%s) + 30 )); \
+	while [ "$$(date +%s)" -lt "$$end" ]; do \
 		if ! alive; then echo "backend-run: the server exited before it answered /api/health; last lines of .scratch/backend.log:"; tail -n 20 .scratch/backend.log; rm -f .scratch/backend.pid; exit 1; fi; \
 		if .venv/bin/python scripts/backend_probe.py health && alive; then echo "backend started (pid $$pid); log: .scratch/backend.log"; exit 0; fi; \
 		sleep 1; \
 	done; \
 	echo "backend-run: no healthy answer from /api/health within 30 s; last lines of .scratch/backend.log:"; tail -n 20 .scratch/backend.log; \
 	kill "$$pid" 2>/dev/null; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$$pid" 2>/dev/null || break; sleep 1; done; \
-	if kill -0 "$$pid" 2>/dev/null; then echo "backend (pid $$pid) did not stop within 10 s; not forced; pid file kept"; exit 1; fi; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do alive || break; sleep 1; done; \
+	if alive; then echo "backend (pid $$pid) did not stop within 10 s; not forced; pid file kept"; exit 1; fi; \
 	rm -f .scratch/backend.pid; exit 1
 
 backend-stop: ## Stop the backend started by backend-run
