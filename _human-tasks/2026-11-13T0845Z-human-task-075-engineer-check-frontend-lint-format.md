@@ -148,13 +148,13 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | | |
-| 2 | | |
-| 3 | | |
-| 4 | | |
-| 5 | | |
-| 6 | | |
-| 7 | | |
+| 1 | Pass | Run 2026-11-13 in a separate clone at `main` `5d0ffa6`. The probe file showed as `?? frontend/src/lint-probe.ts` and nothing else. |
+| 2 | Pass | `make frontend-lint` reported `1:22 error Replace 'x' with "x" prettier/prettier` for the probe file; the same with `ARGS=--fix`, and the file stayed single-quoted (`ARGS` ignored). |
+| 3 | Pass | After deleting the probe, `git status --short` printed nothing. |
+| 4 | Pass | `make frontend-lint` and `cd frontend && bun run lint` both ended `395 problems (394 errors, 1 warning)` and `script "lint" exited with code 1`; `make` added only its own `Error 1` line. |
+| 5 | Pass | `make frontend-format` on a throwaway branch rewrote 18 files: 7 test files under `frontend/src/test/` (`contract-paths`, `error-page-router`, `guardrails`, `http-service`, `mock-service`, `real-client`, `screen-behaviour`), `frontend/AGENTS.md`, `frontend/README.md`, `frontend/src/routes/README.md` and 8 source files. It did NOT change `frontend/package.json`. `git restore frontend` left a clean tree and the branch was deleted. This answers Reviewer finding 1 (the warning on the `AGENTS.md` line): the target does rewrite files the weakened-test guard watches. #31's Engineer will meet the same churn. |
+| 6 | Pass | In a clean clone, `make frontend-lint` and `make frontend-format` printed the two exact missing-tool messages, each followed by `Error 1` and exit 2; bun did not start. |
+| 7 | Pass | `make verify` ended `PASS: Tests`, `PASS: no whitespace errors`, `No test files changed.`, `VERIFY: PASS`. Neither lint nor format is among its steps. |
 
 ## Risk
 
