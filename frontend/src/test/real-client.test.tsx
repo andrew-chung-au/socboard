@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { routeTree } from "@/routeTree.gen";
@@ -235,6 +235,21 @@ describe("controls the role cannot use are hidden", () => {
 
     expect(await screen.findByText("Only a Lead can see closed cases.", undefined, WAIT)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  }, TEST_TIMEOUT);
+
+  it.each<[string, User, string, string]>([
+    ["an Analyst", ANA, "Queue", "Closed cases"],
+    ["a Lead", LEE, "Closed cases", "Queue"],
+  ])("%s viewing a Closed case gets the back link %s", async (_who, user, shown, notShown) => {
+    signIn(user);
+    stubServer(() => makeCase({ status: "Closed", closingReason: "false_positive" }));
+    renderAt(`/cases/${ID}`);
+
+    await screen.findByRole("heading", { name: TITLE }, WAIT);
+    // Scoped to <main>: the header nav has its own "Queue" link.
+    const page = within(screen.getByRole("main"));
+    expect(page.getByRole("link", { name: shown })).toBeInTheDocument();
+    expect(page.queryByRole("link", { name: notShown })).toBeNull();
   }, TEST_TIMEOUT);
 
   it("a Lead sees the Closed link and the audit trail", async () => {

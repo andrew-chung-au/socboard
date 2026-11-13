@@ -111,7 +111,7 @@ function CasePage() {
 
   return (
     <div className="space-y-3">
-      <BackLink closed={closed} />
+      <BackLink closed={closed && isLead} />
 
       <div className="flex flex-wrap items-start gap-3">
         <SeverityBadge severity={c.severity} className="mt-0.5" />
