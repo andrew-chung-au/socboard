@@ -114,6 +114,7 @@ Treat partial output as unverified. Relaunch the role with a note of what's alre
    - Confirm nothing started during the issue is still running (`make <name>-stop` for each).
    - Confirm temporary system changes are undone, or that the human chose to keep them.
    - If a `.scratch/` script is worth keeping, propose it as a test or a make target at the decision point (step 7). Nothing in `.scratch/` survives cleanup.
+   - Before it, list `.scratch/`; copy or commit any PM draft, sweep entry or task file a person has still to see, because the command deletes everything in it.
    - Run `make clean-scratch`. It empties `.scratch/`, including session logs and test tokens, and refuses while a started process is still running. Record in the summary that it ran.
 9. Close the issue. Only the orchestrator closes issues: after QA posts PASS on an `approved` issue, or as not planned after the human approves that closure in a backlog review, whatever the label. A Light issue is closed once its Definition of done is met, with no QA PASS. Post the Close comment (`procedures/orchestrator-comments.md`), then run `make issue-close N=<number>`.
 10. The human reviews the diff and pushes (see Commits).
