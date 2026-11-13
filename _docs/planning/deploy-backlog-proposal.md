@@ -1,6 +1,6 @@
 # Deploy phase: backlog proposal (draft, for the human's approval)
 
-**Human ruling, 2026-11-13:** the recommendations in section 6 (questions 1 to 5) are approved: trigger functions for the Postgres audit rule, in-process login and ingest limits, frontend settings as build arguments, lanes A and C may run in parallel, D2 is Heavy. Regions: the deployment runs in `us-east-1`; the account and organisation are based in `ap-southeast-2`. Wave 1 (D1 to D5) is filed from this list; D6 onward is written in full after wave 1 is under way. Spec notes A and B (section 7) are read as approved; `_docs/specs.md` is protected, so the exact diff is for the human to commit.
+**Human ruling, 2026-11-13:** the recommendations in section 6 (questions 1 to 5) are approved: trigger functions for the Postgres audit rule, in-process login and ingest limits, frontend settings as build arguments, lanes A and C may run in parallel, D2 is Heavy. Region: the deployment runs in `us-east-1`; it is the human's own AWS account (home region `ap-southeast-2`) and the human has used `us-east-1` before, so no organisation policy is expected to block it. Wave 1 is filed from this list: D1 is #139, D2 is #140, D3 is #141, D4 is #142, D5 is #143 (no label added; the human approves each after grooming); D6 onward is written in full after wave 1 is under way. Spec notes A and B (section 7) are read as approved; `_docs/specs.md` is protected, so the exact diff is for the human to commit.
 
 PM-style proposal. **No issue is filed and no roadmap, spec or decision file is changed by this document.** It reviews `roadmap-3-deploy.md` against `main` at `5d0ffa6` (Core #7 to #21 closed; #22 re-groomed but its new body not yet confirmed), proposes changes to that roadmap, drafts the issues, and states what #22 means for them. Issue bodies are written in full only after the human approves the list and answers the questions in section 6. Numbers are `D1` to `D23` until the tracker gives them real ones.
 
@@ -90,7 +90,7 @@ Tier is proposed, not final. Model: **S** stronger, **M** middle, **W** weaker (
 ### Lane A: the application
 
 **D1 Record the deploy decision (Heavy, docs; roadmap 1).** Who: PM drafts, human approves. Model S.
-- A record in `_docs/decisions/` holds the seven decisions of 2026-11-12 with reasons, the regions (deployment `us-east-1`; account and organisation based in `ap-southeast-2`), and the accepted risks, plus the two decisions of section 6 (Postgres audit approach, rate-limit design). Status line `approved` only after the human says so; `make decisions` lists it.
+- A record in `_docs/decisions/` holds the seven decisions of 2026-11-12 with reasons, the region (deployment `us-east-1`; the human's own account, home region `ap-southeast-2`), and the accepted risks, plus the two decisions of section 6 (Postgres audit approach, rate-limit design). Status line `approved` only after the human says so; `make decisions` lists it.
 - It states what Terraform state and Secrets Manager hold and what they must never hold.
 
 **D2 Serve the built frontend from FastAPI (Heavy: a new interface; roadmap 2).** Model M.
@@ -177,7 +177,7 @@ All use `VERIFY:` markers for unverified AWS details; CI runs `fmt` and `validat
 - Pull requests that touch `terraform/` run `fmt -check`, `init -backend=false` and `validate` without credentials, then a read-only `plan` shown on the pull request; forks get no role. The Terraform version is pinned.
 
 **D19 First apply, by the human (checklist; roadmap 16).** Who: human; Eng drafts the checklist.
-- Before any apply: confirm no organisation policy blocks `us-east-1` (the account and organisation are based in `ap-southeast-2`), and that the provider and the state backend both name `us-east-1`. Then account and budget notifications, GitHub Environments (`infra` needs a named reviewer and administrators not exempt), the three applies in order, the secret created, the IP and hostname noted, and a second `plan` shows no changes.
+- Before any apply: check that the provider and the state backend both name `us-east-1` (the account's home region is `ap-southeast-2`, so a default region setting in the AWS CLI or console can point elsewhere). Then account and budget notifications, GitHub Environments (`infra` needs a named reviewer and administrators not exempt), the three applies in order, the secret created, the IP and hostname noted, and a second `plan` shows no changes.
 
 ### Join
 
