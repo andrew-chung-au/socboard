@@ -674,7 +674,8 @@ def test_a_name_beside_a_comment_is_refused(seeded, sql):
         "PRAGMA /* x */ ignore_check_constraints_log = ON",
         "PRAGMA /* x */ writable_schema2 = ON",
         "PRAGMA main./**/xwritable_schema = ON",
-        "SELECT 1 /* audit_entries */ -- audit_entries_archive",
+        "SELECT 1 /* audit_entries_archive */",
+        "SELECT 1 /* audit_entries_archive */ -- sqlite_sequence_archive",
         "DROP TABLE /* x */ audit_entries_archive",
         "DROP TRIGGER/**/audit_entries_no_update_log",
         "DELETE FROM /* x */ sqlite_sequence_archive",
@@ -683,3 +684,14 @@ def test_a_name_beside_a_comment_is_refused(seeded, sql):
 )
 def test_near_misses_behind_comments_are_still_allowed(sql):
     assert not refused_statement(DDL(sql))
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # a comment that names the table is refused: the raw text is matched as well as the comment-stripped text
+        "SELECT 1 /* audit_entries */ -- audit_entries_archive",
+    ],
+)
+def test_a_comment_that_names_the_table_is_refused(sql):
+    assert refused_statement(DDL(sql))
