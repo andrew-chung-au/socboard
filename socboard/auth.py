@@ -15,6 +15,8 @@ a hash or a submitted username.
 The decision record is `_docs/decisions/2026-11-12T2255Z-auth-tokens.md`.
 """
 
+import hashlib
+import hmac
 import logging
 import os
 import time
@@ -23,13 +25,14 @@ from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from socboard import passwords, tokens
 from socboard.errors import (
     FORBIDDEN,
+    INVALID_API_KEY,
     INVALID_CREDENTIALS,
     UNAUTHORIZED,
     ApiError,
@@ -48,6 +51,8 @@ SECRET_MESSAGE = f"{SECRET_ENV_NAME} must be set to at least {MIN_SECRET_LENGTH}
 UNAUTHORIZED_MESSAGE = "Your session has expired. Please sign in again."
 FORBIDDEN_MESSAGE = "You do not have permission to do this."
 INVALID_CREDENTIALS_MESSAGE = "Invalid username or password."
+INVALID_API_KEY_MESSAGE = "A valid API key is required."
+KEY_HEADER = "X-API-Key"
 
 ROLE_LEAD = "lead"
 
@@ -87,7 +92,32 @@ def invalid_credentials() -> ApiHTTPException:
     return ApiHTTPException(401, INVALID_CREDENTIALS, INVALID_CREDENTIALS_MESSAGE)
 
 
+def invalid_api_key() -> ApiHTTPException:
+    return ApiHTTPException(401, INVALID_API_KEY, INVALID_API_KEY_MESSAGE)
+
+
 bearer_scheme = HTTPBearer(auto_error=False)
+api_key_header = APIKeyHeader(name=KEY_HEADER, auto_error=False)
+
+
+def _digest(raw: bytes) -> bytes:
+    return hashlib.sha256(raw).digest()
+
+
+def require_api_key(
+    request: Request, provided: Annotated[str | None, Depends(api_key_header)]
+) -> None:
+    """Return if the header holds the ingest key, else raise 401 `invalid_api_key` (#14).
+
+    `api_key_header` gives None for a missing or empty header. Starlette decodes header bytes as
+    Latin-1, so encoding back gives the bytes the client sent; the key is compared as UTF-8.
+    """
+    expected = request.app.state.ingest_api_key
+    if expected is None or provided is None:
+        raise invalid_api_key()
+    sent = _digest(provided.encode("latin-1", "replace"))
+    if not hmac.compare_digest(sent, _digest(expected.encode("utf-8"))):
+        raise invalid_api_key()
 
 
 def current_user(
