@@ -227,6 +227,23 @@ If different: stop and tell the orchestrator what was printed.
 Refusal test: terminal A. If the rule fails the backend would be reachable on every address or the target would print `backend started`.
 Risk: if `SOCBOARD_HOST=0.0.0.0` were accepted, a backend would listen on all addresses; run `make backend-stop` at once.
 
+### Step 8a: the other allowed hosts, `::1` and `localhost`
+
+The health URL puts an IPv6 host in brackets, and `localhost` can resolve to more than one address. Run each host on its own, stopping the backend in between:
+
+```
+make backend-run SOCBOARD_HOST=::1
+curl -s http://[::1]:8000/api/health
+make backend-stop
+make backend-run SOCBOARD_HOST=localhost
+curl -s http://localhost:8000/api/health
+make backend-stop
+```
+
+Expected for each host: `backend started (pid N); log: .scratch/backend.log` within a few seconds, the `curl` prints `{"status":"ok"}`, and `backend stopped`. If the dev container has no IPv6 loopback, the `::1` run fails at start-up with the server's own error and the log tail; write that down as "no IPv6 here" instead of a fail.
+If different: stop and tell the orchestrator what was printed.
+Risk: starts and stops one backend on port 8000 per host.
+
 ### Step 9: the 14 backend-target checks from #10
 
 Repeat the human run from #10 and compare with the results recorded there: the QA comment on #10 (https://github.com/andrew-chung-au/socboard/issues/10#issuecomment-6812733808, section "HUMAN-VERIFIED backend targets (14 checks)"), #10's Close comment, and `_session-summaries/2026-11-12T0241Z-issue-010-orchestrator-backend-skeleton.md` (Commands to validate: run, then stop). Read those first; the results named there are:
@@ -279,7 +296,7 @@ cp Makefile .scratch/Makefile.80.bak
 
 Late failure: in the `backend-run` recipe replace `exec .venv/bin/python -m socboard.server` with `sleep 5; exit 1`. Run `make backend-run`. Expected: after about 5 seconds, `the server exited before it answered /api/health`, the log tail (empty log is fine), exit non-zero, no pid file.
 
-Timeout: replace the same text with `sleep 600`. Run `make backend-run`. Expected: after about 30 seconds, `no healthy answer from /api/health within 30 s`, then the target stops that `sleep` (about a second), exit non-zero, no pid file. (Your own `sleep 600` is the process being killed.)
+Timeout: replace the same text with `sleep 600`. Run `make backend-run`. Expected: after 30 to 32 seconds (the wait runs on a clock; the last round can add up to about 2 seconds), `no healthy answer from /api/health within 30 s`, then the target stops that `sleep` (about a second), exit non-zero, no pid file. (Your own `sleep 600` is the process being killed.)
 
 Restore:
 
@@ -316,6 +333,7 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 | 6 existing refusals, stale pid | | |
 | 7 port in use (two listeners) | | |
 | 8 settings refused | | |
+| 8a hosts `::1` and `localhost` | | |
 | 9 the 14 checks from #10 | | |
 | 10 make test, make verify | | |
 | 11 diff read; optional edits | | |

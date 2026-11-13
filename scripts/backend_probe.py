@@ -39,7 +39,7 @@ def healthy(host: str, port: int) -> bool:
     netloc = f"[{host}]" if ":" in host else host
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via a proxy
     try:
-        with opener.open(f"http://{netloc}:{port}/api/health", timeout=2) as response:
+        with opener.open(f"http://{netloc}:{port}/api/health", timeout=1) as response:
             return response.status == 200 and json.loads(response.read(1024)) == {"status": "ok"}
     except (OSError, ValueError):  # refused, 404 (HTTPError), timeout, bad JSON
         return False
