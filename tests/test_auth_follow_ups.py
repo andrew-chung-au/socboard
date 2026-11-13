@@ -342,9 +342,9 @@ def test_mode_memory_with_an_existing_file_stays_in_memory(tmp_path):
     assert [entry.name for entry in tmp_path.iterdir()] == ["a.db"]
 
 
-# Accepted costs of the rule (human ruling): SQLite lets a later `mode` only narrow the access,
-# so the appended `mode=rw` refuses an oddly encoded `ro` and turns an oddly encoded `memory`
-# into a read-write open of the named file.
+# Accepted costs of the rule (human ruling), as measured: after `ro` SQLite refuses a later `rw`,
+# so the appended `mode=rw` refuses an oddly encoded `ro`; after `memory` a later `rw` opens the
+# named file read-write, so an oddly encoded `memory` becomes a read-write open of that file.
 def test_an_oddly_encoded_read_only_mode_is_refused_and_creates_nothing(tmp_path):
     form = "sqlite:///file:{path}?uri=true&mod%2565=ro"
     path = tmp_path / "a.db"
