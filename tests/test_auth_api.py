@@ -1,7 +1,7 @@
 """Login, `current_user`, the role checks and `GET /api/users` over HTTP (#13).
 
-`real_app` is `create_app()` exactly; `app` adds the test-only routes of `backend_support.py`
-(which use the real dependencies). Both run on a copy of the test database with the two test
+`real_app` is `create_app()` exactly; `app` adds the test-only routes of `backend_support.py`.
+Both run on a copy of the test database with the two test
 users, and `SOCBOARD_TOKEN_SECRET` is set by `tests/conftest.py`.
 """
 
