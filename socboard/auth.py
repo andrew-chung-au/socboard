@@ -46,7 +46,10 @@ logger = logging.getLogger("socboard.auth")
 
 SECRET_ENV_NAME = "SOCBOARD_TOKEN_SECRET"
 MIN_SECRET_LENGTH = 32
-SECRET_MESSAGE = f"{SECRET_ENV_NAME} must be set to at least {MIN_SECRET_LENGTH} characters."
+SECRET_MESSAGE = (
+    f"{SECRET_ENV_NAME} must be set to at least {MIN_SECRET_LENGTH} characters, "
+    "not counting leading and trailing spaces."
+)
 
 UNAUTHORIZED_MESSAGE = "Your session has expired. Please sign in again."
 FORBIDDEN_MESSAGE = "You do not have permission to do this."
@@ -65,7 +68,7 @@ def resolve_token_secret(environ: Mapping[str, str] | None = None) -> str:
     """The signing secret from `SOCBOARD_TOKEN_SECRET`. There is no default."""
     source = os.environ if environ is None else environ
     secret = source.get(SECRET_ENV_NAME, "")
-    if len(secret) < MIN_SECRET_LENGTH:
+    if len(secret.strip()) < MIN_SECRET_LENGTH:
         raise ConfigError(SECRET_MESSAGE)
     return secret
 
@@ -157,6 +160,9 @@ def require_lead(user: Annotated[CurrentUser, Depends(current_user)]) -> Current
 
 
 def _find_user(session: Session, username: str) -> UserRow | None:
+    # A NUL (Postgres refuses it in text) is no such user, before any lookup.
+    if "\x00" in username:
+        return None
     try:
         # A lone surrogate from a JSON escape cannot be bound by the driver: no such user.
         username.encode("utf-8")
