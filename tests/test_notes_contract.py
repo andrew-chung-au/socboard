@@ -2,8 +2,8 @@
 
 Compared: the request body (`NoteRequest`), the 201 body (`Note`), the 401, 404, 409 and 422 error
 bodies, the response statuses, the security and the operation id. The 5,000-character limit is
-not in the contract, so the generated `NoteRequest` must carry no length keyword (the limit is a
-validator); a change that adds `maxLength` shows up here as a difference from the contract.
+`maxLength` in both documents (`max_length` on the field), and `maxLength` is not ignored by the
+normaliser, so a limit on one side only shows up here as a difference.
 """
 
 import pytest
@@ -46,11 +46,13 @@ def body_schema(operation):
     return operation["requestBody"]["content"]["application/json"]["schema"]
 
 
-def test_the_request_body_equals_the_contract_and_has_no_length_keyword(contract, generated, ops):
+def test_the_request_body_equals_the_contract_and_the_max_length_is_5000(contract, generated, ops):
     contract_op, generated_op = ops
     assert compare_schemas(contract, body_schema(contract_op), generated, body_schema(generated_op)) == []
-    text = canonical(generated, body_schema(generated_op))["properties"]["text"]
-    assert text == {"type": "string"}
+    generated_text = canonical(generated, body_schema(generated_op))["properties"]["text"]
+    contract_text = canonical(contract, body_schema(contract_op))["properties"]["text"]
+    assert generated_text["maxLength"] == contract_text["maxLength"] == 5000
+    assert generated_text == contract_text == {"type": "string", "maxLength": 5000}
 
 
 def test_the_201_response_equals_the_contract(contract, generated, ops):

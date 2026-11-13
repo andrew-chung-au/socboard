@@ -59,7 +59,7 @@ info:
     | Close without a reason | 422 | `reason_required` |
     | Note empty after trimming | 422 | `empty_note` |
     | Reassign target is a Lead | 422 | `invalid_target` (new) |
-    | Request fails schema validation (missing `to`, a wrong type, an unknown enum value, a missing ingest field, a `status` on the closed list other than `Closed` or absent, a body that is not JSON) | 422 | `validation_error` (new) |
+    | Request fails schema validation (missing `to`, a wrong type, an unknown enum value, a missing ingest field, a note over 5,000 characters, a `status` on the closed list other than `Closed` or absent, a body that is not JSON) | 422 | `validation_error` (new) |
 
     Three refusals happen outside any operation (FastAPI and #10 produce them for every route).
     They are documented here once, not on each operation (see `components/responses`
@@ -103,7 +103,9 @@ info:
     - For a route with a body, a schema-invalid body gives the generic 422 `validation_error`
       BEFORE the 404, the owner 403, the 409s and the domain 422s. So an Analyst or a Lead who
       sends a bad body to an unknown case gets 422, not 404.
-    - A body that is not parseable JSON gives 422 `validation_error` even with no token.
+    - A body that is not parseable JSON gives 422 `validation_error` even with no token. The
+      reason: FastAPI reads the body before it runs the token dependency, so for a body that is
+      not JSON the 422 comes before the 401, and "401 first" holds for valid JSON.
     - On `ingestAlert` the API key check is a route dependency: a missing or wrong key gives 401
       `invalid_api_key` before any body validation, provided the body parses as JSON. A body that
       is not parseable JSON gives 422 `validation_error` even without a key.
@@ -313,6 +315,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/CaseNotFound"
+        "422":
+          $ref: "#/components/responses/PathParameterValidationError"
   /cases/{id}/claim:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -355,6 +359,8 @@ paths:
                   value:
                     code: already_claimed
                     message: Case is already owned.
+        "422":
+          $ref: "#/components/responses/PathParameterValidationError"
   /cases/{id}/transition:
     parameters:
       - $ref: "#/components/parameters/CaseId"
@@ -577,6 +583,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/CaseNotFound"
+        "422":
+          $ref: "#/components/responses/PathParameterValidationError"
   /users:
     get:
       operationId: listUsers
@@ -710,6 +718,20 @@ components:
         The request fails schema validation. Code `validation_error` (new; the generic 422 code).
         Checked after 401 and after a case-free role check, and before the 404, owner 403, 409 and
         domain 422 checks.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+          examples:
+            validationError:
+              value:
+                code: validation_error
+                message: The request is not valid.
+    PathParameterValidationError:
+      description: |
+        Code `validation_error`. The route declares this 422 because FastAPI adds a 422 to any
+        route with a path parameter. A case id is an opaque string, which cannot fail validation,
+        so the server does not return it today.
       content:
         application/json:
           schema:
@@ -960,9 +982,13 @@ components:
       properties:
         text:
           type: string
+          maxLength: 5000
           description: >-
-            Plain text, no schema minimum length. Emptiness after trimming is a domain rule
-            (`empty_note`) checked in the handler.
+            Plain text, at most 5,000 characters. The limit counts characters (code points, as
+            JSON Schema counts them), not bytes. It is a schema rule: a longer text is 422
+            `validation_error`, checked before the 404 and the 409. There is no schema minimum
+            length; emptiness after trimming is a domain rule (`empty_note`) checked in the
+            handler.
     IngestRequest:
       type: object
       required: [source, type, asset, timestamp, title, description]

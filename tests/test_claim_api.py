@@ -228,9 +228,7 @@ def test_the_claim_route_matches_the_contract(real_app):
     generated_op = generated["paths"]["/api/cases/{id}/claim"]["post"]
     assert generated_op["operationId"] == contract_op["operationId"] == "claimCase"
     assert "requestBody" not in generated_op
-    # FastAPI documents a 422 for the path parameter; a string id never fails validation.
-    assert set(contract_op["responses"]) == {"200", "401", "404", "409"}
-    assert set(generated_op["responses"]) == {"200", "401", "404", "409", "422"}
+    assert set(generated_op["responses"]) == set(contract_op["responses"]) == {"200", "401", "404", "409", "422"}
 
     def schema(op, status):
         return op["responses"][status]["content"]["application/json"]["schema"]
