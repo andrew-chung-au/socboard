@@ -1,8 +1,12 @@
-"""Read endpoints for cases: `GET /api/queue` and `GET /api/cases/{id}` (#15).
+"""Case endpoints: `GET /api/queue` and `GET /api/cases/{id}` (#15), `POST /api/cases/{id}/claim` (#16).
 
-Both need a valid bearer token (`current_user`, a route dependency, so 401 comes before 404) and
-write nothing: no commit, no audit entry. Alert text is returned as stored; escaping is the
-frontend's job.
+All need a valid bearer token (`current_user`, a route dependency, so 401 comes before 404). The
+two reads write nothing: no commit, no audit entry. Alert text is returned as stored; escaping is
+the frontend's job.
+
+A claim is one conditional UPDATE (data-model decision record). A SQLite lock timeout while
+waiting for another writer is not mapped: it reaches the generic 500 `internal_error` and the
+session closes without committing, since the contract has no code for it.
 
 Queue order is a backend rule: severity by an explicit rank (Critical first), then the alert's own
 timestamp oldest first, then case id ascending. The rank is a SQL CASE built from the constant
@@ -17,14 +21,21 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import case as sql_case
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from socboard.audit import append_audit
 from socboard.auth import CurrentUser, current_user
-from socboard.domain import SEVERITIES, STATUS_CLOSED
-from socboard.errors import CASE_CLOSED, EMPTY_NOTE, NOT_FOUND, ApiError, ApiHTTPException
+from socboard.domain import ACTION_CLAIMED, SEVERITIES, STATUS_CLOSED
+from socboard.errors import (
+    ALREADY_CLAIMED,
+    CASE_CLOSED,
+    EMPTY_NOTE,
+    NOT_FOUND,
+    ApiError,
+    ApiHTTPException,
+)
 from socboard.ids import from_public_id, to_public_id
 from socboard.models import Alert, Case, Note
 from socboard.models import User as UserRow
@@ -37,9 +48,11 @@ from socboard.sessions import get_session
 SEVERITY_RANK = {name: rank for rank, name in enumerate(reversed(SEVERITIES))}
 
 NOT_FOUND_MESSAGE = "Case not found."
+CASE_CLOSED_MESSAGE = "Closed cases cannot be claimed."
+ALREADY_CLAIMED_MESSAGE = "Case is already owned."
 
 # Notes (#18)
-CASE_CLOSED_MESSAGE = "Notes cannot be added to a closed case."
+NOTE_CASE_CLOSED_MESSAGE = "Notes cannot be added to a closed case."
 EMPTY_NOTE_MESSAGE = "Note text cannot be empty."
 
 
@@ -70,9 +83,10 @@ def _case_query():
 
 
 def create_cases_router(prefix: str) -> APIRouter:
-    """The queue and the case read. Neither is on the router that documents a 422, because the
-    queue takes no input; the case route declares it itself (a path id is input to FastAPI, but a
-    string id cannot fail validation, so the 422 is documented and never returned)."""
+    """The queue, the case read and the claim. None is on the router that documents a 422, because
+    the queue takes no input; the case read and the claim declare it themselves (a path id is input
+    to FastAPI, but a string id cannot fail validation, so the 422 is documented and never
+    returned)."""
     router = APIRouter(
         prefix=prefix,
         tags=["queue"],
@@ -99,33 +113,44 @@ def create_cases_router(prefix: str) -> APIRouter:
         operation_id="getCase",
     )
     def get_case(id: str, session: Annotated[Session, Depends(get_session)]) -> CaseDetail:
+        return _case_detail(session, from_public_id(id))
+
+    @router.post(
+        "/cases/{id}/claim",
+        response_model=CaseDetail,
+        responses={404: {"model": ApiError}, 409: {"model": ApiError}, 422: {"model": ApiError}},
+        operation_id="claimCase",
+    )
+    def claim_case(
+        id: str,
+        user: Annotated[CurrentUser, Depends(current_user)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CaseDetail:
         case_id = from_public_id(id)
-        row = None if case_id is None else session.execute(
-            _case_query().where(Case.id == case_id)
-        ).one_or_none()
-        if row is None:
-            raise ApiHTTPException(404, NOT_FOUND, NOT_FOUND_MESSAGE)
-        case, alert, owner = row
-        notes = session.execute(
-            select(Note, UserRow)
-            .join(UserRow, UserRow.id == Note.author_id)
-            .where(Note.case_id == case.id)
-            .order_by(Note.created_at, Note.id)
-        ).all()
-        return CaseDetail(
-            **_summary_fields(case, alert, owner),
-            description=alert.description,
-            severityRule=alert.severity_rule,
-            notes=[
-                NoteOut(
-                    id=to_public_id(note.id),
-                    author=User.from_row(author),
-                    text=note.text,
-                    createdAt=note.created_at,
-                )
-                for note, author in notes
-            ],
+        if case_id is None:
+            raise _not_found()
+        # The one conditional UPDATE of the data-model decision record: never read, then write.
+        won = session.execute(
+            update(Case)
+            .where(Case.id == case_id, Case.owner_id.is_(None), Case.status != STATUS_CLOSED)
+            .values(owner_id=user.id)
+        ).rowcount == 1
+        if not won:
+            # Only a lost claim reads the case, to say why; nothing was written, so roll back.
+            status = session.scalar(select(Case.status).where(Case.id == case_id))
+            session.rollback()
+            if status is None:
+                raise _not_found()
+            if status == STATUS_CLOSED:
+                raise ApiHTTPException(409, CASE_CLOSED, CASE_CLOSED_MESSAGE)
+            raise ApiHTTPException(409, ALREADY_CLAIMED, ALREADY_CLAIMED_MESSAGE)
+        append_audit(
+            session, case_id=case_id, actor_id=user.id, action=ACTION_CLAIMED, detail="Case claimed."
         )
+        # Read before commit, so a saved claim never answers 500 because of the read.
+        detail = _case_detail(session, case_id)
+        session.commit()
+        return detail
 
     # Notes (#18)
     @router.post(
@@ -149,7 +174,7 @@ def create_cases_router(prefix: str) -> APIRouter:
         if status is None:
             raise ApiHTTPException(404, NOT_FOUND, NOT_FOUND_MESSAGE)
         if status == STATUS_CLOSED:
-            raise ApiHTTPException(409, CASE_CLOSED, CASE_CLOSED_MESSAGE)
+            raise ApiHTTPException(409, CASE_CLOSED, NOTE_CASE_CLOSED_MESSAGE)
         if not body.text.strip():
             raise ApiHTTPException(422, EMPTY_NOTE, EMPTY_NOTE_MESSAGE)
         author = session.execute(select(UserRow).where(UserRow.id == user.id)).scalar_one()
@@ -184,3 +209,37 @@ def create_cases_router(prefix: str) -> APIRouter:
         return response
 
     return router
+
+
+def _not_found() -> ApiHTTPException:
+    return ApiHTTPException(404, NOT_FOUND, NOT_FOUND_MESSAGE)
+
+
+def _case_detail(session: Session, case_id: int | None) -> CaseDetail:
+    """The case with its alert, owner and notes, or 404 `not_found`."""
+    row = None if case_id is None else session.execute(
+        _case_query().where(Case.id == case_id)
+    ).one_or_none()
+    if row is None:
+        raise _not_found()
+    case, alert, owner = row
+    notes = session.execute(
+        select(Note, UserRow)
+        .join(UserRow, UserRow.id == Note.author_id)
+        .where(Note.case_id == case.id)
+        .order_by(Note.created_at, Note.id)
+    ).all()
+    return CaseDetail(
+        **_summary_fields(case, alert, owner),
+        description=alert.description,
+        severityRule=alert.severity_rule,
+        notes=[
+            NoteOut(
+                id=to_public_id(note.id),
+                author=User.from_row(author),
+                text=note.text,
+                createdAt=note.created_at,
+            )
+            for note, author in notes
+        ],
+    )

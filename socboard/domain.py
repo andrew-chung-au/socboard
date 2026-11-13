@@ -18,6 +18,7 @@ AUDIT_ACTIONS = ("ingested", "claimed", "status_changed", "note_added", "reassig
 STATUS_NEW = "New"
 STATUS_CLOSED = "Closed"
 ACTION_INGESTED = "ingested"
+ACTION_CLAIMED = "claimed"
 
 # The contract's schema name -> the allowed values here (used by the comparison test).
 ENUMS = {
