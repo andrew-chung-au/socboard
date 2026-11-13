@@ -20,7 +20,21 @@ from data_support import (
     no_default_database_file,  # noqa: F401
     sqlite_url,
 )
-from sqlalchemy import DDL, Index, column, delete, insert, literal, select, table, update
+from sqlalchemy import (
+    DDL,
+    Index,
+    bindparam,
+    column,
+    delete,
+    func,
+    insert,
+    literal,
+    literal_column,
+    select,
+    table,
+    text,
+    update,
+)
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -521,3 +535,151 @@ def test_core_or_ignore_and_on_conflict_do_nothing_on_an_existing_id_raise_the_t
 
 def _guard(state):
     return nullcontext() if state == "on" else guards_disabled()
+
+
+# --- #99 round 2: an id through a bound parameter of any name -------------------------------------
+
+
+def _bound(seeded, **extra):
+    """An insert whose `id` is `bindparam("x")`; the other columns are plain values."""
+    return insert(AUDIT).values(id=bindparam("x"), **_row(seeded), **extra)
+
+
+BOUND_ROUTES = {
+    "connection_dict": lambda e, s, v: _conn(e, _bound(s), {"x": v}),
+    "connection_executemany": lambda e, s, v: _conn(e, _bound(s), [{"x": None}, {"x": v}]),
+    "session_dict": lambda e, s, v: _session(e, _bound(s), {"x": v}),
+    "session_executemany": lambda e, s, v: _session(e, _bound(s), [{"x": v}, {"x": None}]),
+    "connection_kwargs_style": lambda e, s, v: _conn(e, _bound(s), {"x": v, "unused": 1}),
+    "other_name": lambda e, s, v: _conn(
+        e, insert(AUDIT).values(id=bindparam("whatever"), **_row(s)), {"whatever": v}
+    ),
+}
+
+
+@pytest.mark.parametrize("route", BOUND_ROUTES)
+@pytest.mark.parametrize("value", [BIG, 7])
+def test_an_id_through_a_named_bound_parameter_is_refused(seeded, route, value):
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError):
+        BOUND_ROUTES[route](seeded["engine"], seeded, value)
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+def test_a_named_bound_parameter_executed_with_none_is_not_refused(seeded):
+    engine = seeded["engine"]
+    statement = insert(AUDIT).values(id=bindparam("x"), **_row(seeded))
+    _conn_commit(engine, statement, {"x": None})
+    assert len(snapshot(engine)[0]) == 2
+    _conn_commit(engine, statement, [{"x": None}, {"x": None}])
+    assert len(snapshot(engine)[0]) == 4
+    assert_append_audit_works(seeded)
+
+
+def test_the_guard_function_resolves_a_bound_parameter_against_the_execute_parameters():
+    row = dict(case_id=1, actor_id=1, action="a", detail="d", at=NOW)
+    statement = insert(AUDIT).values(id=bindparam("x"), **row)
+    assert not refused_statement(statement, {"x": None})
+    assert not refused_statement(statement, ([{"x": None}, {"x": None}], {}))
+    assert not refused_statement(statement)  # no parameter and no value of its own
+    assert refused_statement(statement, {"x": 1})
+    assert refused_statement(statement, [{"x": None}, {"x": 1}])
+    assert refused_statement(statement, ([{"x": 1}], {}))
+    assert refused_statement(insert(AUDIT).values(id=bindparam("x", value=5), **row))
+    assert refused_statement(insert(AUDIT).values(id=bindparam("x", callable_=lambda: 5), **row))
+    assert refused_statement(insert(AUDIT).values([{**row, "id": bindparam("x")}]), {"x": 3})
+    assert not refused_statement(insert(AUDIT).values([{**row, "id": bindparam("x")}]), {"x": None})
+
+
+EXPRESSION_IDS = {
+    "literal": lambda: literal(5),
+    "literal_column": lambda: literal_column("9223372036854775807"),
+    "text": lambda: text("5"),
+    "function": lambda: func.abs(-5),
+    "bound_expression": lambda: bindparam("x", value=None) + 1,
+}
+
+
+@pytest.mark.parametrize("name", EXPRESSION_IDS)
+def test_an_expression_in_the_id_position_is_refused(seeded, name):
+    expression = EXPRESSION_IDS[name]()
+    row = dict(case_id=seeded["case_id"], actor_id=seeded["user_id"], action="a", detail="d", at=NOW)
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError):
+        _conn(seeded["engine"], insert(AUDIT).values(id=expression, **row))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+# --- #99 round 2: a pragma or name behind a comment ----------------------------------------------
+
+COMMENTED_PRAGMA_FORMS = [
+    "PRAGMA /* x */ {p} = ON",
+    "PRAGMA/**/{p} = ON",
+    "PRAGMA main./**/{p} = ON",
+    "PRAGMA -- c\n {p} = ON",
+    "PRAGMA/* a */main/* b */./* c */{p}=1",
+    "PRAGMA\n-- c\n-- d\n{p}(1)",
+    "pragma /* x */ {p} = on",
+    "SELECT '--'; PRAGMA {p} = ON",  # the quotes hide no comment: stripping alone would miss this
+    "SELECT '/*'; PRAGMA {p} = ON; SELECT '*/'",
+]
+
+
+@pytest.mark.parametrize("pragma", ["ignore_check_constraints", "writable_schema"])
+@pytest.mark.parametrize("form", COMMENTED_PRAGMA_FORMS)
+def test_a_dangerous_pragma_behind_a_comment_is_refused(seeded, pragma, form):
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError):
+        _conn(seeded["engine"], DDL(form.format(p=pragma)))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+@pytest.mark.parametrize("pragma", ["ignore_check_constraints", "writable_schema"])
+def test_a_commented_dangerous_pragma_is_not_lifted_by_allow_schema_changes(seeded, pragma):
+    with allow_schema_changes():
+        for form in COMMENTED_PRAGMA_FORMS[:4]:
+            with pytest.raises(AuditImmutableError):
+                _conn(seeded["engine"], DDL(form.format(p=pragma)))
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DROP /* x */ TRIGGER /* y */ audit_entries_no_update",
+        "DROP TRIGGER -- c\n audit_entries_no_delete",
+        "DROP TABLE main./**/audit_entries",
+        "DROP TABLE/**/audit_entries",
+        "UPDATE /* x */ sqlite_sequence SET seq = 0",
+        "DELETE FROM -- c\n sqlite_sequence",
+        "UPDATE main./**/sqlite_sequence SET seq = 0",
+    ],
+)
+def test_a_name_beside_a_comment_is_refused(seeded, sql):
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError):
+        _conn(seeded["engine"], DDL(sql))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "PRAGMA /* x */ foreign_keys = ON",
+        "PRAGMA/**/user_version",
+        "PRAGMA -- c\n user_version",
+        "PRAGMA /* x */ ignore_check_constraints_log = ON",
+        "PRAGMA /* x */ writable_schema2 = ON",
+        "PRAGMA main./**/xwritable_schema = ON",
+        "SELECT 1 /* audit_entries */ -- audit_entries_archive",
+        "DROP TABLE /* x */ audit_entries_archive",
+        "DROP TRIGGER/**/audit_entries_no_update_log",
+        "DELETE FROM /* x */ sqlite_sequence_archive",
+        "SELECT 'audit_/**/entries'",  # a comment inside a name makes two words, not the table name
+    ],
+)
+def test_near_misses_behind_comments_are_still_allowed(sql):
+    assert not refused_statement(DDL(sql))

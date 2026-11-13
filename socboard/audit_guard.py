@@ -24,8 +24,9 @@ layer:
 - an INSERT that supplies a non-NULL `id` (#99): the id is assigned by the database, and an id
   near 2^63-1 would make every later `append_audit` fail. This covers `values(id=...)`, a row of a
   multi-row `values([...])`, the execute parameters (a dict or a list of dicts, on a connection or
-  a `Session`), the `id` column of `from_select`, and an ORM `AuditEntry(id=...)`. An `id` of
-  `None` or no `id` passes. `allow_schema_changes()` does not lift this;
+  a `Session`), the `id` column of `from_select`, and an ORM `AuditEntry(id=...)`. A bound
+  parameter in the `id` position (`bindparam("x")`, any name) counts when it, or the execute
+  parameter of its key, is not None. An `id` of `None` or no `id` passes. `allow_schema_changes()` does not lift this;
 - a DDL construct aimed at the table (`DropTable`, `CreateTable`, an index or constraint on it,
   an Alembic `ALTER TABLE` construct, or `DDL(...).against(table)`): any object with a string
   `name` after unwrapping aliases counts, so a lightweight `table("audit_entries")` is covered
@@ -36,7 +37,10 @@ layer:
 - a `DDL("PRAGMA ignore_check_constraints ...")` or `DDL("PRAGMA writable_schema ...")`, which
   would switch off the CHECK or allow edits of the schema, and any UPDATE, INSERT, DELETE or
   `DDL(...)` naming `sqlite_sequence` (which holds the next audit id). Neither is lifted by
-  `allow_schema_changes()`. A SELECT from `sqlite_sequence` passes.
+  `allow_schema_changes()`. A SELECT from `sqlite_sequence` passes. The text of a `DDL(...)` is
+  matched both as rendered and with SQL comments stripped, so a comment cannot split a name.
+  Not covered: a custom `ExecutableDDLElement` with `@compiles` that emits `DROP TRIGGER`, and
+  `CreateIndex` of a new index on a lightweight `audit_entries` column.
 
 Migrations are the one legitimate schema change: `socboard.migrate.run` wraps the Alembic command
 in `allow_schema_changes()`, which lifts the table and index DDL check (and only that) for the
@@ -88,6 +92,8 @@ _DANGEROUS_PRAGMA = re.compile(
     r"\bPRAGMA\s+(?:[\"'`\[]?\w+[\"'`\]]?\s*\.\s*)?[\"'`\[]?(?:ignore_check_constraints|writable_schema)\b",
     re.IGNORECASE,
 )
+# An SQL comment: `/* ... */` (an unterminated one runs to the end) or `-- ...` to the line end.
+_COMMENT = re.compile(r"/\*.*?(?:\*/|\Z)|--[^\n]*", re.DOTALL)
 _REPLACE = re.compile(r"\bREPLACE\b", re.IGNORECASE)
 _UPDATING_CLAUSES = ("DoUpdate", "OnDuplicate")  # class-name parts of the dialect upsert clauses
 
@@ -163,16 +169,25 @@ def _key_names(key) -> set[str]:
     return {n.lower() for n in (getattr(key, "key", None), getattr(key, "name", None)) if isinstance(n, str)}
 
 
-def _is_null(value) -> bool:
-    return (
-        value is None
-        or isinstance(value, Null)
-        or (isinstance(value, BindParameter) and value.value is None and value.callable is None)
-    )
+def _is_null(value, mappings=()) -> bool:
+    """True only for None, a NULL literal, or a bound parameter that resolves to None.
+
+    A bound parameter (`bindparam("x")`, any key) is resolved against the execute parameters: if
+    any dict holds its key with a value other than None, the caller supplies the id. With no such
+    key it is NULL only if its own value is None and it has no callable. Anything else (a literal,
+    a function, a column, a text clause) is not NULL.
+    """
+    if value is None or isinstance(value, Null):
+        return True
+    if not isinstance(value, BindParameter) or value.callable is not None:
+        return False
+    if value.value is not None:
+        return False
+    return all(mapping[value.key] is None for mapping in mappings if value.key in mapping)
 
 
-def _supplies_id(pairs) -> bool:
-    return any("id" in _key_names(key) and not _is_null(value) for key, value in pairs)
+def _supplies_id(pairs, mappings=()) -> bool:
+    return any("id" in _key_names(key) and not _is_null(value, mappings) for key, value in pairs)
 
 
 def _parameter_mappings(parameters) -> Iterator[Mapping]:
@@ -195,14 +210,16 @@ def supplies_audit_id(statement, parameters=None) -> bool:
         return False
     if any("id" in _key_names(name) for name in statement._select_names or ()):
         return True
-    if _supplies_id((statement._values or {}).items()):
+    mappings = list(_parameter_mappings(parameters))
+    if _supplies_id((statement._values or {}).items(), mappings):
         return True
     for rows in statement._multi_values:
         for row in rows:
             pairs = row.items() if isinstance(row, Mapping) else zip(statement.table.c, row)
-            if _supplies_id(pairs):
+            if _supplies_id(pairs, mappings):
                 return True
-    return any(_supplies_id(mapping.items()) for mapping in _parameter_mappings(parameters))
+    # An `id` key in the execute parameters, whatever the statement holds.
+    return any(_supplies_id(mapping.items()) for mapping in mappings)
 
 
 def overwrites_audit_entry(statement) -> bool:
@@ -256,9 +273,17 @@ def ddl_texts(ddl) -> list[str]:
         context.setdefault("schema", ddl.target.schema or "")
         context.setdefault("fullname", ddl.target.fullname)
     try:
-        return [template % context]
+        texts = [template % context]
     except (KeyError, ValueError, TypeError, IndexError):
-        return [template, *(value for value in context.values() if isinstance(value, str))]
+        texts = [template, *(value for value in context.values() if isinstance(value, str))]
+    # SQLite reads a comment as whitespace, so match the comment-free text too. The raw text stays
+    # in the list: a quoted `'--'` or `'/*'` is not a comment, and stripping it could hide a name.
+    return [*texts, *(_strip_comments(text) for text in texts)]
+
+
+def _strip_comments(text: str) -> str:
+    """Replace `/* ... */` and `-- ...` comments with a space, then collapse whitespace."""
+    return " ".join(_COMMENT.sub(" ", text).split())
 
 
 def ddl_is_always_refused(statement) -> bool:
