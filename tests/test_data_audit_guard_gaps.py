@@ -695,3 +695,171 @@ def test_near_misses_behind_comments_are_still_allowed(sql):
 )
 def test_a_comment_that_names_the_table_is_refused(sql):
     assert refused_statement(DDL(sql))
+
+
+# --- #99 round 3: the id is resolved by the compiler, not by key names ---------------------------
+
+
+def _multi_none(seeded):
+    return insert(AUDIT).values([_row(seeded, id=None), _row(seeded, id=None)])
+
+
+def _compiled_name(statement, bind, engine):
+    """The name the compiler gives `bind`, read from the compiled statement (as an execute resolves it)."""
+    compiled = statement.compile(dialect=engine.dialect)
+    return next(name for b, name in compiled.bind_names.items() if b.key == bind.key)
+
+
+def _anonymous_bind(seeded, engine):
+    bind = bindparam(None)
+    statement = insert(AUDIT).values(id=bind, **_row(seeded))
+    return statement, _compiled_name(statement, bind, engine)
+
+
+def _unique_bind_in_multi_values(seeded, engine):
+    bind = bindparam("x", unique=True)
+    statement = insert(AUDIT).values([_row(seeded, id=bind), _row(seeded, id=None)])
+    return statement, _compiled_name(statement, bind, engine)
+
+
+COMPILED_NAME_ROUTES = {
+    "multi_values_second_row": lambda s, e: (_multi_none(s), "id_m1"),
+    "multi_values_first_row": lambda s, e: (_multi_none(s), "id_m0"),
+    "anonymous_bindparam": _anonymous_bind,
+    "unique_bindparam_in_multi_values": _unique_bind_in_multi_values,
+}
+
+
+@pytest.mark.parametrize("route", COMPILED_NAME_ROUTES)
+def test_without_the_guard_an_id_under_the_compiled_name_does_reach_the_table(seeded, route):
+    engine = seeded["engine"]
+    statement, name = COMPILED_NAME_ROUTES[route](seeded, engine)
+    with guards_disabled():
+        _conn_commit(engine, statement, {name: 7})
+    assert 7 in [row[0] for row in snapshot(engine)[0]]
+
+
+@pytest.mark.parametrize("sink", [_conn, _session])
+@pytest.mark.parametrize("value", [BIG, 7])
+@pytest.mark.parametrize("route", COMPILED_NAME_ROUTES)
+def test_an_id_under_a_compiled_bind_name_is_refused(seeded, route, value, sink):
+    engine = seeded["engine"]
+    statement, name = COMPILED_NAME_ROUTES[route](seeded, engine)
+    before = snapshot(engine)
+    with pytest.raises(AuditImmutableError):
+        sink(engine, statement, {name: value})
+    assert snapshot(engine) == before
+    assert_append_audit_works(seeded)
+
+
+def test_none_under_a_compiled_bind_name_is_not_refused(seeded):
+    engine = seeded["engine"]
+    multi = _multi_none(seeded)
+    _conn_commit(engine, multi)
+    _conn_commit(engine, multi, {"id_m1": None})
+    _conn_commit(engine, multi, {"id_m0": None, "id_m1": None})
+    statement, name = _anonymous_bind(seeded, engine)
+    _conn_commit(engine, statement, {name: None})
+    _conn_commit(engine, statement, [{name: None}, {name: None}])
+    assert len(snapshot(engine)[0]) == 1 + 2 + 2 + 2 + 1 + 2
+    assert_append_audit_works(seeded)
+
+
+def test_the_guard_function_reads_the_values_bound_for_id_in_every_parameter_row():
+    row = dict(case_id=1, actor_id=1, action="a", detail="d", at=NOW)
+    multi = insert(AUDIT).values([{**row, "id": None}, {**row, "id": None}])
+    assert refused_statement(multi, {"id_m1": 5})
+    assert refused_statement(multi, ([{"id_m0": None}, {"id_m1": 5}], {}))
+    assert not refused_statement(multi)
+    assert not refused_statement(multi, {"id_m1": None})
+    assert not refused_statement(multi, {"unrelated": 5})
+    assert not refused_statement(insert(AUDIT).values(id=bindparam(None), **row))
+
+
+def test_a_form_the_dialect_cannot_compile_is_refused(seeded):
+    dialect = type(seeded["engine"].dialect)()
+    dialect.supports_multivalues_insert = False  # compiling a multi-row values() raises
+    multi = _multi_none(seeded)
+    assert refused_statement(multi, None, dialect)
+    assert not refused_statement(multi, None, seeded["engine"].dialect)
+
+
+# --- #99 round 3: the pragma names and ATTACH, whatever the syntax around them -------------------
+
+SCHEMA_ALIASES = ['"my-db"', '"my db"', '"a.b"', "x$y", "[my-db]", "'my-db'", "`my-db`", "main", "café"]
+PRAGMA_NAMES = ["ignore_check_constraints", "writable_schema"]
+
+
+@pytest.mark.parametrize("pragma", PRAGMA_NAMES)
+@pytest.mark.parametrize("alias", SCHEMA_ALIASES)
+@pytest.mark.parametrize("form", ["PRAGMA {a}.{p} = ON", "pragma {a} . {p}=1", "PRAGMA {a}.{p}(1)", "PRAGMA {a}\n.\n{p}"])
+def test_a_pragma_behind_any_schema_alias_is_refused(pragma, alias, form):
+    assert refused_statement(DDL(form.format(a=alias, p=pragma)))
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT \"writable_schema\"",
+        "SELECT 1 /* x */ WHERE IGNORE_CHECK_CONSTRAINTS",
+        "-- c\nPRAGMA [Writable_Schema] = 1",
+    ],
+)
+def test_the_pragma_names_are_refused_wherever_they_appear(sql):
+    assert refused_statement(DDL(sql))
+
+
+ATTACH_FORMS = [
+    "ATTACH DATABASE ':memory:' AS \"my-db\"",
+    "attach ':memory:' AS x",
+    "ATTACH\n':memory:' AS x",
+    "DETACH DATABASE x",
+    "detach x",
+    "/* c */ ATTACH ':memory:' AS x",
+    "-- c\nATTACH ':memory:' AS x",
+    "SELECT 1; ATTACH ':memory:' AS x",
+    "SELECT 1; /* c */ DETACH x",
+    "SELECT '--'; ATTACH ':memory:' AS x",
+]
+
+
+@pytest.mark.parametrize("sql", ATTACH_FORMS)
+def test_attach_and_detach_are_refused(seeded, sql):
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError):
+        _conn(seeded["engine"], DDL(sql))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+def test_attach_with_a_hyphenated_alias_then_the_pragma_is_refused_at_both_steps(seeded):
+    before = snapshot(seeded["engine"])
+    for sql in ("ATTACH DATABASE ':memory:' AS \"my-db\"", 'PRAGMA "my-db".ignore_check_constraints = ON'):
+        with pytest.raises(AuditImmutableError):
+            _conn(seeded["engine"], DDL(sql))
+    assert snapshot(seeded["engine"]) == before
+
+
+def test_attach_and_the_pragma_names_are_not_lifted_by_allow_schema_changes(seeded):
+    with allow_schema_changes():
+        for sql in (ATTACH_FORMS[0], ATTACH_FORMS[3], 'PRAGMA "my-db".writable_schema = 1'):
+            with pytest.raises(AuditImmutableError):
+                _conn(seeded["engine"], DDL(sql))
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "PRAGMA writable_schema_note",
+        "PRAGMA main.ignore_check_constraints_log = ON",
+        "PRAGMA xwritable_schema",
+        "PRAGMA user_version",
+        "SELECT 1 FROM audit_entries_archive",
+        "SELECT 'attach'",
+        "SELECT 1; SELECT 2 AS attach_count",
+        "SELECT 1 AS detach",
+        "SELECT attached FROM t",
+    ],
+)
+def test_near_misses_of_the_pragma_and_attach_words_are_allowed(sql):
+    assert not refused_statement(DDL(sql))

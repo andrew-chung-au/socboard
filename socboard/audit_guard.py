@@ -24,9 +24,12 @@ layer:
 - an INSERT that supplies a non-NULL `id` (#99): the id is assigned by the database, and an id
   near 2^63-1 would make every later `append_audit` fail. This covers `values(id=...)`, a row of a
   multi-row `values([...])`, the execute parameters (a dict or a list of dicts, on a connection or
-  a `Session`), the `id` column of `from_select`, and an ORM `AuditEntry(id=...)`. A bound
-  parameter in the `id` position (`bindparam("x")`, any name) counts when it, or the execute
-  parameter of its key, is not None. An `id` of `None` or no `id` passes. `allow_schema_changes()` does not lift this;
+  a `Session`, under any name the compiler gives the bind: `id`, `id_m<n>`, `param_1`, the key of
+  a `bindparam`), the `id` column of `from_select`, and an ORM `AuditEntry(id=...)`. The statement
+  is compiled with the connection's dialect and the execute parameters, and it is refused unless
+  every value bound for `id`, in every parameter row, is None; an expression in the `id` position
+  (other than NULL) and a form that cannot be compiled are refused. An `id` of `None` or no `id`
+  passes. `allow_schema_changes()` does not lift this;
 - a DDL construct aimed at the table (`DropTable`, `CreateTable`, an index or constraint on it,
   an Alembic `ALTER TABLE` construct, or `DDL(...).against(table)`): any object with a string
   `name` after unwrapping aliases counts, so a lightweight `table("audit_entries")` is covered
@@ -34,11 +37,13 @@ layer:
   built on; and a `DDL("...")` whose rendered text (the template after its `context`
   substitution; the template and the string context values when it cannot be rendered) names
   `audit_entries` or one of the three trigger names as a whole word;
-- a `DDL("PRAGMA ignore_check_constraints ...")` or `DDL("PRAGMA writable_schema ...")`, which
-  would switch off the CHECK or allow edits of the schema, and any UPDATE, INSERT, DELETE or
-  `DDL(...)` naming `sqlite_sequence` (which holds the next audit id). Neither is lifted by
-  `allow_schema_changes()`. A SELECT from `sqlite_sequence` passes. The text of a `DDL(...)` is
-  matched both as rendered and with SQL comments stripped, so a comment cannot split a name.
+- a `DDL(...)` whose text contains `ignore_check_constraints` or `writable_schema` as a word
+  (which would switch off the CHECK or allow edits of the schema; any spelling, quoting or schema
+  prefix), or that starts a statement with `ATTACH` or `DETACH` (an alias to hide the pragma
+  behind), and any UPDATE, INSERT, DELETE or `DDL(...)` naming `sqlite_sequence` (which holds the
+  next audit id). None of these is lifted by `allow_schema_changes()`. A SELECT from
+  `sqlite_sequence` passes. The text of a `DDL(...)` is matched both as rendered and with SQL
+  comments stripped, so a comment cannot split a name.
   Not covered: a custom `ExecutableDDLElement` with `@compiles` that emits `DROP TRIGGER`, and
   `CreateIndex` of a new index on a lightweight `audit_entries` column.
 
@@ -64,6 +69,7 @@ from socboard._requirements import require
 require("sqlalchemy")
 
 from sqlalchemy import event  # noqa: E402
+from sqlalchemy.dialects import sqlite  # noqa: E402
 from sqlalchemy.engine import Engine  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.schema import DDL, DropIndex, ExecutableDDLElement, Table  # noqa: E402
@@ -87,11 +93,11 @@ _WORD = re.compile(
     r"\b(?:" + "|".join((AUDIT_TABLE, *TRIGGER_NAMES)) + r")\b", re.IGNORECASE
 )
 _SEQUENCE_WORD = re.compile(r"\b" + SEQUENCE_TABLE + r"\b", re.IGNORECASE)
-# PRAGMA ignore_check_constraints / writable_schema, with an optional (quoted) schema prefix.
-_DANGEROUS_PRAGMA = re.compile(
-    r"\bPRAGMA\s+(?:[\"'`\[]?\w+[\"'`\]]?\s*\.\s*)?[\"'`\[]?(?:ignore_check_constraints|writable_schema)\b",
-    re.IGNORECASE,
-)
+# The names of the two pragmas that switch off the CHECK or open the schema, as words anywhere
+# (so no schema prefix or quoting can hide them); and ATTACH / DETACH at the start of a statement
+# (an attached database gets an alias the pragma could hide behind). No application code uses any.
+_DANGEROUS_PRAGMA = re.compile(r"\b(?:ignore_check_constraints|writable_schema)\b", re.IGNORECASE)
+_ATTACH = re.compile(r"(?:\A|;)\s*(?:ATTACH|DETACH)\b", re.IGNORECASE)
 # An SQL comment: `/* ... */` (an unterminated one runs to the end) or `-- ...` to the line end.
 _COMMENT = re.compile(r"/\*.*?(?:\*/|\Z)|--[^\n]*", re.DOTALL)
 _REPLACE = re.compile(r"\bREPLACE\b", re.IGNORECASE)
@@ -169,27 +175,6 @@ def _key_names(key) -> set[str]:
     return {n.lower() for n in (getattr(key, "key", None), getattr(key, "name", None)) if isinstance(n, str)}
 
 
-def _is_null(value, mappings=()) -> bool:
-    """True only for None, a NULL literal, or a bound parameter that resolves to None.
-
-    A bound parameter (`bindparam("x")`, any key) is resolved against the execute parameters: if
-    any dict holds its key with a value other than None, the caller supplies the id. With no such
-    key it is NULL only if its own value is None and it has no callable. Anything else (a literal,
-    a function, a column, a text clause) is not NULL.
-    """
-    if value is None or isinstance(value, Null):
-        return True
-    if not isinstance(value, BindParameter) or value.callable is not None:
-        return False
-    if value.value is not None:
-        return False
-    return all(mapping[value.key] is None for mapping in mappings if value.key in mapping)
-
-
-def _supplies_id(pairs, mappings=()) -> bool:
-    return any("id" in _key_names(key) and not _is_null(value, mappings) for key, value in pairs)
-
-
 def _parameter_mappings(parameters) -> Iterator[Mapping]:
     """Every dict inside execute parameters: a dict, or a list or tuple (nested) of them."""
     if isinstance(parameters, Mapping):
@@ -199,27 +184,60 @@ def _parameter_mappings(parameters) -> Iterator[Mapping]:
             yield from _parameter_mappings(item)
 
 
-def supplies_audit_id(statement, parameters=None) -> bool:
-    """True for an INSERT into `audit_entries` that supplies a non-NULL `id` in any form.
+def _values_rows(statement) -> list[Mapping]:
+    """The rows of `values(...)`: `values(k=v)` is one; each row of `values([...])` is one (a tuple is in column order)."""
+    rows = [statement._values or {}]
+    for group in statement._multi_values:
+        rows += [r if isinstance(r, Mapping) else dict(zip(statement.table.c, r)) for r in group]
+    return rows
 
-    The forms: `values(id=...)`, a row of a multi-row `values([...])` (a dict, or a tuple in column
-    order), the `id` column of `from_select`, and the execute `parameters` (a dict or a list of
-    dicts, which is also how an ORM flush sends `AuditEntry(id=...)`). No `id`, or `None`, is fine.
+
+def supplies_audit_id(statement, parameters=None, dialect=None) -> bool:
+    """True for an INSERT into `audit_entries` that supplies a non-NULL `id` in any form (#99).
+
+    Refused without compiling: an `id` in `from_select`; an `id` key in an execute dict with a
+    value other than None; an `id` in `values(...)` that is a Python literal other than None or a
+    SQL expression other than NULL or a bound parameter.
+
+    The rest is asked of SQLAlchemy. The statement is compiled for `dialect` (the connection's;
+    SQLite when None) the way `Connection.execute` does: `column_keys` from the first parameter
+    dict, `for_executemany` for more than one. The compiler names the bind of each column (`id`, or
+    `id_m<n>` in row n of a multi-row `values()`) and of a `bindparam` in `values()` (its own key,
+    or an anonymous `param_1`); `construct_params` gives the value each bind gets from every
+    execute dict, with the same lookup as at execution. Refused unless all of them are None.
+    A form that cannot be compiled or resolved (the execute would fail too) is refused.
     """
     if not isinstance(statement, Insert) or not _names_audit_table(getattr(statement, "table", None)):
         return False
     if any("id" in _key_names(name) for name in statement._select_names or ()):
         return True
-    mappings = list(_parameter_mappings(parameters))
-    if _supplies_id((statement._values or {}).items(), mappings):
+    mappings = [m for m in _parameter_mappings(parameters) if m]
+    # SQLAlchemy reads only the first dict's keys, so an `id` in a later dict needs its own check.
+    if any("id" in _key_names(key) and value is not None for m in mappings for key, value in m.items()):
         return True
-    for rows in statement._multi_values:
-        for row in rows:
-            pairs = row.items() if isinstance(row, Mapping) else zip(statement.table.c, row)
-            if _supplies_id(pairs, mappings):
-                return True
-    # An `id` key in the execute parameters, whatever the statement holds.
-    return any(_supplies_id(mapping.items()) for mapping in mappings)
+    rows = _values_rows(statement)
+    slots = [value for row in rows for key, value in row.items() if "id" in _key_names(key)]
+    if any(not (value is None or isinstance(value, (Null, BindParameter))) for value in slots):
+        return True
+    names = {"id", *(f"id_m{n}" for n in range(len(rows)))}
+    keys = {value.key for value in slots if isinstance(value, BindParameter)}
+    try:
+        compiled = statement.compile(
+            dialect=dialect or sqlite.dialect(),
+            column_keys=sorted(mappings[0]) if mappings else [],
+            for_executemany=len(mappings) > 1,
+        )
+        id_binds = {name for bind, name in compiled.bind_names.items() if name in names or bind.key in keys}
+        # _check=False: a bind with no value stays None, as the statement alone says (SQLAlchemy itself
+        # raises later for a missing required value).
+        return any(
+            value is not None
+            for row in mappings or [{}]
+            for name, value in compiled.construct_params(row, escape_names=False, _check=False).items()
+            if name in id_binds
+        )
+    except Exception:  # fail closed: a form that cannot be compiled or resolved here is refused
+        return True
 
 
 def overwrites_audit_entry(statement) -> bool:
@@ -287,10 +305,12 @@ def _strip_comments(text: str) -> str:
 
 
 def ddl_is_always_refused(statement) -> bool:
-    """True for a `DDL(...)` with a dangerous PRAGMA or naming `sqlite_sequence` (never lifted)."""
+    """True for a `DDL(...)` naming a dangerous pragma or `sqlite_sequence`, or an ATTACH/DETACH (never lifted)."""
     if not isinstance(statement, DDL):
         return False
-    return any(_DANGEROUS_PRAGMA.search(text) or _SEQUENCE_WORD.search(text) for text in ddl_texts(statement))
+    return any(
+        pattern.search(text) for text in ddl_texts(statement) for pattern in (_DANGEROUS_PRAGMA, _ATTACH, _SEQUENCE_WORD)
+    )
 
 
 def _drops_audit_index(statement) -> bool:
@@ -317,15 +337,16 @@ def ddl_targets_audit_table(statement) -> bool:
     return isinstance(statement, DDL) and any(_WORD.search(text) for text in ddl_texts(statement))
 
 
-def refused_statement(statement, parameters=None) -> bool:
+def refused_statement(statement, parameters=None, dialect=None) -> bool:
     """True when the guard must refuse this statement.
 
     `parameters` are the execute parameters (a dict, or a list of dicts), needed to see an `id`
-    that arrives as a parameter and not inside the statement.
+    that arrives as a parameter and not inside the statement. `dialect` is the one the statement
+    is compiled for to resolve them (the connection's; SQLite when None).
     """
     if targets_audit_table(statement) or overwrites_audit_entry(statement):
         return True
-    if supplies_audit_id(statement, parameters) or writes_sequence_table(statement):
+    if supplies_audit_id(statement, parameters, dialect) or writes_sequence_table(statement):
         return True
     if ddl_is_always_refused(statement):
         return True
@@ -342,5 +363,5 @@ def _guard_orm_execute(orm_execute_state) -> None:
 def _guard_connection_execute(
     conn, clauseelement, multiparams, params, execution_options
 ) -> None:
-    if refused_statement(clauseelement, (multiparams, params)):
+    if refused_statement(clauseelement, (multiparams, params), conn.dialect):
         refuse()
