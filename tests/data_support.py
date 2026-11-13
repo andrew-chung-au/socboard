@@ -24,6 +24,13 @@ NOW = datetime(2026, 11, 12, 9, 0, tzinfo=UTC)
 
 _counter = itertools.count(1)
 
+# Synthetic, test-only seed passwords (#13): `python -m socboard.seed` needs all three.
+SEED_PASSWORDS = {
+    "SOCBOARD_SEED_PASSWORD_ANALYST_A": "test-only-seed-pw-analyst-a",
+    "SOCBOARD_SEED_PASSWORD_ANALYST_B": "test-only-seed-pw-analyst-b",
+    "SOCBOARD_SEED_PASSWORD_LEAD": "test-only-seed-pw-lead",
+}
+
 
 def unique(prefix: str) -> str:
     return f"{prefix}{next(_counter)}"

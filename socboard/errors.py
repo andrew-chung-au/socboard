@@ -26,6 +26,7 @@ logger = logging.getLogger("socboard.errors")
 
 # Codes from openapi.yaml (#9). Do not add a code here without a contract change.
 UNAUTHORIZED = "unauthorized"
+INVALID_CREDENTIALS = "invalid_credentials"
 FORBIDDEN = "forbidden"
 NOT_FOUND = "not_found"
 METHOD_NOT_ALLOWED = "method_not_allowed"
