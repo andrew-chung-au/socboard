@@ -90,3 +90,11 @@ def crash_client(app):
     from fastapi.testclient import TestClient
 
     return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def real_crash_client(real_app):
+    """Like `crash_client`, over the real app only: no test-only routes."""
+    from fastapi.testclient import TestClient
+
+    return TestClient(real_app, raise_server_exceptions=False)

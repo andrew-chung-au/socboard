@@ -86,13 +86,15 @@ def test_the_queue_and_the_detail_show_the_new_owner_on_the_next_read(real_clien
     assert detail["owner"]["id"] == str(LEAD_ID)
 
 
-def test_the_owner_and_the_claimed_entry_are_saved_together(real_app, app_database, monkeypatch):
+def test_the_owner_and_the_claimed_entry_are_saved_together(
+    real_crash_client, app_database, monkeypatch
+):
     def fail(*args, **kwargs):
         raise RuntimeError("audit write failed")
 
     monkeypatch.setattr("socboard.cases.append_audit", fail)
     add_case(app_database, 1)
-    response = claim(TestClient(real_app, raise_server_exceptions=False), 1)
+    response = claim(real_crash_client, 1)
     assert response.status_code == 500
     assert response.json()["code"] == "internal_error"
     assert state(app_database, 1) == (None, "New", [])

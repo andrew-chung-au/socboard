@@ -238,13 +238,13 @@ def test_403_comes_before_reason_required(real_client, app_database):
 # --- saved together, one conditional update ----------------------------------------------------
 
 
-def test_the_status_and_the_audit_entry_are_saved_together(app, app_database, monkeypatch):
+def test_the_status_and_the_audit_entry_are_saved_together(crash_client, app_database, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("audit write failed")
 
     monkeypatch.setattr("socboard.cases.append_audit", fail)
     new_case(app_database, status="Investigating")
-    response = move(TestClient(app, raise_server_exceptions=False), 1, "Closed", "duplicate")
+    response = move(crash_client, 1, "Closed", "duplicate")
     assert (response.status_code, response.json()["code"]) == (500, "internal_error")
     assert state(app_database) == (("Investigating", None, ANALYST_ID), [])
 

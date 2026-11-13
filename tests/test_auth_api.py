@@ -1,8 +1,8 @@
 """Login, `current_user`, the role checks and `GET /api/users` over HTTP (#13).
 
 `real_app` is `create_app()` exactly; `app` adds the test-only routes of `backend_support.py`.
-Both run on a copy of the test database with the two test
-users, and `SOCBOARD_TOKEN_SECRET` is set by `tests/conftest.py`.
+Both run on a copy of the test database with the two test users, and `SOCBOARD_TOKEN_SECRET` is
+set by `tests/conftest.py`.
 """
 
 import base64
@@ -70,12 +70,6 @@ def stored_hash(url, user_id):
             ).scalar_one()
     finally:
         engine.dispose()
-
-
-@pytest.fixture
-def safe_client(real_app):
-    """Returns a 500 as a response instead of raising, so a test can assert it never happens."""
-    return TestClient(real_app, raise_server_exceptions=False)
 
 
 # --- login -------------------------------------------------------------------------------------
@@ -191,9 +185,9 @@ def test_a_login_body_that_is_not_json_is_422(real_client):
         '{"username": "test-analyst", "password": "\\udc80-test-only"}',
     ],
 )
-def test_a_lone_surrogate_in_the_login_body_is_a_401_not_a_500(safe_client, content):
+def test_a_lone_surrogate_in_the_login_body_is_a_401_not_a_500(real_crash_client, content):
     # JSON can escape a lone surrogate, which strict UTF-8 cannot encode for the driver or scrypt.
-    response = safe_client.post(
+    response = real_crash_client.post(
         "/api/login", content=content, headers={"Content-Type": "application/json"}
     )
     assert_error(response, 401, INVALID_CREDENTIALS)
@@ -258,17 +252,17 @@ REFUSED_HEADERS = {
 
 
 @pytest.mark.parametrize("name", sorted(REFUSED_HEADERS))
-def test_current_user_refuses_with_401(safe_client, name):
+def test_current_user_refuses_with_401(real_crash_client, name):
     value = REFUSED_HEADERS[name]
     headers = {} if value is None else {"Authorization": value}
-    assert_unauthorized(safe_client.get("/api/users", headers=headers))
+    assert_unauthorized(real_crash_client.get("/api/users", headers=headers))
 
 
-def test_an_exp_more_than_the_lifetime_ahead_is_refused_with_401(safe_client):
+def test_an_exp_more_than_the_lifetime_ahead_is_refused_with_401(real_crash_client):
     # Built when the test runs, so the margin cannot run out between collection and the request.
     exp = int(time.time()) + tokens.TOKEN_LIFETIME_SECONDS + 60
     token = signed({"sub": str(ANALYST_ID), "exp": exp})
-    assert_unauthorized(safe_client.get("/api/users", headers=bearer(token)))
+    assert_unauthorized(real_crash_client.get("/api/users", headers=bearer(token)))
 
 
 def test_an_exp_exactly_the_lifetime_ahead_is_accepted(real_client):
@@ -393,10 +387,10 @@ def test_the_route_walk_sees_every_documented_operation(real_app):
     assert {("POST", "/api/login"), ("GET", "/api/health"), ("GET", "/api/users")} <= walked
 
 
-def test_every_route_except_login_health_and_ingest_needs_a_token(real_app):
+def test_every_route_except_login_health_and_ingest_needs_a_token(real_app, real_crash_client):
     import re
 
-    client = TestClient(real_app, raise_server_exceptions=False)
+    client = real_crash_client
     checked = []
     for method, path_format in sorted(_every_route(real_app)):
         if (method, path_format) in OPEN_ROUTES:
@@ -476,10 +470,10 @@ UNPARSEABLE_BODIES = {
 
 
 @pytest.mark.parametrize("name", list(UNPARSEABLE_BODIES))
-def test_an_unparseable_login_body_is_422_validation_error(safe_client, caplog, name):
+def test_an_unparseable_login_body_is_422_validation_error(real_crash_client, caplog, name):
     content, headers = UNPARSEABLE_BODIES[name]
     caplog.set_level(logging.DEBUG)
-    response = safe_client.post("/api/login", content=content, headers=headers)
+    response = real_crash_client.post("/api/login", content=content, headers=headers)
     assert response.status_code == 422
     assert response.json() == VALIDATION_BODY
     assert MARKER not in response.text
