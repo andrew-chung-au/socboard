@@ -55,9 +55,9 @@ If different: stop and tell the orchestrator what was printed.
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | | |
-| 2 | | |
-| 3 | | |
+| 1 | Pass | `make contract-check` printed `openapi.yaml: OK` (run on `main` in the dev container, 2026-11-13). |
+| 2 | Pass | `make contract-check FILE=openapi.yaml` printed `openapi.yaml: OK`, in a separate clone at `main` `5d0ffa6`. |
+| 3 | Pass | `make contract-check FILE=nope.yaml` printed `No such file: nope.yaml`, then `Error 1`, exit 2: the validator's own error, not a usage line. Extra check: `FILE=--version` printed the new usage text at `Makefile:147`, exit 2. |
 
 ## Risk
 

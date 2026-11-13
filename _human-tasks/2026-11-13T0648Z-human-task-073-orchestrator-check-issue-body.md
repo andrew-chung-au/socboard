@@ -56,8 +56,8 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | | |
-| 2 | | |
+| 1 | Not run (optional) | Skipped by the human. QA ran the failed-read case (`N=999999`) with `gh` present; it fails the same way, one `issue-body:` line and no file. |
+| 2 | Pass | Run 2026-11-13 in a separate clone at `main` `5d0ffa6`, with a clone whose remote is a local path. `make issue-body N=73` printed `.scratch/issue-73-body.json`; its keys are `author`, `body`, `labels`, `number`, `state`, `title`, and no `comments`. `make help` lists `issue-body`. |
 
 ## Risk
 

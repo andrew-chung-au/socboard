@@ -325,19 +325,21 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 run, normal | | |
-| 2 health and stop | | |
-| 3 run twice | | |
-| 4 stop refused, other checkout | | |
-| 5 symlink | | |
-| 6 existing refusals, stale pid | | |
-| 7 port in use (two listeners) | | |
-| 8 settings refused | | |
-| 8a hosts `::1` and `localhost` | | |
-| 9 the 14 checks from #10 | | |
-| 10 make test, make verify | | |
-| 11 diff read; optional edits | | |
-| 12 clean up | | |
+| 1 run, normal | Pass | Run 2026-11-13 in a separate clone at `main` `5d0ffa6`, with a throwaway signing secret set for the terminal only. `backend started (pid N); log: .scratch/backend.log`, exit 0. |
+| 2 health and stop | Pass | The probe exited 0, `curl` printed `{"status":"ok"}`, `backend stopped`, and no pid file was left. |
+| 3 run twice | Pass | The second `make backend-run` printed `backend is already running (pid N)` with the same pid and exited 2 (make's code); the probe still exited 0; `backend stopped`. |
+| 4 stop refused, other checkout | Pass | `make backend-stop` against a backend of a second checkout (port 8011) printed `the working directory of pid N is not this checkout; nothing killed; pid file kept` and exited 2. A later single-command rerun (`S4`) confirmed the same refusal and that the other backend still answered `/api/health`. |
+| 5 symlink | Pass | Started and stopped through a symlink spelling of the checkout; no pid file left. |
+| 6 existing refusals, stale pid | Pass | `abc` in the pid file: "does not hold a plain pid; nothing killed", exit 2. The pid of the human's own shell: "does not look like the backend; nothing killed", exit 2, and the shell stayed open. A stale pid (999999): "stale pid file removed", exit 0. Pid 1 (owned by root): refused with "nothing killed", exit 2, file kept (the old code called it stale). |
+| 7 port in use (two listeners) | Pass | With a plain `http.server` on port 8000, and again with another checkout's backend answering on port 8000, `make backend-run` printed `port 8000 on 127.0.0.1 is already in use; nothing started`, exited non-zero, left no pid file, and the other backend still answered. |
+| 8 settings refused | Pass | `SOCBOARD_HOST=0.0.0.0` and `SOCBOARD_PORT=abc` were each refused with the server's own message and the log tail, exit 2, no pid file and no traceback. |
+| 8a hosts `::1` and `localhost` | Pass | Both started, answered `{"status":"ok"}` and stopped (this machine has an IPv6 loopback). |
+| 9 the 14 checks from #10 | Pass | #10's record names 10 distinct outcomes, not 14. All 10 matched: start, health 200, second start refused, `DELETE /api/health` gave 405 with `allow: GET` and `method_not_allowed`, an unknown path gave 404 `not_found` without the path in the body, stop, second stop "not running", `0.0.0.0` refused, no pid file left, own-shell pid refused. |
+| 10 make test, make verify | Pass | `make verify` ended `PASS: Tests`, `PASS: no whitespace errors`, `No test files changed.`, `VERIFY: PASS`. |
+| 11 diff read; optional edits | Pass | Late failure (the server dies after 5 s): `the server exited before it answered /api/health`, non-zero, no pid file. No health answer (a `sleep 600` in place of the server): `no healthy answer from /api/health within 30 s` within the allowed 29 to 36 s window (the check asserts the window, not the exact figure), the `sleep` was stopped, non-zero, no pid file. `Makefile` was restored and the tree was clean afterwards. The unreadable-cwd case was read in the diff, not run. |
+| 12 clean up | Pass | No server of the human's was left running, no pid file, and `git status` was clean. |
+
+On the first pass the one-line checks R1, R5 and R6 reported FAIL, and the cause was not captured (a server left running in the second terminal is the likely one). R5 was rerun and passed; R1 was replaced by the single-command check S4, which passed; R6 was rerun and passed. Another attempt at S4 failed once because the walkthrough had already deleted the second checkout, and was rerun after rebuilding it.
 
 ## Risk
 

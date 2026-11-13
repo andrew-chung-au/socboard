@@ -46,8 +46,8 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | | |
-| 2 | | |
+| 1 | Pass | `make contract-check` printed `openapi.yaml: OK`, run on `main` in the dev container after PRs #134 and #136 merged (2026-11-13). Run again with `FILE=openapi.yaml` in a separate clone at `5d0ffa6`: also OK. |
+| 2 | Not run | The search for `PathParameterValidationError` (three `$ref` lines and one definition) was not reported as run. QA read the same four places in the diff. |
 
 ## Risk
 
