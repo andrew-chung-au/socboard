@@ -52,6 +52,11 @@ issue-dump: ## Write an issue as JSON to .scratch/issue-<N>.json: make issue-dum
 	@mkdir -p .scratch
 	@if python3 -B _docs/agent-kit/scripts/github_api.py dump "$(N)" > ".scratch/issue-$(N).json.tmp" 2>/dev/null && python3 -B -m json.tool ".scratch/issue-$(N).json.tmp" > /dev/null 2>&1; then mv ".scratch/issue-$(N).json.tmp" ".scratch/issue-$(N).json" && echo ".scratch/issue-$(N).json"; else rm -f ".scratch/issue-$(N).json.tmp"; echo "issue-dump: gh could not return valid JSON for issue $(N)" >&2; exit 1; fi
 
+issue-body: ## Write an issue's title, labels and body, without comments, as JSON to .scratch/issue-<N>-body.json: make issue-body N=<issue number>
+	$(if $(call issue-number-ok,$(value N)),,$(error Usage: make issue-body N=<issue number>))
+	@mkdir -p .scratch
+	@if r=$$(python3 -B _docs/agent-kit/scripts/github_api.py repo 2>/dev/null) && python3 -B _docs/agent-kit/scripts/github_api.py head "$$r" "$(N)" > ".scratch/issue-$(N)-body.json.tmp" 2>/dev/null && python3 -B -m json.tool ".scratch/issue-$(N)-body.json.tmp" > /dev/null 2>&1; then mv ".scratch/issue-$(N)-body.json.tmp" ".scratch/issue-$(N)-body.json" && echo ".scratch/issue-$(N)-body.json"; else rm -f ".scratch/issue-$(N)-body.json.tmp"; echo "issue-body: gh could not return valid JSON for issue $(N)" >&2; exit 1; fi
+
 sweep-due: ## Say whether a sweep is due (read-only; the sweep interval is set in the script)
 	@python3 -B _docs/agent-kit/scripts/sweep-due.py
 
