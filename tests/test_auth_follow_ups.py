@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import sqlite3
 import time
 from types import SimpleNamespace
@@ -157,6 +158,14 @@ FILE_SPELLINGS = [
     pytest.param("sqlite:///file:{path}?uri=true&mode%2500=rwc", id="mode NUL key"),
     pytest.param("sqlite:///file:{path}?uri=true&mod%2565=rwc", id="escaped mode key"),
     pytest.param("sqlite:///file:{path}?uri=true&mode=rw%2563", id="escaped mode value"),
+    # After `mode=memory` SQLite accepts a wider `mode=rwc` (measured), so this must get `mode=rw`.
+    pytest.param(
+        "sqlite:///file:{path}?uri=true&mode=memory&mode%2500=rwc",
+        id="memory then NUL key rwc",
+        marks=pytest.mark.filterwarnings(
+            "ignore:Selection of the SingletonThreadPool:DeprecationWarning"
+        ),
+    ),
 ]
 
 
@@ -191,6 +200,15 @@ def test_a_plain_path_keeps_every_character_of_the_file_name(tmp_path, name):
     _make_database(tmp_path / name)
     _assert_opens(url)
     assert [entry.name for entry in tmp_path.iterdir()] == [name]
+
+
+def test_a_path_that_is_not_valid_utf8_opens_an_existing_file_and_never_creates_one(tmp_path):
+    name = os.fsdecode(b"caf\xe9.db")  # Python keeps the byte as a lone surrogate
+    url = URL.create("sqlite", database=str(tmp_path / name))
+    _assert_fails_and_creates_nothing(url, tmp_path)
+    _make_database(tmp_path / name)
+    _assert_opens(url)
+    assert os.listdir(os.fsencode(tmp_path)) == [b"caf\xe9.db"]
 
 
 def test_a_file_created_after_a_failed_request_opens_without_a_restart(tmp_path):
@@ -265,6 +283,10 @@ def test_a_missing_file_is_not_created_by_a_raw_file_uri(tmp_path, form):
         ("sqlite:///file:/d/a.db?uri=true&mode=memory", "file:/d/a.db?mode=memory"),
         ("sqlite:///file:/d/a.db?uri=true&mode=rwc%2500", "file:/d/a.db?mode=rwc%00&mode=rw"),
         ("sqlite:///file:/d/a.db?uri=true&mod%2565=ro", "file:/d/a.db?mod%65=ro&mode=rw"),
+        (
+            "sqlite:///file:/d/a.db?uri=true&mode=memory&mode%2500=rwc",
+            "file:/d/a.db?mode=memory&mode%00=rwc&mode=rw",
+        ),
         ("sqlite:///file:/d/a.db?uri=true", "file:/d/a.db?mode=rw"),
     ],
 )

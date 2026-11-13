@@ -8,11 +8,11 @@ closes the session, which rolls back anything left uncommitted.
 
 A request never creates a missing SQLite file (#104): this engine, and only this one (`make
 migrate` and `make seed` must still create the file), makes SQLite open a file database without
-create (`mode=rw` last, or a plain read-only, read-write or memory mode the URL already ends
-with; the rule is in `_open_without_create`). A missing file then fails at the first connection
-with SQLite's own "unable to open database file" (no path), which the generic 500 handler answers
-as `internal_error`. Requests that never query (no token, a bad login body) still get their 401 or
-422.
+create (`mode=rw` appended, unless the last `mode` is a plain `ro`, `rw` or `memory` with no
+later parameter holding `%`; the rule is in `_open_without_create`). A missing file then fails
+at the first connection with SQLite's own "unable to open database file" (no path), which the
+generic 500 handler answers as `internal_error`. Requests that never query (no token, a bad
+login body) still get their 401 or 422.
 """
 
 import os
@@ -44,10 +44,11 @@ def _open_without_create(dialect, connection_record, cargs, cparams) -> None:
     the last `mode` parameter is written plainly as `mode=ro`, `mode=rw` or `mode=memory` and no
     parameter after it holds a `%`: then SQLite reads that `mode` as written and the URI is kept.
 
-    Why this cannot create a file (measured on SQLite 3.46.1): SQLite reads the `mode`
-    parameters in order and each may only narrow the access the earlier ones left; a wider one
-    fails the open with "access mode not allowed". The last `mode` SQLite reads is then either
-    the kept `ro`, `rw` or `memory`, or the appended `rw`, and none of them carries create.
+    Why this cannot create a file (measured on SQLite 3.46.1): the last `mode` SQLite reads sets
+    the access, and the hook makes sure it is the kept plain `ro`, `rw` or `memory` or the
+    appended `rw`, none of which carries create. After `rwc`, `rw` or `ro` a later `mode` may
+    only narrow (a wider one fails with "access mode not allowed"); `memory` is the exception:
+    after it, `mode=rwc` creates a missing file and `mode=rw` opens an existing one read-write.
     Accepted costs: an oddly encoded read-only mode (`mod%65=ro`) followed by the appended
     `mode=rw` fails at the first connection; an oddly encoded `mod%65=memory` followed by it
     opens the named file read-write instead of a memory database (a missing file still fails).
@@ -57,7 +58,7 @@ def _open_without_create(dialect, connection_record, cargs, cparams) -> None:
         return  # in memory, or SQLite's private temporary database: no file
     if not (cparams.get("uri") and name.startswith("file:")):
         # The leading `//` is an empty authority, so a path starting `//` stays a path.
-        cargs[0] = "file://" + quote(os.path.abspath(name)) + "?mode=rw"
+        cargs[0] = "file://" + quote(os.fsencode(os.path.abspath(name))) + "?mode=rw"
         cparams["uri"] = True
         return
     path, _, query = name.partition("#")[0].partition("?")  # SQLite ignores the fragment
