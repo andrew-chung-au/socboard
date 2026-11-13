@@ -1,6 +1,6 @@
 """`GET /api/cases?status=Closed` (`getClosedCases`, #20): the Lead-only list of closed cases.
 
-The deferred half of the fifth criterion (the audit trail read, #19) is added after #19 merges.
+One test follows each listed case to the case read and to its audit trail (#19).
 """
 
 # Closed cases (#20)
@@ -132,6 +132,39 @@ def test_a_listed_case_opens_with_the_case_read(real_client, app_database):
     response = real_client.get(f"{URL}/{entry['id']}", headers=LEAD)
     assert response.status_code == 200
     assert {key: response.json()[key] for key in SUMMARY_FIELDS} == entry
+
+
+def test_each_listed_case_opens_and_its_trail_ends_with_its_real_closing_entry(
+    real_client, app_database
+):
+    for case_id in (1, 2, 3):
+        add_case(app_database, case_id, owner_id=ANALYST_ID, status="Investigating")
+    # Close two through the real route as a Lead; case 2 stays open and is never listed.
+    reasons = {"1": "duplicate", "3": "false_positive"}
+    for case_id, reason in reasons.items():
+        moved = real_client.post(
+            f"{URL}/{case_id}/transition",
+            headers=LEAD,
+            json={"to": "Closed", "closingReason": reason},
+        )
+        assert moved.status_code == 200
+    listed = closed(real_client)
+    assert sorted(entry["id"] for entry in listed) == ["1", "3"]
+    close_times = []
+    for entry in listed:
+        case = real_client.get(f"{URL}/{entry['id']}", headers=LEAD)
+        assert case.status_code == 200
+        assert case.json()["id"] == entry["id"]
+        assert case.json()["status"] == "Closed"
+        assert case.json()["closingReason"] == entry["closingReason"] == reasons[entry["id"]]
+        trail = real_client.get(f"{URL}/{entry['id']}/audit", headers=LEAD)
+        assert trail.status_code == 200
+        last = trail.json()[-1]
+        assert last["action"] == "status_changed"
+        assert last["detail"] == f"Investigating -> Closed ({entry['closingReason']})"
+        close_times.append(last["at"])
+    # The list put the most recently closed first: its closing entry is not older than the next.
+    assert close_times == sorted(close_times, reverse=True)
 
 
 # --- refusals, in the contract's order: 401, 403, 422 ------------------------------------------
