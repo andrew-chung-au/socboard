@@ -162,6 +162,12 @@ class NoteRequest(BaseModel):
     text: Annotated[str, AfterValidator(_note_text)]
 
 
+class TransitionRequest(BaseModel):
+    to: Status
+    # Optional but not nullable, as in the contract: an explicit null is a schema 422.
+    closingReason: ClosingReason = None  # type: ignore[assignment]
+
+
 class IngestRequest(BaseModel):
     """The ingest body (`openapi.yaml` `IngestRequest`, limits from #86). Unknown keys, such as a
     `severity` or `status` from the caller, are ignored."""

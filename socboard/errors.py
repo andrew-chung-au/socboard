@@ -37,6 +37,9 @@ VALIDATION_ERROR = "validation_error"
 INTERNAL_ERROR = "internal_error"
 # Notes (#18)
 EMPTY_NOTE = "empty_note"
+# Transitions (#17)
+INVALID_TRANSITION = "invalid_transition"
+REASON_REQUIRED = "reason_required"
 
 VALIDATION_MESSAGE = "The request is not valid."
 INTERNAL_MESSAGE = "Something went wrong."

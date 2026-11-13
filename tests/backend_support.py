@@ -16,13 +16,12 @@ from typing import Annotated, Literal
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import insert
 
 from socboard import database, migrate
 from socboard.app import create_api_router
-from socboard.auth import CurrentUser, current_user, require_lead
-from socboard.errors import NOT_FOUND, ApiHTTPException
+from socboard.auth import CurrentUser, require_lead
+from socboard.errors import ApiHTTPException
 from socboard.models import User
 from socboard.passwords import hash_password
 from socboard.tokens import create_token
@@ -86,11 +85,6 @@ def build_test_database(path: Path) -> str:
     return url
 
 
-class TransitionBody(BaseModel):
-    to: Literal["New", "Investigating", "Closed"]
-    closingReason: Literal["true_positive", "false_positive", "duplicate"] | None = None
-
-
 def create_test_router() -> APIRouter:
     router = create_api_router()
 
@@ -100,16 +94,6 @@ def create_test_router() -> APIRouter:
         user: Annotated[CurrentUser, Depends(require_lead)],
     ) -> list[dict]:
         return []
-
-    @router.post("/cases/{id}/transition")
-    def transition(
-        id: str,
-        body: TransitionBody,
-        user: Annotated[CurrentUser, Depends(current_user)],
-    ) -> dict:
-        if id != KNOWN_CASE_ID:
-            raise ApiHTTPException(404, NOT_FOUND, "Case not found.")
-        return {"id": id, "status": body.to}
 
     @router.get("/items/{item_id}")
     def item_by_path(item_id: int) -> dict:

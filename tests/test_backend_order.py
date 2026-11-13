@@ -10,7 +10,8 @@ do not weaken them, when #13 and #14 replace the test-only dependencies with the
 Each body is exactly `{ code, message }`.
 """
 
-from backend_support import ANALYST_TOKEN, KNOWN_CASE_ID, LEAD_TOKEN
+from backend_support import ANALYST_ID, ANALYST_TOKEN, KNOWN_CASE_ID, LEAD_TOKEN
+from test_queue_api import add_case
 
 
 def bearer(token):
@@ -83,11 +84,11 @@ def test_transition_d_body_that_is_not_json_and_no_token_is_422(client):
     check(response, 422, "validation_error")
 
 
-def test_transition_well_formed_request_keeps_the_usual_order(client):
+def test_transition_well_formed_request_keeps_the_usual_order(client, app_database):
+    # The real route (#17) on a real case owned by the analyst; KNOWN_CASE_ID is never a real id.
+    add_case(app_database, 1, owner_id=ANALYST_ID)
     url = "/api/cases/C-unknown/transition"
     check(client.post(url, json=GOOD_BODY), 401, "unauthorized")
     check(client.post(url, json=GOOD_BODY, headers=bearer(ANALYST_TOKEN)), 404, "not_found")
-    ok = client.post(
-        f"/api/cases/{KNOWN_CASE_ID}/transition", json=GOOD_BODY, headers=bearer(ANALYST_TOKEN)
-    )
+    ok = client.post("/api/cases/1/transition", json=GOOD_BODY, headers=bearer(ANALYST_TOKEN))
     assert ok.status_code == 200

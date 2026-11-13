@@ -12,8 +12,12 @@ Queue order is a backend rule: severity by an explicit rank (Critical first), th
 timestamp oldest first, then case id ascending. The rank is a SQL CASE built from the constant
 below, so SQLite and Postgres order alike and no text is formatted into a query.
 
-Notes (#18): `POST /api/cases/{id}/notes` is the one write here; it commits once, with its audit
-entry. The two reads above still write nothing.
+Notes (#18): `POST /api/cases/{id}/notes` commits once, with its audit entry. The two reads above
+still write nothing.
+
+Transitions (#17): `POST /api/cases/{id}/transition` is, like the claim, one conditional UPDATE
+that checks the current status (and the owner, for an Analyst); only a refused move reads the case,
+to choose the refusal in the contract's order.
 """
 
 from datetime import UTC, datetime
@@ -26,20 +30,28 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from socboard.audit import append_audit
-from socboard.auth import CurrentUser, current_user
+from socboard.auth import ROLE_LEAD, CurrentUser, current_user, forbidden
 from socboard.domain import ACTION_CLAIMED, SEVERITIES, STATUS_CLOSED
 from socboard.errors import (
     ALREADY_CLAIMED,
     CASE_CLOSED,
     EMPTY_NOTE,
+    INVALID_TRANSITION,
     NOT_FOUND,
+    REASON_REQUIRED,
     ApiError,
     ApiHTTPException,
 )
 from socboard.ids import from_public_id, to_public_id
 from socboard.models import Alert, Case, Note
 from socboard.models import User as UserRow
-from socboard.schemas import CaseDetail, CaseSummary, NoteRequest, QueueResponse
+from socboard.schemas import (
+    CaseDetail,
+    CaseSummary,
+    NoteRequest,
+    QueueResponse,
+    TransitionRequest,
+)
 from socboard.schemas import Note as NoteOut
 from socboard.schemas import User
 from socboard.sessions import get_session
@@ -54,6 +66,11 @@ ALREADY_CLAIMED_MESSAGE = "Case is already owned."
 # Notes (#18)
 NOTE_CASE_CLOSED_MESSAGE = "Notes cannot be added to a closed case."
 EMPTY_NOTE_MESSAGE = "Note text cannot be empty."
+
+# Transitions (#17): each target status and the one status it may be reached from (spec section 4).
+MOVES = {"Investigating": "New", STATUS_CLOSED: "Investigating"}
+INVALID_TRANSITION_MESSAGE = "That move is not allowed for this case."
+REASON_REQUIRED_MESSAGE = "A closing reason is required."
 
 
 def _summary_fields(case: Case, alert: Alert, owner: UserRow | None) -> dict:
@@ -208,7 +225,70 @@ def create_cases_router(prefix: str) -> APIRouter:
             raise
         return response
 
+    @router.post(
+        "/cases/{id}/transition",
+        response_model=CaseDetail,
+        responses={
+            403: {"model": ApiError},
+            404: {"model": ApiError},
+            409: {"model": ApiError},
+            422: {"model": ApiError},
+        },
+        operation_id="transitionCase",
+    )
+    def transition_case(
+        id: str,
+        body: TransitionRequest,
+        user: Annotated[CurrentUser, Depends(current_user)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CaseDetail:
+        case_id = from_public_id(id)
+        closing = body.to == STATUS_CLOSED
+        # A valid reason on a move that is not a close is ignored (contract, "Stated facts").
+        reason = body.closingReason if closing else None
+        source = MOVES.get(body.to)
+        won = False
+        if case_id is not None and source is not None and (reason is not None or not closing):
+            conditions = [Case.id == case_id, Case.status == source]
+            if user.role != ROLE_LEAD:
+                conditions.append(Case.owner_id == user.id)
+            # One conditional UPDATE: two simultaneous moves cannot both apply.
+            won = session.execute(
+                update(Case).where(*conditions).values(status=body.to, closing_reason=reason)
+            ).rowcount == 1
+        if not won:
+            # Nothing was written; read the case only to choose the refusal, then roll back.
+            row = None if case_id is None else session.execute(
+                select(Case.status, Case.owner_id).where(Case.id == case_id)
+            ).one_or_none()
+            session.rollback()
+            raise _transition_refusal(row, user, body.to, source)
+        detail_text = f"{source} -> {body.to}" + (f" ({reason})" if closing else "")
+        append_audit(
+            session,
+            case_id=case_id,
+            actor_id=user.id,
+            action="status_changed",
+            detail=detail_text,
+        )
+        # Read before commit, so a saved move never answers 500 because of the read.
+        detail = _case_detail(session, case_id)
+        session.commit()
+        return detail
+
     return router
+
+
+def _transition_refusal(row, user: CurrentUser, to: str, source: str | None) -> ApiHTTPException:
+    """The refusal for a move that changed nothing, in the contract's order: 404, 403, 409, 422."""
+    if row is None:
+        return _not_found()
+    status, owner_id = row
+    if user.role != ROLE_LEAD and owner_id != user.id:
+        return forbidden()
+    if status == source and to == STATUS_CLOSED:
+        return ApiHTTPException(422, REASON_REQUIRED, REASON_REQUIRED_MESSAGE)
+    return ApiHTTPException(409, INVALID_TRANSITION, INVALID_TRANSITION_MESSAGE)
 
 
 def _not_found() -> ApiHTTPException:
