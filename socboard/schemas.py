@@ -180,3 +180,17 @@ class IngestRequest(BaseModel):
     timestamp: Annotated[datetime, BeforeValidator(_parse_timestamp)]
     title: Text200
     description: Text10000
+
+
+# Audit trail (#19)
+AuditAction = Literal["ingested", "claimed", "status_changed", "note_added", "reassigned"]
+
+
+class AuditEntry(BaseModel):
+    """One audit entry. `actor` is the user, or the string "system" (an ingest has no user)."""
+
+    id: str
+    at: datetime
+    actor: User | Literal["system"]
+    action: AuditAction
+    detail: str
