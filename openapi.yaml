@@ -179,6 +179,7 @@ info:
        `source`, `title` and `description` are the same in the spec, the issue, the request and
        `types.ts`. The operationId `ingestAlert` is a name chosen here; neither the issue nor
        the spec gives one.
+    14. Audit read: the mock lets any authenticated user read a case's audit trail, while the contract is Lead-only (403 `forbidden` for an Analyst, checked before the 404).
 
     Codes the mock lacks are new: `invalid_target`, the generic 422 `validation_error`, the 405
     `method_not_allowed`, the 500 `internal_error`, and the ingest codes `invalid_api_key` (401)
@@ -560,8 +561,8 @@ paths:
       summary: Read a case's audit trail
       description: |
         Entries are returned oldest first, as stored. An `ingested` entry has actor `"system"`.
-        Allowed for any authenticated user; to be confirmed in #19 (the mock does the same).
-        Order: 401, 404.
+        Lead-only: an Analyst gets 403 `forbidden`, even for an unknown id.
+        Order: 401, 403, 404.
       responses:
         "200":
           description: The audit entries, as a bare array.
@@ -573,6 +574,8 @@ paths:
                   $ref: "#/components/schemas/AuditEntry"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/CaseNotFound"
   /users:
