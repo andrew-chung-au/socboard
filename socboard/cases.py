@@ -19,19 +19,24 @@ reads above still write nothing.
 Transitions (#17): `POST /api/cases/{id}/transition` is, like the claim, one conditional UPDATE
 that checks the current status (and the owner, for an Analyst); only a refused move reads the case,
 to choose the refusal in the contract's order.
+
+Closed cases (#20): `GET /api/cases?status=Closed` is Lead-only (`require_lead`) and writes nothing.
+Most recently closed first, then case id descending; the close time is read from the closing
+`status_changed` audit entry in the same statement (no column). A Closed case with no such entry
+comes last.
 """
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import case as sql_case
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from socboard.audit import append_audit
-from socboard.auth import ROLE_LEAD, CurrentUser, current_user, forbidden
+from socboard.auth import ROLE_LEAD, CurrentUser, current_user, forbidden, require_lead
 from socboard.domain import ACTION_CLAIMED, SEVERITIES, STATUS_CLOSED
 from socboard.errors import (
     ALREADY_CLAIMED,
@@ -44,7 +49,7 @@ from socboard.errors import (
     ApiHTTPException,
 )
 from socboard.ids import from_public_id, to_public_id
-from socboard.models import Alert, Case, Note
+from socboard.models import Alert, AuditEntry, Case, Note
 from socboard.models import User as UserRow
 from socboard.schemas import (
     CaseDetail,
@@ -285,6 +290,42 @@ def create_cases_router(prefix: str) -> APIRouter:
         detail = _case_detail(session, case_id)
         session.commit()
         return detail
+
+    # Closed cases (#20)
+    @router.get(
+        "/cases",
+        response_model=list[CaseSummary],
+        dependencies=[Depends(require_lead)],
+        responses={403: {"model": ApiError}, 422: {"model": ApiError}},
+        operation_id="getClosedCases",
+    )
+    def get_closed_cases(
+        status: Literal["Closed"], session: Annotated[Session, Depends(get_session)]
+    ) -> list[CaseSummary]:
+        # Order (contract): 401 and 403 are dependencies, so they run before the schema 422 that
+        # `status` (required, only `Closed`) can raise. `status` itself is not read: it only
+        # selects this list.
+        # The close time is the latest closing `status_changed` entry (detail starts with the fixed
+        # text below, which holds no LIKE wildcard; the reason after it is never matched).
+        # Joined in one statement, so no read per case.
+        closed_at = (
+            select(AuditEntry.case_id, func.max(AuditEntry.at).label("closed_at"))
+            .where(
+                AuditEntry.action == "status_changed",
+                AuditEntry.detail.startswith("Investigating -> Closed ("),
+            )
+            .group_by(AuditEntry.case_id)
+            .subquery()
+        )
+        rows = session.execute(
+            _case_query()
+            .outerjoin(closed_at, closed_at.c.case_id == Case.id)
+            .where(Case.status == STATUS_CLOSED)
+            # A Closed case with no closing entry (inserted directly) is listed last, by id, with
+            # an explicit rule because SQLite and Postgres put NULL at opposite ends.
+            .order_by(closed_at.c.closed_at.is_(None), closed_at.c.closed_at.desc(), Case.id.desc())
+        ).all()
+        return [CaseSummary(**_summary_fields(*row)) for row in rows]
 
     return router
 
