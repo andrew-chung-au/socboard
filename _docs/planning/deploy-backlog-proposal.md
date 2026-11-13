@@ -87,7 +87,7 @@ Join:       D6a, D6b, D7, D8, D9, #144, D14, D17c, D19, D21 -> D20 -> D22a -> D2
 
 ## 5. Issue drafts
 
-Full bodies for wave 1 (D1 to D5) are in `_docs/planning/deploy-draft/wave-1-issue-drafts.md`; the later ones are written in full after the human approves this list.
+Full bodies for wave 1 (D1 to D5) are in `_docs/planning/deploy-draft/wave-1-issue-drafts.md` and are filed as #139 to #143. Full draft bodies for wave 2 (D6a, D6b, D8, D9, D10, D15, D16, D17a to D17c, D18a, D18b, D21, D24; not filed) are in `_docs/planning/deploy-draft/wave-2-issue-drafts.md`. D11 to D14, D19, D20, D22 and D23 stay outlines until #22 and the Terraform text exist.
 
 Tier is proposed, not final. Model: **S** stronger, **M** middle, **W** weaker (suitability, as in the earlier plan). "Roadmap" is the old task number in `roadmap-3-deploy.md`.
 
@@ -152,11 +152,11 @@ Tier is proposed, not final. Model: **S** stronger, **M** middle, **W** weaker (
 - `openapi.yaml` documents the new response; `make contract-check` passes.
 
 **D9 Ingest rate limiting (Standard; new, spec §4).** Model M. Depends on: D3.
-- A source that exceeds the configured rate gets 429; the excess alerts are not stored (a test counts rows). A source within the rate is unaffected; two sources have separate limits.
+- Requests above the configured rate for the holder of the ingest key get 429; the excess alerts are not stored (a test counts rows). The limit is keyed on the ingest key, not the `source` field, because `source` is untrusted text in the body that a caller can change on every request. Requests within the rate are unaffected.
 - The refusal order of `openapi.yaml` is kept (401 for a wrong key stays first); the response is documented and `make contract-check` passes.
 
 **D10 One container image, and a CI build job (Standard; roadmap 7).** Model M. Depends on: D2, D3, D4, #100. Protected: `Dockerfile` Layout line in `AGENTS.md`.
-- A multi-stage `Dockerfile` builds the frontend (`VITE_USE_MOCK` false, build arguments for the `VITE_*` settings), then copies `dist` into a non-root Python 3.12 image; `.dockerignore` keeps `.env`, `.scratch/` and `node_modules` out.
+- A multi-stage `Dockerfile` builds the frontend (`VITE_USE_MOCK` false, build arguments for the `VITE_*` settings), then copies `dist` into a non-root Python 3.12 image; `.dockerignore` keeps env files, `.scratch/` and `node_modules` out.
 - CI builds the image on every pull request and fails on a build error; the human runs it once locally and reports the result.
 - No secret, env file or demo credential is in the image or the bundle (a check lists the image's files, as `frontend-build` does for the bundle).
 - The start command runs one worker (the in-process limits of D8 and D9 assume it) and passes D4's flag. `VITE_API_BASE_URL` stays unset in the build, so the client uses `/api`.
@@ -189,7 +189,7 @@ All use `VERIFY:` markers for unverified AWS details; CI runs `fmt` and `validat
 - A private, versioned, encrypted bucket; `.gitignore` covers state and real variable files; an example variable file is tracked; the steps to move state into the bucket are written down.
 
 **D16 Terraform: CI access (Heavy: IAM; roadmap 13).** Model S. Depends on: D1, D15.
-- OIDC provider and three roles (plan read-only, apply, deploy), each trusted for this repository and a named GitHub Environment; no stored keys. A job that names an Environment gets an OIDC subject with the Environment name, not the branch, so any branch's workflow could assume the role unless the Environment restricts deployment branches (D19): a test or manual check shows a non-`main` branch cannot assume either role. Whether the trust policy can also check the numeric repository ids is `VERIFY:` (it may need the subject claim customised). The deploy role may only run one custom Systems Manager document with a fixed script and one validated parameter (the image digest), and read that command's result; a generic shell document would make the role root on the server. The plan role is denied the secret's value. The human applies it; CI cannot change its own roles.
+- OIDC provider and three roles (plan read-only, apply, deploy), the apply and deploy roles each trusted for this repository and a named GitHub Environment, the plan role for the repository's pull-request subject; no stored keys. A job that names an Environment gets an OIDC subject with the Environment name, not the branch, so any branch's workflow could assume the role unless the Environment restricts deployment branches (D19): a test or manual check shows a non-`main` branch cannot assume either role. Whether the trust policy can also check the numeric repository ids is `VERIFY:` (it may need the subject claim customised). The deploy role may only run one custom Systems Manager document with a fixed script and one validated parameter (the image digest), and read that command's result; a generic shell document would make the role root on the server. The plan role is denied the secret's value. The human applies it; CI cannot change its own roles.
 
 **D17a Terraform: instance IAM and budgets, human-applied (Heavy: IAM; roadmap 14, first part).** Model S. Depends on: D1, D15.
 - Every IAM resource of the server lives here with the CI-access part, applied only by the human: the instance role and profile (Systems Manager plus read of the one named secret), and, if the daily snapshot schedule needs its own role, that role (`VERIFY:`). Budget notifications at three thresholds are also here (account-level, human-applied).
