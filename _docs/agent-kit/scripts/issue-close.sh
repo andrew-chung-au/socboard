@@ -13,7 +13,8 @@
 # A QA verdict is the first line: FAIL if it says FAIL anywhere, PASS only if it starts
 # `QA: PASS` (team/qa-engineer.md). An Engineer comment reports a commit when it says
 # "commit" and holds any 7 to 40 hex characters, all-digit short hashes included, unless it
-# is a reflection: it has a `Reflection:` line and has neither a Verify line nor a numbered
+# is a reflection: it has a `Reflection:` line and has neither a Verify line (a line starting
+# with Verify or Verification) nor a numbered
 # criterion line saying done or not checked (local deviation, see _docs/decisions/):
 #   completed, Standard or Heavy: the issue is open and has `approved`; the latest `QA:`
 #     verdict is PASS; at least one `QA:` PASS (two for `tier:heavy`) was posted at or
@@ -187,12 +188,12 @@ if verdicts[-1][1] == "FAIL":
 def is_reflection(body):
     # Local deviation (_docs/decisions/2026-11-13T0537Z-close-floor-reflection.md): a comment with a
     # `Reflection:` block and neither work marker is the post-PASS reflection, not new work. Work
-    # markers (team/software-engineer.md), either one is enough: a Verify line (`Verify:`,
-    # `Verify result:`, `**Verify** result:`, `Verify - PASS`, `Verify (CI): pending`, `Verification:`,
-    # or a `## Verify` heading), or a numbered criterion line (`1.`, `1)`, `1:`, `Criterion 1:`,
-    # `AC1:`) that says done or not checked. A work comment with a reflection appended has a marker,
-    # so it still counts. When in doubt it counts as work: QA re-checks.
-    verify = re.search(r"(?im)^[ \t>*_#-]*verif(?:y|ication)\b[^:\n]{0,20}(?::|[ \t]-|$)", body)
+    # markers (team/software-engineer.md), either one is enough: a Verify line (any line that starts,
+    # after `>`, `*`, `_`, `#`, `-` and spaces, with the word Verify or Verification, however long the
+    # label: `Verify:`, `**Verify** (make verify BASE=x): PASS`, `Verify - PASS`, `## Verify`),
+    # or a numbered criterion line (`1.`, `1)`, `1:`, `Criterion 1:`, `AC1:`) that says
+    # done or not checked. A work comment with a reflection appended has a marker, so it still counts. When in doubt it counts as work: QA re-checks.
+    verify = re.search(r"(?im)^[ \t>*_#-]*verif(?:y|ication)\b", body)
     criteria = re.search(r"(?im)^[ \t]*(?:[-*][ \t]+)?(?:(?:criterion|ac)[ \t]*)?\d+[.):].*\b(?:done|not checked)\b", body)
     reflection = re.search(r"(?im)^[ \t>*_#]*reflection[ \t*_]*:", body)
     return bool(reflection) and not (verify or criteria)
