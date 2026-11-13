@@ -21,6 +21,15 @@ def auth_test_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("SOCBOARD_DATABASE_URL", "sqlite:///" + (tmp_path / "unused.db").as_posix())
 
 
+@pytest.fixture(autouse=True)
+def no_built_frontend(monkeypatch, tmp_path):
+    """Point the site folder at a missing one, so a built `frontend/dist` never reaches the tests (#140).
+
+    `tests/test_spa_serving.py` sets the variable itself, which overrides this.
+    """
+    monkeypatch.setenv("SOCBOARD_STATIC_DIR", (tmp_path / "no-built-frontend").as_posix())
+
+
 @pytest.fixture(scope="session")
 def template_database(tmp_path_factory):
     """One migrated database with the two test users, copied for each test that needs it."""

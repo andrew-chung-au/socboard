@@ -49,7 +49,7 @@ none
 
 ## Unrelated problems noticed but not fixed
 
-- Existing tests (for example `test_unknown_route_outside_the_api_prefix_is_404_not_found`, `/health`) would get the entry page on a machine where `frontend/dist` exists, because the default folder is read when no setting is given. CI has no `dist`. Suggested fix, outside this issue's files: `tests/conftest.py` sets `SOCBOARD_STATIC_DIR` to a missing folder in its autouse fixture.
+- Existing tests (for example `test_unknown_route_outside_the_api_prefix_is_404_not_found`, `/health`) would get the entry page on a machine where `frontend/dist` exists, because the default folder is read when no setting is given. CI has no `dist`. Fixed in the QA fix round (QA finding M1, human-approved): an autouse fixture in `tests/conftest.py` sets `SOCBOARD_STATIC_DIR` to a missing folder.
 - This sandbox could not run the Python tests; CI was the test loop.
 
 ## Follow-ups for the next session
