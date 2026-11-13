@@ -42,7 +42,12 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
   15. #99 Harden the audit guard's remaining DDL and id gaps (#11's Low QA findings L1 to L5). After #11 closes, before #14 (the first issue that writes audit entries in use); proposed Heavy.
   - #102 A request body that cannot be parsed gets 500 instead of 422 (#13 follow-up). Before #14, which takes the first JSON body from outside.
   - #107 Simplify the audit guard (from #99's Reviewer and QA findings; proposed Heavy). Any time after #99 closes; before Deploy. At grooming, also add: keep the HTTP-layer module list in `tests/test_data_audit.py` in one place, because #13, #15 and later route issues each add a name (human ruling, #15).
-  - #110 Simplify the ingest route (from #14's Reviewer and QA findings; proposed Standard). Any time after #14 closes; before Deploy.
+  - #110 Simplify the ingest route (from #14's Reviewer and QA findings; proposed Standard). Any time after #14 closes; before Deploy. At grooming, also add #15's Reviewer findings (human ruling, #15):
+    - one shared `CaseSummary` builder for ingest and the queue (15-1);
+    - the repeated contract and hostile-text tests (15-2, 15-3);
+    - the single-use not-found message (15-4);
+    - the triple 422 explanation (15-5);
+    - "no queue paging", recorded as a known limit (15-6).
   - #103 A deleted user's id can be reused, so their old token is accepted as the new user (#13 follow-up, low). Before any issue that deletes users, and before Deploy.
   - #104 Small follow-ups from #13 (missing database, seed variables, seed help text, hash bounds, secret check; low). Any time before #22; needs the human's approval of a `Makefile` and `AGENTS.md` diff.
   16. #100 Pin CI's Python version to the project's 3.12 (CI ran 3.14 on #11). Any time, before #22; needs the human's approval of the workflow diff.
