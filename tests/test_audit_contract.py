@@ -3,13 +3,13 @@
 Compared: the 200 body (an array of `AuditEntry`, with `User` and the actions), the 401, 403 and 404
 error bodies, the response statuses, the security, the operation id and the Lead-only wording.
 
-Two known differences, named here and accepted as nothing else:
+One known difference, named here and accepted as nothing else:
 - The contract writes the actor as `oneOf` (the user, or the string "system"); pydantic writes
   `anyOf`. For two non-null alternatives the comparison keeps the keyword, so the test changes the
   CONTRACT's `oneOf` to `anyOf` on a copy. Safe: the alternatives cannot both match (an object and
   a string), so `oneOf` and `anyOf` accept the same documents.
-- FastAPI documents a 422 for a route with a path parameter and the contract has none (as for
-  `getCase`, test_queue_contract.py). The route declares the contract's `ApiError` 422.
+The 422 (FastAPI adds it to a route with a path parameter) is in the contract too, so the status
+sets are asserted equal.
 """
 
 import copy
@@ -68,11 +68,10 @@ def test_the_200_response_equals_the_contract(same_keyword_contract, generated):
     assert {"const": "system", "type": "string"} in entry["properties"]["actor"]["anyOf"]
 
 
-def test_the_response_statuses_are_the_contracts_plus_the_path_parameters_422(contract, generated):
+def test_the_response_statuses_match_the_contract(contract, generated):
     contract_op = join_server_base(contract)[PATH]["get"]
     generated_op = generated["paths"][PATH]["get"]
-    assert set(contract_op["responses"]) == {"200", "401", "403", "404"}
-    assert set(generated_op["responses"]) == {"200", "401", "403", "404", "422"}
+    assert set(generated_op["responses"]) == set(contract_op["responses"]) == {"200", "401", "403", "404", "422"}
     # The contract reuses its shared forbidden response.
     assert contract_op["responses"]["403"] == {"$ref": "#/components/responses/Forbidden"}
 

@@ -4,10 +4,9 @@ Compared with the contract, using tests/openapi_compare.py: the 200 schemas (`Qu
 `CaseSummary` and `User`; `CaseDetail` with `Note`), the 401 and 404 bodies, the security and the
 operation ids.
 
-One known difference: FastAPI documents a 422 for any route with a path parameter, and the
-contract has none on `getCase`. The route declares the contract's `ApiError` 422 (so the generated
-document has no `HTTPValidationError`), and a string id can never fail validation, so it is never
-returned. The tests below name that difference and accept nothing else.
+The `getCase` 422 (FastAPI adds it to any route with a path parameter) is in the contract too, so
+the status sets are asserted equal. The route declares the contract's `ApiError` 422 (so the
+generated document has no `HTTPValidationError`); a string id never fails validation.
 """
 
 import pytest
@@ -57,8 +56,7 @@ def test_the_response_statuses_match_the_contract(contract, generated):
     queue_contract, queue_generated = operations(contract, generated, QUEUE)
     assert set(queue_generated["responses"]) == set(queue_contract["responses"]) == {"200", "401"}
     case_contract, case_generated = operations(contract, generated, CASE)
-    assert set(case_contract["responses"]) == {"200", "401", "404"}
-    assert set(case_generated["responses"]) == {"200", "401", "404", "422"}
+    assert set(case_generated["responses"]) == set(case_contract["responses"]) == {"200", "401", "404", "422"}
 
 
 @pytest.mark.parametrize(("path", "status"), [(QUEUE, "401"), (CASE, "401"), (CASE, "404"), (CASE, "422")])

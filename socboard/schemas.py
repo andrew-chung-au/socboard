@@ -152,17 +152,14 @@ Text10000 = Annotated[
 NOTE_MAX_LENGTH = 5_000
 
 
-def _note_text(text: str) -> str:
-    """The length limit is a validator, not `max_length`, so the generated schema keeps the
-    contract's `NoteRequest` (no length keyword). Over the limit is a schema 422 (checked before
-    the 404, as the contract orders it). Emptiness is a domain rule in the handler."""
-    if len(text) > NOTE_MAX_LENGTH:
-        raise ValueError("The note is too long.")
-    return _storable(text)
-
-
 class NoteRequest(BaseModel):
-    text: Annotated[str, AfterValidator(_note_text)]
+    """Over the limit is a schema 422 (checked before the 404, as the contract orders it), and the
+    generated schema carries `maxLength` like the contract. No `min_length`: emptiness after
+    trimming is a domain rule in the handler."""
+
+    text: Annotated[
+        str, StringConstraints(max_length=NOTE_MAX_LENGTH), AfterValidator(_storable)
+    ]
 
 
 class TransitionRequest(BaseModel):
