@@ -40,6 +40,10 @@ By file. Add project manifests here.
 | `AGENTS.md` | Instructions agents read first | Current |
 | `_docs/specs.md` | The product specification (problem, users, journeys, requirements, scope, invariants) | Current |
 | `_docs/planning/lovable-guidance.md` | How to generate and import the frontend base with Lovable | Current |
+| `_docs/planning/deploy-backlog-proposal.md` | Draft Deploy backlog (D1 to D23) for the human's approval: review of roadmap 3, issue drafts, the effect of #22, open questions and spec notes; no issue filed yet | Proposed |
+| `_docs/planning/deploy-draft/reviewer-brief.md` | Brief for an outside reviewer of the Deploy plan: what to read, what to judge, known gaps, reply format | Proposed |
+| `_docs/planning/deploy-draft/wave-2-issue-drafts.md` | Full draft bodies for Deploy wave 2 (D6a, D6b, D8, D9, D10, D15, D16, D17a to D17c, D18a, D18b, D21, D24); not filed | Proposed |
+| `_docs/planning/deploy-draft/spec-notes-a-b.patch` | The exact diff of spec notes A and B for `_docs/specs.md` (protected; the human commits it) | Proposed |
 | `_docs/vendor/ponytail/` | Verbatim copies of upstream `ponytail` (the Engineer's skill, `ponytail.md`) and `ponytail-review` at the pinned commit, with the licence; loaded by path, never auto-discovered (source: `_docs/records/2026-11-06T0024Z-source-ponytail.md`) | Current |
 | `_docs/team/reviewer.md` | The read-only Reviewer role, run after the last QA PASS on every issue (project-owned, outside the kit; pointers in `.claude/agents/`, `.opencode/agents/` and `.kiro/agents/`; decisions: `_docs/decisions/2026-11-12T2300Z-ponytail-adopt.md`, `_docs/decisions/2026-11-10T0822Z-reviewer-role.md`) | Current |
 | `_docs/decisions/2026-11-12T2300Z-ponytail-adopt.md` | Why ponytail is used in normal work (the Engineer's skill and the Reviewer), how its benefit is measured for review (before and after, from `make ponytail-metrics` and the human's finding labels), and why the controlled trial was shelved | Current |
