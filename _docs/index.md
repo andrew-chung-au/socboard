@@ -47,6 +47,7 @@ By file. Add project manifests here.
 | `_docs/records/2026-11-10T1506Z-measure-ponytail-epoch-1-start.md` | Start of ponytail epoch 1: the commit, kit version, role-file versions, skill pin and excluded issues (trial shelved on 2026-11-12, can be resumed: `_docs/planning/roadmap-2-ponytail-trial.md`) | Shelved |
 | `_docs/records/2026-11-10T1518Z-measure-pm-sweep.md` | First PM sweep: figures at f41d503, seven proposals and the human's ruling | Current |
 | `_docs/records/2026-11-13T0424Z-measure-pm-sweep.md` | Fifth PM sweep: figures at 3dc8b90, fourteen proposals and the human's ruling | Current |
+| `_docs/records/2026-11-13T1008Z-measure-pm-sweep.md` | Sixth PM sweep: figures at a63ef30, thirteen proposals (the local ones applied as steering or roadmap edits; the kit edits wait for the human's exact-diff approval), the answers to the human's questions and the human's rulings | Current |
 | `_docs/records/2026-11-13T0424Z-measure-ponytail-review.md` | Ponytail before-and-after review: #8 to #12 against #102, #99, #14, #15, #16 and #18, raw figures and the human's finding labels; directional only | Current |
 | `_docs/decisions/2026-11-11T0327Z-frontend-tests-in-make-test.md` | Why `make install` installs the frontend packages and `make test` and `make verify` run the frontend tests (issue #46) | Current |
 | `_docs/decisions/2026-11-11T1511Z-openapi-contract.md` | Why `openapi.yaml` is hand-written first and is the source of truth for the HTTP API; the refusal order and the error body (issue #9) | Current |
