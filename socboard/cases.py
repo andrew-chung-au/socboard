@@ -68,9 +68,10 @@ def _case_query():
 
 
 def create_cases_router(prefix: str) -> APIRouter:
-    """The queue and the case read. Neither is on the router that documents a 422, because the
-    queue takes no input; the case route declares it itself (a path id is input to FastAPI, but a
-    string id cannot fail validation, so the 422 is documented and never returned)."""
+    """The queue, the case read and the claim. None is on the router that documents a 422, because
+    the queue takes no input; the case read and the claim declare it themselves (a path id is input
+    to FastAPI, but a string id cannot fail validation, so the 422 is documented and never
+    returned)."""
     router = APIRouter(
         prefix=prefix,
         tags=["queue"],
@@ -131,8 +132,10 @@ def create_cases_router(prefix: str) -> APIRouter:
         append_audit(
             session, case_id=case_id, actor_id=user.id, action=ACTION_CLAIMED, detail="Case claimed."
         )
+        # Read before commit, so a saved claim never answers 500 because of the read.
+        detail = _case_detail(session, case_id)
         session.commit()
-        return _case_detail(session, case_id)
+        return detail
 
     return router
 

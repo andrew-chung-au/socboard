@@ -86,6 +86,18 @@ def test_the_queue_and_the_detail_show_the_new_owner_on_the_next_read(real_clien
     assert detail["owner"]["id"] == str(LEAD_ID)
 
 
+def test_the_owner_and_the_claimed_entry_are_saved_together(real_app, app_database, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("audit write failed")
+
+    monkeypatch.setattr("socboard.cases.append_audit", fail)
+    add_case(app_database, 1)
+    response = claim(TestClient(real_app, raise_server_exceptions=False), 1)
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"
+    assert state(app_database, 1) == (None, "New", [])
+
+
 # --- refusals ----------------------------------------------------------------------------------
 
 
@@ -173,7 +185,7 @@ def test_two_simultaneous_claims_from_two_sessions_have_exactly_one_winner(real_
     Postgres alike, so the test runs unchanged on Postgres (Deploy phase)."""
     add_case(app_database, 1)
     callers = {"analyst": ANALYST, "lead": LEAD}
-    barrier = threading.Barrier(len(callers) + 1)
+    barrier = threading.Barrier(len(callers) + 1, timeout=10)  # a failing thread can't hang the run
     responses = {}
 
     def attempt(name):
