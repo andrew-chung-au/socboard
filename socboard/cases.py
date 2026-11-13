@@ -22,8 +22,8 @@ to choose the refusal in the contract's order.
 
 Closed cases (#20): `GET /api/cases?status=Closed` is Lead-only (`require_lead`) and writes nothing.
 Most recently closed first, then case id descending; the close time is read from the closing
-`status_changed` audit entry in the same statement (no column). A Closed case with no such entry
-comes last.
+(latest) `status_changed` audit entry in the same statement (no column). A Closed case with no such
+entry comes last.
 """
 
 from datetime import UTC, datetime
@@ -306,15 +306,11 @@ def create_cases_router(prefix: str) -> APIRouter:
         # Order (contract): 401 and 403 are dependencies, so they run before the schema 422 that
         # `status` (required, only `Closed`) can raise. `status` itself is not read: it only
         # selects this list.
-        # The close time is the latest closing `status_changed` entry (detail starts with the fixed
-        # text below, which holds no LIKE wildcard; the reason after it is never matched).
-        # Joined in one statement, so no read per case.
+        # The close time is the latest `status_changed` entry of the case (a Closed case's last
+        # status change is its close). Joined in one statement, so no read per case.
         closed_at = (
             select(AuditEntry.case_id, func.max(AuditEntry.at).label("closed_at"))
-            .where(
-                AuditEntry.action == "status_changed",
-                AuditEntry.detail.startswith("Investigating -> Closed ("),
-            )
+            .where(AuditEntry.action == "status_changed")
             .group_by(AuditEntry.case_id)
             .subquery()
         )

@@ -29,7 +29,7 @@ EXPIRED = {
 }
 
 
-def close(url, case_id, minutes, reason="true_positive", action="status_changed"):
+def close(url, case_id, minutes, reason="true_positive"):
     """Close case `case_id` (an existing open case) with a closing entry `minutes` after BASE."""
     def work(conn):
         conn.execute(
@@ -41,7 +41,7 @@ def close(url, case_id, minutes, reason="true_positive", action="status_changed"
             insert(AuditEntry.__table__).values(
                 case_id=case_id,
                 actor_id=LEAD_ID,
-                action=action,
+                action="status_changed",
                 detail=f"Investigating -> Closed ({reason})",
                 at=BASE + timedelta(minutes=minutes),
             )
@@ -73,10 +73,8 @@ def test_a_lead_gets_closed_cases_most_recently_closed_first_with_the_id_tie_bre
     assert all(set(entry) == SUMMARY_FIELDS and entry["status"] == "Closed" for entry in body)
 
 
-def test_a_later_entry_that_only_looks_like_a_close_does_not_set_the_close_time(
-    real_client, app_database
-):
-    # Another action, or detail text that only looks like a close, never sets the close time.
+def test_a_later_entry_of_another_action_does_not_set_the_close_time(real_client, app_database):
+    # Only a `status_changed` entry sets the close time: a later `note_added` does not.
     add_case(app_database, 1, status="Investigating")
     add_case(app_database, 2, status="Investigating")
     close(app_database, 1, 5)
@@ -88,7 +86,7 @@ def test_a_later_entry_that_only_looks_like_a_close_does_not_set_the_close_time(
                 case_id=2,
                 actor_id=LEAD_ID,
                 action="note_added",
-                detail="Investigating -> Closed (%)",
+                detail="A note written after the close",
                 at=BASE + timedelta(minutes=99),
             )
         ),
@@ -139,8 +137,10 @@ def test_each_listed_case_opens_and_its_trail_ends_with_its_real_closing_entry(
 ):
     for case_id in (1, 2, 3):
         add_case(app_database, case_id, owner_id=ANALYST_ID, status="Investigating")
-    # Close two through the real route as a Lead; case 2 stays open and is never listed.
-    reasons = {"1": "duplicate", "3": "false_positive"}
+    # Close two through the real route as a Lead, case 3 first and case 1 second, so the true
+    # order (1, then 3) differs from the id order. Each close takes a separate request, far more
+    # than the 1 microsecond `at` resolution, so the two times differ. Case 2 stays open.
+    reasons = {"3": "false_positive", "1": "duplicate"}
     for case_id, reason in reasons.items():
         moved = real_client.post(
             f"{URL}/{case_id}/transition",
@@ -149,7 +149,7 @@ def test_each_listed_case_opens_and_its_trail_ends_with_its_real_closing_entry(
         )
         assert moved.status_code == 200
     listed = closed(real_client)
-    assert sorted(entry["id"] for entry in listed) == ["1", "3"]
+    assert [entry["id"] for entry in listed] == ["1", "3"]
     close_times = []
     for entry in listed:
         case = real_client.get(f"{URL}/{entry['id']}", headers=LEAD)
@@ -221,8 +221,9 @@ def test_the_list_is_one_select_for_any_number_of_cases(real_app, real_client, a
         lambda conn, cursor, statement, *rest: statements.append(statement),
     )
     assert len(closed(real_client)) == 5
-    # One SELECT for the list; the rest is the caller's own lookup (`current_user`).
-    assert sum("FROM cases" in statement for statement in statements) == 1
+    # Exactly 2 SELECTs whatever the case count: the caller's own lookup (`current_user`) plus the
+    # one list query. A per-case query would raise the number.
+    assert sum(statement.lstrip().startswith("SELECT") for statement in statements) == 2
 
 
 # --- contract ----------------------------------------------------------------------------------
