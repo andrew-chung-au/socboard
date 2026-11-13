@@ -119,7 +119,7 @@ The Engineer proposes the module name and the deployed-mode variable in the issu
 
 ## Constraints
 - Files: `socboard/` (the settings module, `app.py`, `server.py`, `auth.py`, `ingest.py`, `seed.py` only where they read a setting), `tests/`, `README.md`, `.env.example`. `AGENTS.md` and `Makefile` are not edited here (protected); anything they need is listed in the comment for a later sitting.
-- Never open or print a `.env` file; the example file holds names only.
+- Never open or print a real env file (the kind that holds values); the example env file holds names only.
 - Depends on: #104 (it may change what `make seed` requires) and #22's preflight list, if #22 has landed; otherwise this issue defines the list and #22 reads it.
 - Proposed tier: standard (no new boundary, but it changes start-up for every deployment). Expected paths: `socboard/settings.py` (or similar), `socboard/app.py`, `socboard/server.py`, `socboard/auth.py`, `socboard/ingest.py`, `socboard/seed.py`, `tests/test_settings.py`, `README.md`, `.env.example`.
 
