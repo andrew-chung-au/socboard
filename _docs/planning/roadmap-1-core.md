@@ -28,7 +28,7 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
   - #86 Add the ingest field limits to the OpenAPI contract. Before #14 (#14 depends on it).
   2. #63 Make `make issue-close` ignore reflection-only Engineer comments. (Done, 2026-11-13: PR #119; Reflection comments may name commit hashes again. The Reviewer's findings are deferred to #122.) Then #73 and #71 together, in one `Makefile` sitting; sweep proposals 4 and 13 ride on it.
   3. #49 Close the weakened-test gaps for Vitest markers and test support files. Epoch batch, together with #65.
-  4. #65 Make the CI weakened-test check compare a branch with its merge base. Epoch batch, together with #49.
+  4. #65 Make the CI weakened-test check compare a branch with its merge base. Epoch batch, together with #49. Second report of the stale-base failure (sweep 6, item 10): #54's QA saw `make verify` fail on "test files deleted" only because local `main` was behind `origin/main`, and a `git fetch` during a QA run can do the same; first raised in sweep 4, proposal 4.
   5. #62 Fix future-dated timer alerts and the order-dependent timer test. Before #21.
   6. #59 Make the dev server reachable from the browser in the dev container. Before #21.
   7. #54 Close the cheap gaps in the frontend guardrail scan. Before #21, after #62 and #59.
@@ -50,9 +50,9 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
     - "no queue paging", recorded as a known limit (15-6).
   - #103 A deleted user's id can be reused, so their old token is accepted as the new user (#13 follow-up, low). Before any issue that deletes users, and before Deploy.
   - #104 Small follow-ups from #13 (missing database, seed variables, seed help text, hash bounds, secret check; low). Any time before #22; needs the human's approval of a `Makefile` and `AGENTS.md` diff. Candidate addition from #18's QA: login fields do not go through `_storable`, so a NUL may give a 500 on Postgres.
-  - #112 A retryable contract code for a claim's lock timeout (#16 follow-up). With #115, before #21.
+  - #112 A retryable contract code for a claim's lock timeout (#16 follow-up). With #115, before #22 (re-timed in sweep 6, item 11: #21 closed on 2026-11-13 with both open). Groomed drafts are in `_human-tasks/groom-handover-2026-11-13/`; not applied.
   - #114 Add a `real_crash_client` test fixture (sweep 5, item 2). After #17 closes; before #22.
-  - #115 Bring `openapi.yaml` in line with the code: the 422s on `getCase` and `claimCase`, the note limit, the order notes (sweep 5, item 11). After #17, before #21.
+  - #115 Bring `openapi.yaml` in line with the code: the 422s on `getCase` and `claimCase`, the note limit, the order notes (sweep 5, item 11). After #17, before #22 (re-timed in sweep 6, item 11: #21 closed on 2026-11-13 with it open). Do #115 before #112. Groomed drafts are in `_human-tasks/groom-handover-2026-11-13/`; not applied.
   - #120 Remove the dead test-only `GET /api/cases` route from `tests/backend_support.py` (found by #20's QA and Engineer; the real closed-cases list shadows it). After #20 closes; before #22. Standard, small, `tests/` only; at grooming, the PM re-checks its mutation-check step (it must not edit `socboard/` in the committed change) and confirms it is independent of #114 and #110.
   16. #100 Pin CI's Python version to the project's 3.12 (CI ran 3.14 on #11). Any time, before #22; needs the human's approval of the workflow diff.
   - #122 Make the close floor test the shape of a reflection, not a marker list (the Reviewer's findings on #63; proposed Heavy). After #63 (landed); any time before the next epoch or kit sitting, and before many more Standard or Heavy closures rely on the marker rule. Needs grooming and the human's approval of its decision record first. It touches only protected kit files, so it can share a sitting with #73 and #71. The regression test needs a separate approval of a place in `tests/`.
