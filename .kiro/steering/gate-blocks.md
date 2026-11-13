@@ -16,3 +16,5 @@ When a script or gate (for example `make issue-close`, a hook, a format check) r
 Reason: on #9 two valid QA PASS comments had the wrong first line, and an extra QA round was launched without asking; the human could have closed the issue by hand with an explanation.
 
 Also: in launch messages, keep each role's required output format (for QA, a first line starting exactly `QA: PASS` or `QA: FAIL`); do not ask a role for a heading that replaces it.
+
+Also: before `make clean-scratch`, list `.scratch/` and copy or commit anything a person has still to see (a PM draft, a sweep entry, a task file). The command deletes everything in it, including drafts that exist nowhere else (sweep 6, proposal 7; the PM's grooming drafts for #115, #112 and #122 were nearly lost on 2026-11-13).
