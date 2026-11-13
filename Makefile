@@ -164,6 +164,14 @@ frontend-test: ## Run the frontend tests (Vitest); run make frontend-install fir
 	@test -x frontend/node_modules/.bin/vitest || { echo "frontend-test: frontend/node_modules/.bin/vitest is missing; run make frontend-install first"; exit 1; }
 	cd frontend && bun run test
 
+frontend-lint: ## Run the frontend lint (ESLint with the Prettier check); run make frontend-install first
+	@test -x frontend/node_modules/.bin/eslint || { echo "frontend-lint: frontend/node_modules/.bin/eslint is missing; run make frontend-install first"; exit 1; }
+	cd frontend && bun run lint
+
+frontend-format: ## Rewrite the frontend files with Prettier (prettier --write .); run make frontend-install first
+	@test -x frontend/node_modules/.bin/prettier || { echo "frontend-format: frontend/node_modules/.bin/prettier is missing; run make frontend-install first"; exit 1; }
+	cd frontend && bun run format
+
 frontend-start: ## Start the frontend dev server in the background (mock on; log: .scratch/frontend.log; http://127.0.0.1:5173/)
 	@mkdir -p .scratch
 	@test -x frontend/node_modules/.bin/vite || { echo "frontend-start: frontend/node_modules/.bin/vite is missing; run make frontend-install first"; exit 1; }
