@@ -8,19 +8,19 @@ Check by hand the criteria of #75 that need `frontend/node_modules` and the npm 
 
 ## Where to run it
 
-The dev container, in a checkout of branch `issue-75-frontend-lint-format` with the #75 commit, after `make frontend-install` (except Step 5, which needs a clone without `frontend/node_modules`). Not here: `main`, for any step that writes (Step 4). `make frontend-format` rewrites files, so never run it on this branch or on `main`.
+The dev container, in a checkout of `main` (it has the #75 targets since PR #130 merged), after `make frontend-install` (except Step 6, which needs a clone without `frontend/node_modules`). Not here: `main` itself, for any step that writes (Step 5 uses a throwaway branch). `make frontend-format` rewrites files, so never run it on `main`.
 
 If a tool shows a permission prompt, reject one prompt at a time; rejecting ends the agent's turn, so tell it to continue.
 
 ## Before you start
 
-1. Confirm you are on the issue branch with a clean tree.
+1. Confirm you are on an up-to-date `main` with a clean tree.
 
 ```
 git status --short --branch
 ```
 
-Expected: the first line names `issue-75-frontend-lint-format`; no other lines.
+Expected: the first line names `main`; no other lines.
 
 ## Steps
 
@@ -77,7 +77,7 @@ If different: fail; paste both outputs to the orchestrator.
 
 ### Step 5: The format run, on a throwaway branch only
 
-Do not run this on `issue-75-frontend-lint-format` or `main`. Create the throwaway branch from the current one:
+Do not run this on `main`. Create the throwaway branch from it:
 
 ```
 git switch -c throwaway-75-format
@@ -91,7 +91,7 @@ make frontend-format
 git status --short
 ```
 
-Expected: changed files listed under `frontend/` (the target rewrites files). Then discard them and leave the branch:
+Expected: changed files listed under `frontend/` (the target rewrites files). Write down whether the list includes `frontend/package.json` (a protected file) or any file under `frontend/src/test/` or any `*.test.*` file (the weakened-test guard watches those); tell the orchestrator either way. Then discard them and leave the branch:
 
 ```
 git restore frontend
@@ -104,14 +104,14 @@ git status --short
 Expected: nothing printed.
 
 ```
-git switch issue-75-frontend-lint-format
+git switch main
 ```
 
 ```
 git branch -d throwaway-75-format
 ```
 
-Expected: you are back on the issue branch and the throwaway branch is gone.
+Expected: you are back on `main` and the throwaway branch is gone.
 If different: do not retry another way; tell the orchestrator what was printed.
 Risk: `make frontend-format` rewrites tracked files under `frontend/` (markdown, CSS, JSON, HTML and sources not in `frontend/.prettierignore`). Undo: `git restore frontend`. Files Prettier creates, if any, show as `??` in `git status --short`; remove only those you recognise as its output.
 
@@ -133,7 +133,7 @@ Expected: `frontend-format: frontend/node_modules/.bin/prettier is missing; run 
 
 ### Step 7: make verify is unchanged
 
-On this branch, then on `main` (both after `make frontend-install`):
+On `main` (after `make frontend-install`), and, to compare, on a checkout from before PR #130 (for example the commit before its merge):
 
 ```
 make verify
@@ -158,4 +158,4 @@ Paste the output or write pass or fail for each step. Commit this file with the 
 
 ## Risk
 
-Step 1 creates one untracked file (removed in Step 3). Step 5 rewrites tracked files under `frontend/` on a throwaway branch; `git restore frontend` undoes it. `make frontend-format` rewrites files, so it must not be run on this branch or on `main`. Nothing else changes live behaviour.
+Step 1 creates one untracked file (removed in Step 3). Step 5 rewrites tracked files under `frontend/` on a throwaway branch; `git restore frontend` undoes it. `make frontend-format` rewrites files, so it must not be run on `main`. Nothing else changes live behaviour.
