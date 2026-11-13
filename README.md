@@ -76,6 +76,8 @@ Sign-in needs four environment variables, set once (names only here; never commi
 - `SOCBOARD_TOKEN_SECRET`: the token signing secret, at least 32 characters. The backend refuses to start without it.
 - `SOCBOARD_SEED_PASSWORD_ANALYST_A`, `SOCBOARD_SEED_PASSWORD_ANALYST_B` and `SOCBOARD_SEED_PASSWORD_LEAD`: the passwords `make seed` gives the users `analyst-a`, `analyst-b` and `lead`, at least 12 characters each. Seeding fails, and adds nothing, if one is missing or short.
 
+Ingest (`POST /api/alerts`) takes the key in the `X-API-Key` header, from `SOCBOARD_INGEST_API_KEY` (at least 16 characters; without it ingest answers 401 to every request and the app logs one warning). Alerts are not de-duplicated, by design for Core: posting the same alert twice creates two cases.
+
 ## Currently Out of Scope
 
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
