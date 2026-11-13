@@ -444,6 +444,13 @@ def test_a_lone_surrogate_escape_is_422_not_500(ingest_client, app_database, fie
     assert_nothing_stored(app_database)
 
 
+def test_a_nul_character_in_the_title_is_422_and_stores_nothing(ingest_client, app_database):
+    response = post(ingest_client, payload(title="bad\u0000title"))
+    assert response.status_code == 422
+    assert response.json() == VALIDATION_BODY
+    assert_nothing_stored(app_database)
+
+
 def test_fields_the_caller_should_not_set_are_ignored(ingest_client, app_database):
     add_asset(app_database, "srv-low", "Low")
     body = payload(
