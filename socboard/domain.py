@@ -15,6 +15,7 @@ SEVERITIES = ("Low", "Medium", "High", "Critical")
 ASSET_CRITICALITIES = ("Low", "Medium", "High", "Critical")
 AUDIT_ACTIONS = ("ingested", "claimed", "status_changed", "note_added", "reassigned")
 
+STATUS_NEW = "New"
 STATUS_CLOSED = "Closed"
 ACTION_INGESTED = "ingested"
 
