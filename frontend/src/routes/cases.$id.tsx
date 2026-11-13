@@ -56,7 +56,7 @@ function Panel({ title, children, right }: { title: string; children: ReactNode;
 
 function CasePage() {
   const { id } = Route.useParams();
-  const { session } = useSession();
+  const { hydrated, session } = useSession();
   const me = session?.user;
   const qc = useQueryClient();
   const caseQ = useQuery({ queryKey: ["case", id], queryFn: () => api.getCase(id), retry: false });
@@ -90,7 +90,7 @@ function CasePage() {
     },
   });
 
-  if (caseQ.isPending) return <div className="rounded-md border bg-card p-8 text-center text-muted-foreground">Loading case…</div>;
+  if (!hydrated || caseQ.isPending) return <div className="rounded-md border bg-card p-8 text-center text-muted-foreground">Loading case…</div>;
   if (caseQ.isError)
     return (
       <div className="space-y-3">

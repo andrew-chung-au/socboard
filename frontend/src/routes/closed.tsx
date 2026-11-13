@@ -24,10 +24,11 @@ export const Route = createFileRoute("/closed")({
 
 function ClosedPage() {
   const now = useNow(30_000);
-  const { session } = useSession();
+  const { hydrated, session } = useSession();
   const isLead = session?.user.role === "lead";
   // Lead-only: the backend answers an Analyst with 403, so the list is not requested.
   const q = useQuery({ queryKey: ["closed"], queryFn: () => api.getClosedCases(), enabled: isLead, retry: false });
+  if (!hydrated) return null; // the session is read after the first render; do not flash the note at a Lead
   if (!isLead)
     return <div className="rounded-md border border-dashed bg-card p-8 text-center text-muted-foreground">Only a Lead can see closed cases.</div>;
   return (

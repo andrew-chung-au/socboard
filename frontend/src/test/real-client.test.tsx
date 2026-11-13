@@ -252,6 +252,19 @@ describe("controls the role cannot use are hidden", () => {
     expect(page.queryByRole("link", { name: notShown })).toBeNull();
   }, TEST_TIMEOUT);
 
+  it("a Lead who opens /closed sees the list and no note", async () => {
+    signIn(LEE);
+    const closedCase: CaseSummary = makeCase({ status: "Closed", closingReason: "duplicate" });
+    const fetchMock = vi.fn(async (url: string, init: { method: string }) =>
+      init.method === "GET" && url.endsWith("/cases?status=Closed") ? reply(200, [closedCase]) : reply(200, []),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderAt("/closed");
+
+    expect(await screen.findByText(TITLE, undefined, WAIT)).toBeInTheDocument();
+    expect(screen.queryByText("Only a Lead can see closed cases.")).toBeNull();
+  }, TEST_TIMEOUT);
+
   it("a Lead sees the Closed link and the audit trail", async () => {
     signIn(LEE);
     stubServer(() => makeCase({ owner: ANA, status: "Investigating" }));
