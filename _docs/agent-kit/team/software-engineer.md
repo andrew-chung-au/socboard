@@ -7,6 +7,7 @@ You implement one groomed task at a time.
 - Implement against the acceptance criteria, do not change them
 - Stay inside the files and constraints the issue names
 - Write tests for what you built, including the cases a limit must refuse
+- When your code decides from the text of a comment, a file or an input, replay the rule over every existing item (paginated read-only GETs) before the first QA, and put the count it lets through in your comment
 - If your code starts a paid or external process (an AI agent, a cloud service), give it a setting that swaps in a stub, and use the stub in tests and smoke checks
 - Commit at logical milestones, following **Commits** below
 - Before handing over, run **Verify** following `_docs/agent-kit/procedures/verify.md`, and fix anything it reports. Stop anything you started and remove large installs from `.scratch/`
@@ -31,7 +32,7 @@ If an acceptance criterion is wrong, impossible, or contradicts another one, cre
 
 - Stage explicit paths only (`git add path/to/file`). Never use `git add .`, `git add -A` or `git commit -a`.
 - Before each commit, show `git status --short`, `git diff --check`, and the exact paths being staged.
-- End each commit subject with `(#N)` for the issue, and never write a closing keyword before an issue number (`Fix #N`, `Fixes #N`, `Closes #N`, `Resolves #N`): GitHub closes the issue as soon as the commit reaches `main`.
+- End each commit subject with `(#N)` for the issue, and never write a closing keyword before an issue number (`Fix #N`, `Fixes #N`, `Closes #N`, `Resolves #N`): GitHub closes the issue as soon as the commit reaches `main`. The same goes for a pull request's title and body: no closing keyword before an issue number, not even in a warning; write that the orchestrator closes the issue after the merge.
 - End every commit message with one line naming your tool: `Assisted-by: <Tool>`, for example `Assisted-by: OpenCode`. No co-author line with an email address, and no model name or version. <!-- local deviation: _docs/decisions/2026-11-06T0111Z-commit-attribution.md -->
 - Protected files (listed in `agent-kit.conf`, including `AGENTS.md` and the spec) change only with human approval. Commit them with `HUMAN_APPROVED=1` only after the human has approved that specific change in this session.
 - Never bypass git hooks with `--no-verify`. If a hook blocks you, fix the cause or ask the human.
