@@ -1,5 +1,8 @@
 """The error shape: every failure is exactly `{ code, message }` (openapi.yaml, #9)."""
 
+import asyncio
+import json
+
 from backend_support import ANALYST_TOKEN, KNOWN_CASE_ID, MARKER
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -136,3 +139,29 @@ def test_unexpected_exception_is_a_generic_500_without_internals(crash_client):
     # The generic message does not contain the exception text, a path or a trace.
     for leaked in ("secret-internal-detail", "secret_module", "/srv/app", "Traceback", ".py"):
         assert leaked not in response.text
+
+
+# --- an unparseable body is mapped once, in the shared handler (#102) -------------------------
+
+
+def test_unparseable_body_on_a_route_other_than_login_is_the_same_422(client):
+    # Bytes that are not UTF-8: FastAPI raises HTTPException(400) for this, not a validation error.
+    response = client.post(
+        f"/api/cases/{KNOWN_CASE_ID}/transition",
+        content=b'{"to": "\xff", "note": "' + MARKER.encode() + b'"}',
+        headers={**analyst(), "Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert response.json() == {"code": "validation_error", "message": errors.VALIDATION_MESSAGE}
+    assert MARKER not in response.text
+
+
+def test_only_the_body_parsing_400_is_mapped_to_422():
+    # Another 400 has no contract code, so it stays a generic 500 (like the 418 test above).
+    other = StarletteHTTPException(status_code=400, detail="Bad thing")
+    response = asyncio.run(errors.http_exception_handler(None, other))
+    assert response.status_code == 500
+    assert json.loads(response.body) == {
+        "code": "internal_error",
+        "message": errors.INTERNAL_MESSAGE,
+    }
