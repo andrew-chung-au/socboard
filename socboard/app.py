@@ -12,6 +12,8 @@ Settings (#13), read when the app is built:
   created on the first request that needs a session (`socboard.sessions`), so health needs no
   database file. Routes take a session through the `get_session` dependency and commit
   explicitly before they return.
+- `SOCBOARD_INGEST_API_KEY`: the ingest API key (#14), at least 16 characters. Unlike the secret
+  it is not required: without it `POST /api/alerts` is closed (401) and one warning is logged.
 """
 
 import os
@@ -25,6 +27,7 @@ from pydantic import BaseModel
 from socboard import __version__, database
 from socboard.auth import add_login_route, create_users_router, resolve_token_secret
 from socboard.errors import ApiError, register_error_handlers
+from socboard.ingest import add_ingest_route, resolve_ingest_key
 from socboard.sessions import DatabaseState
 
 API_PREFIX = "/api"
@@ -53,6 +56,7 @@ def create_health_router() -> APIRouter:
 def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     source = os.environ if environ is None else environ
     token_secret = resolve_token_secret(source)
+    ingest_api_key = resolve_ingest_key(source)
     database_state = DatabaseState(database.resolve_url(source))
 
     @asynccontextmanager
@@ -70,11 +74,15 @@ def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.token_secret = token_secret
+    app.state.ingest_api_key = ingest_api_key
     app.state.database = database_state
     register_error_handlers(app)
     app.include_router(create_health_router())
     auth_router = create_api_router()
     add_login_route(auth_router)
     app.include_router(auth_router)
+    ingest_router = create_api_router()
+    add_ingest_route(ingest_router)
+    app.include_router(ingest_router)
     app.include_router(create_users_router(API_PREFIX))
     return app
