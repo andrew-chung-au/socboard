@@ -150,6 +150,13 @@ FILE_SPELLINGS = [
     pytest.param("sqlite:///file:{path}?uri=true&uri=false", id="repeated uri"),
     pytest.param("sqlite:///file:{path}#frag?uri=true", id="fragment after a file path"),
     pytest.param("sqlite:///file:{path}?uri=true&mod%2565=rw%2563", id="percent-encoded mode"),
+    # SQLAlchemy decodes the query once, so `%2500` reaches SQLite as `%00`, which ends the key
+    # or value: SQLite reads `mode=rwc`.
+    pytest.param("sqlite:///file:{path}?uri=true&mode=rwc%2500", id="mode=rwc NUL"),
+    pytest.param("sqlite:///file:{path}?uri=true&mode=rwc%2500junk", id="mode=rwc NUL junk"),
+    pytest.param("sqlite:///file:{path}?uri=true&mode%2500=rwc", id="mode NUL key"),
+    pytest.param("sqlite:///file:{path}?uri=true&mod%2565=rwc", id="escaped mode key"),
+    pytest.param("sqlite:///file:{path}?uri=true&mode=rw%2563", id="escaped mode value"),
 ]
 
 
@@ -229,6 +236,122 @@ def test_memory_forms_work_and_create_no_file(tmp_path, form):
 def test_a_read_only_or_read_write_uri_of_a_missing_file_fails_and_creates_none(tmp_path, mode):
     form = "sqlite:///file:{path}?mode=" + mode + "&uri=true"
     _assert_fails_and_creates_nothing(_spell(form, tmp_path / "r.db"), tmp_path)
+
+
+def _raw_uri(form, path):
+    """A URL whose `file:` URI reaches SQLite as written: SQLAlchemy adds no query to it."""
+    return URL.create("sqlite", database=form.format(path=path.as_posix()), query={"uri": "true"})
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param("file:{path}?mode=ro&mode=rwc", id="ro then rwc"),
+        pytest.param("file:{path}?mode=rwc&mode=ro", id="rwc then ro"),
+        pytest.param("file:{path}?mode=ro#&mode=rwc", id="mode after a fragment"),
+        pytest.param("file:{path}?cache=shared#&mode=rwc", id="only mode after a fragment"),
+        pytest.param("file:{path}?mode=ro&mode=rwc%00", id="ro then rwc NUL"),
+    ],
+)
+def test_a_missing_file_is_not_created_by_a_raw_file_uri(tmp_path, form):
+    _assert_fails_and_creates_nothing(_raw_uri(form, tmp_path / "a.db"), tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("url", "sent"),
+    [
+        ("sqlite:///file:/d/a.db?uri=true&mode=ro", "file:/d/a.db?mode=ro"),
+        ("sqlite:///file:/d/a.db?uri=true&mode=ro&nolock=1", "file:/d/a.db?mode=ro&nolock=1"),
+        ("sqlite:///file:/d/a.db?uri=true&mode=memory", "file:/d/a.db?mode=memory"),
+        ("sqlite:///file:/d/a.db?uri=true&mode=rwc%2500", "file:/d/a.db?mode=rwc%00&mode=rw"),
+        ("sqlite:///file:/d/a.db?uri=true&mod%2565=ro", "file:/d/a.db?mod%65=ro&mode=rw"),
+        ("sqlite:///file:/d/a.db?uri=true", "file:/d/a.db?mode=rw"),
+    ],
+)
+@pytest.mark.filterwarnings("ignore:Selection of the SingletonThreadPool:DeprecationWarning")
+def test_the_hook_keeps_only_a_plain_last_mode_and_otherwise_appends_mode_rw(url, sent):
+    dialect = create_engine(url).dialect
+    cargs, cparams = dialect.create_connect_args(database.parse_url(url))
+    cargs = list(cargs)
+    sessions._open_without_create(dialect, None, cargs, cparams)
+    assert cargs[0] == sent
+
+
+def _assert_write_refused(url):
+    state = _state_for(url)
+    try:
+        with state.engine().connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM marker")).scalar() == 0
+            with pytest.raises(OperationalError, match="readonly"):
+                connection.execute(text("INSERT INTO marker VALUES (1)"))
+    finally:
+        state.dispose()
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param("sqlite:///file:{path}?uri=true&mode=ro", id="mode=ro"),
+        pytest.param("sqlite:///file:{path}?uri=true&mode=ro&nolock=1", id="mode=ro, nolock=1"),
+    ],
+)
+def test_an_existing_file_opened_read_only_stays_read_only(tmp_path, form):
+    path = tmp_path / "a.db"
+    _make_database(path)
+    _assert_write_refused(_spell(form, path))
+
+
+def test_an_existing_file_opened_with_a_raw_ro_last_stays_read_only(tmp_path):
+    path = tmp_path / "a.db"
+    _make_database(path)
+    _assert_write_refused(_raw_uri("file:{path}?mode=rwc&mode=ro", path))
+
+
+@pytest.mark.filterwarnings("ignore:Selection of the SingletonThreadPool:DeprecationWarning")
+def test_mode_memory_with_an_existing_file_stays_in_memory(tmp_path):
+    path = tmp_path / "a.db"
+    _make_database(path)
+    state = _state_for(_spell("sqlite:///file:{path}?uri=true&mode=memory", path))
+    try:
+        with state.engine().connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM sqlite_master")).scalar() == 0
+    finally:
+        state.dispose()
+    assert [entry.name for entry in tmp_path.iterdir()] == ["a.db"]
+
+
+# Accepted costs of the rule (human ruling): SQLite lets a later `mode` only narrow the access,
+# so the appended `mode=rw` refuses an oddly encoded `ro` and turns an oddly encoded `memory`
+# into a read-write open of the named file.
+def test_an_oddly_encoded_read_only_mode_is_refused_and_creates_nothing(tmp_path):
+    form = "sqlite:///file:{path}?uri=true&mod%2565=ro"
+    path = tmp_path / "a.db"
+    _assert_fails_and_creates_nothing(_spell(form, path), tmp_path)
+    _make_database(path)
+    state = _state_for(_spell(form, path))
+    try:
+        with pytest.raises(OperationalError, match="access mode not allowed"):
+            state.engine().connect()
+    finally:
+        state.dispose()
+    assert [entry.name for entry in tmp_path.iterdir()] == ["a.db"]
+
+
+def test_an_oddly_encoded_memory_mode_opens_the_existing_file_read_write(tmp_path):
+    form = "sqlite:///file:{path}?uri=true&mod%2565=memory"
+    path = tmp_path / "a.db"
+    _assert_fails_and_creates_nothing(_spell(form, path), tmp_path)
+    _make_database(path)
+    state = _state_for(_spell(form, path))
+    try:
+        with state.engine().begin() as connection:
+            connection.execute(text("INSERT INTO marker VALUES (1)"))
+    finally:
+        state.dispose()
+    connection = sqlite3.connect(path)
+    assert connection.execute("SELECT count(*) FROM marker").fetchone()[0] == 1
+    connection.close()
+    assert [entry.name for entry in tmp_path.iterdir()] == ["a.db"]
 
 
 def test_the_connect_hook_is_added_once_per_engine_and_again_after_dispose(tmp_path):
