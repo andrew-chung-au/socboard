@@ -515,7 +515,8 @@ def test_no_data_layer_code_raises_an_api_http_exception():
         path
         for path in _python_files()
         # The HTTP layer. auth.py (#13) holds the authentication dependencies and routes.
-        if path.name not in {"app.py", "auth.py", "errors.py", "server.py", "__init__.py"}
+        # cases.py (#15) holds the queue and case-detail routes.
+        if path.name not in {"app.py", "auth.py", "cases.py", "errors.py", "server.py", "__init__.py"}
     ]
     assert data_layer
     for path in data_layer:
