@@ -12,7 +12,10 @@
 # any other account, or from a deleted account (null author), is ignored for every check).
 # A QA verdict is the first line: FAIL if it says FAIL anywhere, PASS only if it starts
 # `QA: PASS` (team/qa-engineer.md). An Engineer comment reports a commit when it says
-# "commit" and holds any 7 to 40 hex characters, all-digit short hashes included:
+# "commit" and holds any 7 to 40 hex characters, all-digit short hashes included, unless it
+# is a reflection: it has a `Reflection:` line and has neither a Verify line (a line starting
+# with Verify or Verification) nor a numbered
+# criterion line saying done or not checked (local deviation, see _docs/decisions/):
 #   completed, Standard or Heavy: the issue is open and has `approved`; the latest `QA:`
 #     verdict is PASS; at least one `QA:` PASS (two for `tier:heavy`) was posted at or
 #     after the last `Engineer:` comment that reports a commit; an `Orchestrator:` Close
@@ -182,9 +185,23 @@ if not verdicts:
     refuse("no owner QA comment with a PASS verdict")
 if verdicts[-1][1] == "FAIL":
     refuse("the latest owner QA verdict is FAIL")
+def is_reflection(body):
+    # Local deviation (_docs/decisions/2026-11-13T0537Z-close-floor-reflection.md): a comment with a
+    # `Reflection:` block and neither work marker is the post-PASS reflection, not new work. Work
+    # markers (team/software-engineer.md), either one is enough: a Verify line (any line that starts,
+    # after `>`, `*`, `_`, `#`, `-` and spaces, with the word Verify or Verification, however long the
+    # label: `Verify:`, `**Verify** (make verify BASE=x): PASS`, `Verify - PASS`, `## Verify`),
+    # or a numbered criterion line (`1.`, `1)`, `1:`, `Criterion 1:`, `AC1:`) that says
+    # done or not checked. A work comment with a reflection appended has a marker, so it still counts. When in doubt it counts as work: QA re-checks.
+    verify = re.search(r"(?im)^[ \t>*_#-]*verif(?:y|ication)\b", body)
+    criteria = re.search(r"(?im)^[ \t]*(?:[-*][ \t]+)?(?:(?:criterion|ac)[ \t]*)?\d+[.):].*\b(?:done|not checked)\b", body)
+    reflection = re.search(r"(?im)^[ \t>*_#]*reflection[ \t*_]*:", body)
+    return bool(reflection) and not (verify or criteria)
+
 engineer = [c for c in prefixed("Engineer:")
             if re.search(r"(?i)\bcommit", c[2])
-            and re.search(r"\b" + HEX + r"\b", c[2])]  # any 7 to 40 hex, all-digit included
+            and re.search(r"\b" + HEX + r"\b", c[2])  # any 7 to 40 hex, all-digit included
+            and not is_reflection(c[2])]
 floor = engineer[-1][0] if engineer else ""
 passes = [c for c, v in verdicts if v == "PASS" and c[0] >= floor]
 needed = 2 if tier == "heavy" else 1
