@@ -81,12 +81,14 @@ Join:                                   D19 + D10 + D11 -> D20 -> D21 -> D22 -> 
 
 ## 5. Issue drafts
 
+Full bodies for wave 1 (D1 to D5) are in `_docs/planning/deploy-draft/wave-1-issue-drafts.md`; the later ones are written in full after the human approves this list.
+
 Tier is proposed, not final. Model: **S** stronger, **M** middle, **W** weaker (suitability, as in the earlier plan). "Roadmap" is the old task number in `roadmap-3-deploy.md`.
 
 ### Lane A: the application
 
 **D1 Record the deploy decision (Heavy, docs; roadmap 1).** Who: PM drafts, human approves. Model S.
-- A record in `_docs/decisions/` holds the seven decisions of 2026-11-12 with reasons, the region, and the accepted risks, plus the two decisions of section 6 (Postgres audit approach, rate-limit design). Status line `approved` only after the human says so; `make decisions` lists it.
+- A record in `_docs/decisions/` holds the seven decisions of 2026-11-12 with reasons, the regions (deployment `us-east-1`; account and organisation based in `ap-southeast-2`), and the accepted risks, plus the two decisions of section 6 (Postgres audit approach, rate-limit design). Status line `approved` only after the human says so; `make decisions` lists it.
 - It states what Terraform state and Secrets Manager hold and what they must never hold.
 
 **D2 Serve the built frontend from FastAPI (Heavy: a new interface; roadmap 2).** Model M.
@@ -173,7 +175,7 @@ All use `VERIFY:` markers for unverified AWS details; CI runs `fmt` and `validat
 - Pull requests that touch `terraform/` run `fmt -check`, `init -backend=false` and `validate` without credentials, then a read-only `plan` shown on the pull request; forks get no role. The Terraform version is pinned.
 
 **D19 First apply, by the human (checklist; roadmap 16).** Who: human; Eng drafts the checklist.
-- Account and budget notifications, GitHub Environments (`infra` needs a named reviewer and administrators not exempt), the three applies in order, the secret created, the IP and hostname noted, and a second `plan` shows no changes.
+- Before any apply: confirm no organisation policy blocks `us-east-1` (the account and organisation are based in `ap-southeast-2`), and that the provider and the state backend both name `us-east-1`. Then account and budget notifications, GitHub Environments (`infra` needs a named reviewer and administrators not exempt), the three applies in order, the secret created, the IP and hostname noted, and a second `plan` shows no changes.
 
 ### Join
 
