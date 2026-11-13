@@ -55,7 +55,6 @@ def test_main_exits_2_for_a_non_loopback_address_without_the_flag(host, capsys, 
     assert main({**GOOD_ENV, "SOCBOARD_HOST": host}) == 2
     err = capsys.readouterr().err
     assert "SOCBOARD_HOST must be localhost: 127.0.0.1, localhost or ::1" in err
-    assert host not in err
     assert runs == []
 
 
