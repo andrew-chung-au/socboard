@@ -143,8 +143,8 @@ decisions: ## List the decision records with their Status word (proposed, approv
 
 # --- API contract (issue #9) -------------------------------------------------
 
-contract-check: ## Validate openapi.yaml as OpenAPI 3.1 (fails on an invalid file): make contract-check [FILE=<path>]
-	$(if $(value FILE),$(if $(call kit-root-ok,$(value FILE)),,$(error Usage: make contract-check [FILE=<path>] - FILE: one word, a relative path, letters digits . _ / - only, not starting with - or /, no ..)))
+contract-check: ## Validate openapi.yaml against the OpenAPI version it declares (3.1); fails on an invalid file: make contract-check [FILE=<path>]
+	$(if $(value FILE),$(if $(call kit-root-ok,$(value FILE)),,$(error Usage: make contract-check [FILE=<path>] - FILE must be one word, a relative path of letters, digits and . _ / - only, not starting with - or /, and not containing two dots (..))))
 	uv run --locked openapi-spec-validator "$(if $(value FILE),$(FILE),openapi.yaml)"
 
 # --- Frontend (issue #27) ----------------------------------------------------
