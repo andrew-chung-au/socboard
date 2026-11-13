@@ -129,11 +129,13 @@ def _parse_timestamp(value: object) -> datetime:
 
 
 def _storable(text: str) -> str:
-    """Refuse a lone surrogate (a JSON `\\ud800` escape): the database driver cannot store it."""
+    """Refuse a lone surrogate (JSON `\\ud800`) or a NUL: the database cannot store them."""
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:
         raise ValueError("The text is not valid Unicode.") from None
+    if "\x00" in text:  # Postgres rejects NUL in a text column; SQLite accepts it
+        raise ValueError("The text is not valid Unicode.")
     return text
 
 

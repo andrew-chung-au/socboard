@@ -42,7 +42,7 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
   15. #99 Harden the audit guard's remaining DDL and id gaps (#11's Low QA findings L1 to L5). After #11 closes, before #14 (the first issue that writes audit entries in use); proposed Heavy.
   - #102 A request body that cannot be parsed gets 500 instead of 422 (#13 follow-up). Before #14, which takes the first JSON body from outside.
   - #107 Simplify the audit guard (from #99's Reviewer and QA findings; proposed Heavy). Any time after #99 closes; before Deploy. At grooming, also add: keep the HTTP-layer module list in `tests/test_data_audit.py` in one place, because #13, #15 and later route issues each add a name (human ruling, #15).
-  - #110 Simplify the ingest route (from #14's Reviewer and QA findings; proposed Standard). Any time after #14 closes; before Deploy. At grooming, also add #15's Reviewer findings (human ruling, #15):
+  - #110 Simplify the ingest route (from #14's Reviewer and QA findings; proposed Standard). Any time after #14 closes; before Deploy. At grooming, also add #18's Reviewer findings 18-1, 18-4, 18-5 and 18-7 (human ruling, #18): the redundant rollback in `add_note`, the large 401 test grid, the duplicated note reply builder, and the "read-only" docstrings. Also add #15's Reviewer findings (human ruling, #15):
     - one shared `CaseSummary` builder for ingest and the queue (15-1);
     - the repeated contract and hostile-text tests (15-2, 15-3);
     - the single-use not-found message (15-4);
