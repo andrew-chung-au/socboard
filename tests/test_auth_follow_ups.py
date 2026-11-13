@@ -2,7 +2,10 @@
 
 import hashlib
 import json
+import sqlite3
 import time
+from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from backend_support import (
@@ -13,9 +16,12 @@ from backend_support import (
     sqlite_url,
 )
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from socboard import auth, passwords, server, sessions
+from socboard import auth, database, passwords, server, sessions
 from socboard.app import create_app
 from socboard.errors import INVALID_CREDENTIALS
 from socboard.tokens import create_token
@@ -66,33 +72,28 @@ def test_a_protected_route_against_a_missing_database_is_a_500_and_creates_no_fi
     assert not path.exists()
 
 
-def test_the_missing_file_error_text_holds_neither_path_nor_url(tmp_path):
-    path = tmp_path / "secret-dir-name.db"
-    state = sessions.DatabaseState(database_url(path))
-    with pytest.raises(sessions.MissingDatabaseError) as error:
-        state.engine()
-    message = str(error.value)
-    assert message == sessions.MISSING_DATABASE_MESSAGE
-    assert "secret-dir-name" not in message and "sqlite" not in message
-    assert state._engine is None
+def test_with_a_missing_file_no_token_is_still_a_401_and_creates_no_file(missing_db_client):
+    client, path, _ = missing_db_client
+    response = client.get("/api/users")
+    assert response.status_code == 401
+    assert response.json()["code"] == "unauthorized"
     assert not path.exists()
 
 
-def database_url(path):
-    from socboard import database
+def test_with_a_missing_file_a_bad_login_body_is_still_a_422_and_creates_no_file(
+    missing_db_client,
+):
+    client, path, _ = missing_db_client
+    response = client.post("/api/login", json={"username": ANALYST_USERNAME})
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert not path.exists()
 
-    return database.parse_url(sqlite_url(path))
 
-
-@pytest.mark.parametrize("raw", ["sqlite://", "sqlite:///:memory:"])
-def test_an_in_memory_or_nameless_sqlite_url_goes_to_the_driver(raw):
-    from socboard import database
-
-    state = sessions.DatabaseState(database.parse_url(raw))
-    try:
-        assert state.engine() is not None
-    finally:
-        state.dispose()
+def test_with_a_missing_file_health_is_200_and_creates_no_file(missing_db_client):
+    client, path, _ = missing_db_client
+    assert client.get("/api/health").status_code == 200
+    assert not path.exists()
 
 
 def test_an_existing_file_works_as_before(app_database, real_client):
@@ -102,82 +103,154 @@ def test_an_existing_file_works_as_before(app_database, real_client):
     assert response.status_code == 200
 
 
-def _state_for(raw):
-    from socboard import database
-
-    return sessions.DatabaseState(database.parse_url(raw))
+def _state_for(url):
+    return sessions.DatabaseState(database.parse_url(url))
 
 
-@pytest.mark.parametrize(
-    "form",
-    [
-        pytest.param("{path}?uri=false", id="uri=false"),
-        pytest.param("{path}?uri=0", id="uri=0"),
-        pytest.param("file:{path}?uri=true", id="file URI"),
-        pytest.param("file:{path}?uri=true&mode=rwc", id="file URI mode=rwc"),
-        pytest.param("file://{path}?uri=true", id="file URI with empty authority"),
-        pytest.param("file:{encoded}?uri=true", id="file URI percent-encoded"),
-    ],
-)
-def test_a_missing_file_is_refused_in_every_spelling_and_not_created(tmp_path, form):
-    path = tmp_path / "a b.db"
-    encoded = (tmp_path / "a%20b.db").as_posix()
-    state = _state_for("sqlite:///" + form.format(path=path.as_posix(), encoded=encoded))
-    with pytest.raises(sessions.MissingDatabaseError) as error:
-        state.engine()
-    assert str(error.value) == sessions.MISSING_DATABASE_MESSAGE
-    assert list(tmp_path.iterdir()) == []
+def _make_database(path):
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE marker (x)")
+    connection.close()
 
 
-def test_an_existing_file_through_a_file_uri_is_accepted(tmp_path):
-    import sqlite3
-
-    path = tmp_path / "there.db"
-    sqlite3.connect(path).close()
-    state = _state_for("sqlite:///file:" + path.as_posix() + "?uri=true")
+def _assert_opens(url):
+    """The engine opens the database `_make_database` wrote, not another one."""
+    state = _state_for(url)
     try:
-        with state.engine().connect():
-            pass
+        with state.engine().connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM marker")).scalar() == 0
     finally:
         state.dispose()
 
 
+def _assert_fails_and_creates_nothing(url, directory):
+    state = _state_for(url)
+    try:
+        with pytest.raises(OperationalError) as error:
+            state.engine().connect()
+    finally:
+        state.dispose()
+    assert list(directory.iterdir()) == []
+    return str(error.value)
+
+
+def _spell(form, path):
+    return form.format(path=path.as_posix(), encoded=quote(path.as_posix()))
+
+
+FILE_SPELLINGS = [
+    pytest.param("sqlite:///{path}", id="plain path"),
+    pytest.param("sqlite:///{path}?uri=false", id="uri=false"),
+    pytest.param("sqlite:///{path}?uri=0", id="uri=0"),
+    pytest.param("sqlite:///file:{path}?uri=true", id="file URI"),
+    pytest.param("sqlite:///file:{path}?uri=true&mode=rwc", id="file URI mode=rwc"),
+    pytest.param("sqlite:///file://{path}?uri=true", id="file:///abs"),
+    pytest.param("sqlite:///file:{encoded}?uri=true", id="file URI percent-encoded"),
+    pytest.param("sqlite:///file:{path}?uri=true&cache=shared", id="file URI other parameter"),
+    pytest.param("sqlite:///file:{path}?uri=true&uri=false", id="repeated uri"),
+    pytest.param("sqlite:///file:{path}#frag?uri=true", id="fragment after a file path"),
+    pytest.param("sqlite:///file:{path}?uri=true&mod%2565=rw%2563", id="percent-encoded mode"),
+]
+
+
+@pytest.mark.parametrize("form", FILE_SPELLINGS)
+def test_a_missing_file_is_not_created_in_any_spelling(tmp_path, form):
+    path = tmp_path / "a b.db"
+    message = _assert_fails_and_creates_nothing(_spell(form, path), tmp_path)
+    assert "unable to open database file" in message
+
+
+@pytest.mark.parametrize("form", FILE_SPELLINGS)
+def test_an_existing_file_opens_in_every_spelling(tmp_path, form):
+    path = tmp_path / "a b.db"
+    _make_database(path)
+    _assert_opens(_spell(form, path))
+    assert [entry.name for entry in tmp_path.iterdir()] == ["a b.db"]
+
+
+@pytest.mark.parametrize("form", ["sqlite:///there.db", "sqlite:///file:there.db?uri=true"])
+def test_a_relative_path_opens_an_existing_file_and_never_creates_one(tmp_path, monkeypatch, form):
+    monkeypatch.chdir(tmp_path)
+    _assert_fails_and_creates_nothing(form, tmp_path)
+    _make_database(tmp_path / "there.db")
+    _assert_opens(form)
+    assert [entry.name for entry in tmp_path.iterdir()] == ["there.db"]
+
+
+@pytest.mark.parametrize("name", ["a b.db", "a?b.db", "a#b.db", "a%b.db", "a%20b.db", "a:b.db"])
+def test_a_plain_path_keeps_every_character_of_the_file_name(tmp_path, name):
+    url = URL.create("sqlite", database=str(tmp_path / name))
+    _assert_fails_and_creates_nothing(url, tmp_path)
+    _make_database(tmp_path / name)
+    _assert_opens(url)
+    assert [entry.name for entry in tmp_path.iterdir()] == [name]
+
+
+def test_a_file_created_after_a_failed_request_opens_without_a_restart(tmp_path):
+    path = tmp_path / "late.db"
+    state = _state_for(sqlite_url(path))
+    try:
+        with pytest.raises(OperationalError):
+            state.engine().connect()
+        _make_database(path)
+        with state.engine().connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM marker")).scalar() == 0
+    finally:
+        state.dispose()
+
+
+def test_the_missing_file_error_holds_neither_path_nor_url(tmp_path):
+    path = tmp_path / "secret-dir-name.db"
+    message = _assert_fails_and_creates_nothing(sqlite_url(path), tmp_path)
+    assert "secret-dir-name" not in message and str(tmp_path) not in message
+
+
 @pytest.mark.parametrize(
     "form",
     [
-        pytest.param("sqlite:///file::memory:?cache=shared&uri=true", id="shared memory"),
+        pytest.param("sqlite://", id="no file name"),
         pytest.param("sqlite:///:memory:", id="plain memory"),
+        pytest.param("sqlite:///file::memory:?cache=shared&uri=true", id="shared memory"),
         pytest.param("sqlite:///file:{path}?mode=memory&uri=true", id="missing file, mode=memory"),
     ],
 )
 @pytest.mark.filterwarnings("ignore:Selection of the SingletonThreadPool:DeprecationWarning")
-def test_memory_forms_are_accepted_and_create_no_file(tmp_path, form):
-    state = _state_for(form.format(path=(tmp_path / "m.db").as_posix()))
+def test_memory_forms_work_and_create_no_file(tmp_path, form):
+    state = _state_for(_spell(form, tmp_path / "m.db"))
     try:
-        with state.engine().connect():
-            pass
+        with state.engine().connect() as connection:
+            assert connection.execute(text("SELECT 1")).scalar() == 1
     finally:
         state.dispose()
     assert list(tmp_path.iterdir()) == []
 
 
-def test_a_read_only_file_uri_of_a_missing_file_fails_in_the_driver_and_creates_none(tmp_path):
-    from sqlalchemy.exc import OperationalError
-
-    state = _state_for("sqlite:///file:" + (tmp_path / "r.db").as_posix() + "?mode=ro&uri=true")
-    try:
-        with pytest.raises(OperationalError):
-            state.engine().connect()
-    finally:
-        state.dispose()
-    assert list(tmp_path.iterdir()) == []
+@pytest.mark.parametrize("mode", ["ro", "rw"])
+def test_a_read_only_or_read_write_uri_of_a_missing_file_fails_and_creates_none(tmp_path, mode):
+    form = "sqlite:///file:{path}?mode=" + mode + "&uri=true"
+    _assert_fails_and_creates_nothing(_spell(form, tmp_path / "r.db"), tmp_path)
 
 
-def test_a_url_that_is_not_sqlite_is_not_checked(tmp_path):
-    from sqlalchemy.engine import make_url
+def test_the_connect_hook_is_added_once_per_engine_and_again_after_dispose(tmp_path):
+    state = _state_for(sqlite_url(tmp_path / "x.db"))
+    first = state.engine()
+    assert state.engine() is first
+    assert len(first.dialect.dispatch.do_connect) == 1
+    state.dispose()
+    second = state.engine()
+    assert second is not first
+    assert len(second.dialect.dispatch.do_connect) == 1
+    state.dispose()
 
-    # Not connected to: only the check is under test, and it must not look at a file for Postgres.
-    sessions._refuse_missing_sqlite_file(make_url("postgresql://u:p@localhost/db"))
+
+def test_a_url_that_is_not_sqlite_gets_no_connect_hook(monkeypatch):
+    # No Postgres driver is installed: the engine is built on a stand-in module and never used.
+    stand_in = SimpleNamespace(__version__="1.31.2", paramstyle="format")
+    engine = create_engine("postgresql+pg8000://u:p@localhost/db", module=stand_in)
+    monkeypatch.setattr(database, "create_db_engine", lambda url: engine)
+    state = _state_for("postgresql+pg8000://u:p@localhost/db")
+    assert state.engine() is engine
+    assert len(engine.dialect.dispatch.do_connect) == 0
 
 
 # --- item 4: stored scrypt parameters are bounded -------------------------------------------------
