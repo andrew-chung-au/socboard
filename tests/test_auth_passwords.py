@@ -110,6 +110,54 @@ def test_a_stored_value_that_is_not_a_valid_hash_verifies_false_without_raising(
     assert passwords.verify_password(PASSWORD, stored) is False
 
 
+# --- a password with a NUL is refused (#144): scrypt gives "pw", "pw\x00" and "pw\x00\x00" one key
+
+# A hash made by the code before #144 (test-only password, not in use anywhere).
+OLD_HASH_PASSWORD = "test-only-old-hash-pw"
+OLD_HASH = (
+    "scrypt$n=131072,r=8,p=1$RkEskOeecjgQZIOGPYaUNQ$Eqn-b1WBz2w7j0dwwFjmzNFJbmJMhPCTJVgOqWLXuGc"
+)
+
+
+@pytest.mark.parametrize("attempt", ["pw\x00", "pw\x00\x00", "p\x00w", "\x00pw", "\x00"])
+def test_a_password_with_a_nul_does_not_verify_but_the_plain_one_does(attempt):
+    stored = passwords.hash_password("pw")
+    assert passwords.verify_password("pw", stored) is True
+    assert passwords.verify_password(attempt, stored) is False
+
+
+def test_hash_password_refuses_a_nul_without_echoing_the_password():
+    with pytest.raises(ValueError) as error:
+        passwords.hash_password("test-only-secret\x00")
+    assert "test-only-secret" not in str(error.value)
+    assert "\x00" not in str(error.value)
+
+
+@pytest.mark.parametrize("attempt", ["pw\x00", "test-only-wrong-pw"])
+def test_a_nul_password_costs_one_scrypt_against_the_dummy_hash_like_a_wrong_one(
+    monkeypatch, attempt
+):
+    stored = passwords.hash_password("pw")
+    calls = []
+    real = passwords._scrypt
+
+    def counting(password, salt, n, r, p):
+        calls.append((salt, n, r, p))
+        return real(password, salt, n, r, p)
+
+    monkeypatch.setattr(passwords, "_scrypt", counting)
+    assert passwords.verify_password(attempt, stored) is False
+    assert len(calls) == 1
+    if "\x00" in attempt:
+        _, _, _, dummy_salt, _ = passwords.parse_hash(passwords.DUMMY_HASH)
+        assert calls[0][0] == dummy_salt
+
+
+def test_a_hash_made_before_the_nul_rule_still_verifies():
+    assert passwords.verify_password(OLD_HASH_PASSWORD, OLD_HASH) is True
+    assert passwords.verify_password(OLD_HASH_PASSWORD + "\x00", OLD_HASH) is False
+
+
 def test_a_lone_surrogate_password_is_hashed_not_an_error():
     stored = passwords.hash_password("\ud800-test-only")
     assert passwords.verify_password("\ud800-test-only", stored)
