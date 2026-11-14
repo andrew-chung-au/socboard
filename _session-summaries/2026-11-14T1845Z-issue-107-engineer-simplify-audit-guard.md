@@ -15,6 +15,8 @@ Every kept rule was removed one at a time in a scratch copy (`.scratch/mutate107
 
 After QA (comment 6882824631): `_PARAMETER_KEY` lacked `re.DOTALL`, so an execute key containing a newline crashed the guard with `TypeError`; fixed in `f5e4298`, with a test (`test_the_guard_function_reads_the_values_bound_for_id_in_every_parameter_row`) that fails without it. Test file now 892 lines, guard 334.
 
+After the second QA FAIL (comment 6883108572): the execute-key check tested only the key with an `_m<n>` suffix stripped, so a column key alias ending in `_m<n>` (`x_m1`) let any id through. Fixed in `d290568` (the raw key is tested too); `test_an_id_under_a_column_key_alias_is_refused` is now parametrized over `xid`, `x_m1`, `id_x_m0`, `rowid_m12`. Test file 892 lines, guard 336.
+
 **What I learned:** in SQLAlchemy 2.1 `values(id=None)` stores a `BindParameter`, not `Null`, so a plain None and a caller's `bindparam` differ only by `BindParameter._is_crud`.
 
 ## Reflection
