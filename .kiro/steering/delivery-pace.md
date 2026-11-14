@@ -18,3 +18,10 @@ Applies to the orchestrator in this repository. The human ruled these after #9, 
 10. **A Reviewer launch says "write nothing, not even under `.scratch/`" (sweep 6, proposal 4).** In Kiro Web the Reviewer is a general task held read-only only by its launch message, and `make assert-clean` cannot see git-ignored paths such as `.scratch/`. List the `.scratch/` file names before and after each Reviewer launch and report any change.
 11. **In Kiro Web the search tool does not index `_docs/` (sweep 6, proposal 6).** Search it with `grep -rn` through the shell, and a claim-time or grooming check of `_docs/` names the command it used, so "no match" means something.
 12. **Name no env file in a comment (sweep 6, proposal 5).** Put this sentence in every QA and Engineer launch message: "Name no env file in a comment; write 'an env file' instead, because the comment scanner refuses the name." The scanner refused QA text on #80 and #21.
+13. **Limit review rounds (human ruling, 2026-11-14, after #139 took eight Engineer rounds).**
+    - **One Reviewer pass per issue**, after the first QA PASS. Its findings go to the human once. Only findings the human marks "must fix" are applied before the merge; the rest become follow-up issues or are dropped. The Reviewer does not run again after a fix round.
+    - **A fix round gets one QA re-check of the changed lines only**, by one fresh QA launch, even on a Heavy issue. The independent second launch runs once, on the first complete version.
+    - **Decision records and docs-only issues are proposed as Standard**, not Heavy, unless they change a security boundary in code or CI.
+    - **After two fix rounds on one issue, stop and ask the human "ship or fix?"** with the open findings listed, before a third round.
+    - **The orchestrator never applies a finding on its own recommendation** if it changes approved issue text or an approved decision; that goes to the human.
+    - **Records do not track live status** (which items are filed, which pull requests merged); the roadmap and the tracker do.
