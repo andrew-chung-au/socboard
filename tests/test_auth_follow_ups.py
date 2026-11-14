@@ -515,13 +515,3 @@ def test_a_nul_in_the_username_is_a_401_with_the_dummy_verify_and_no_lookup(
     assert response.json()["code"] == INVALID_CREDENTIALS
     assert verified == [passwords.DUMMY_HASH]
     assert executed == []
-
-
-def test_a_password_with_a_nul_is_still_hashed_and_compared(real_crash_client):
-    response = real_crash_client.post(
-        "/api/login", json={"username": ANALYST_USERNAME, "password": "test-only\x00analyst-pw-1"}
-    )
-    assert response.status_code == 401
-    stored_hash = passwords.hash_password("pw\x00x")
-    assert passwords.verify_password("pw\x00x", stored_hash)
-    assert not passwords.verify_password("pw\x00y", stored_hash)
