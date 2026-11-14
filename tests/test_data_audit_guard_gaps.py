@@ -786,6 +786,7 @@ def test_the_guard_function_reads_the_values_bound_for_id_in_every_parameter_row
     assert not refused_statement(multi)
     assert not refused_statement(multi, {"id_m1": None})
     assert not refused_statement(multi, {"unrelated": 5})
+    assert not any(refused_statement(multi, {key: 5}) for key in ("a\nb", "id\n", "id_m1\n", "ID_M0\n"))  # no crash
     assert refused_statement(insert(AUDIT).values(id=bindparam(None), **row))  # #107 decision 1
 
 

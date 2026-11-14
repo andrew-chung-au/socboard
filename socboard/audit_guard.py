@@ -92,7 +92,7 @@ _SEQUENCE_WORD = _words(SEQUENCE_TABLE)
 _DANGEROUS_PRAGMA = re.compile(r"\b(?:ignore_check_constraints|writable_schema)\b", re.IGNORECASE)
 # An execute-parameter key: a column key, or `<key>_m<n>`, the name SQLAlchemy gives the bind of
 # that column in row n of a multi-row `values([...])`.
-_PARAMETER_KEY = re.compile(r"(.*?)(?:_m\d+)?")
+_PARAMETER_KEY = re.compile(r"(.*?)(?:_m\d+)?", re.DOTALL)  # DOTALL: any key matches; "id\n" stays "id\n"
 _REPLACE = re.compile(r"\bREPLACE\b", re.IGNORECASE)
 _UPDATING_CLAUSES = ("DoUpdate", "OnDuplicate")  # class-name parts of the dialect upsert clauses
 
