@@ -44,7 +44,7 @@ SQLITE_MEMORY_URL = "sqlite:///:memory:"
 # owner issue of the Postgres version (#192 criterion 6). Found by the first Postgres run (CI job
 # 132520543923): every test that carries one of these failed there, and no test that passed does.
 SQLITE_TRIGGERS = pytest.mark.sqlite_only(
-    "needs the SQLite audit triggers; the Postgres triggers are D6a (#193)"
+    "needs the SQLite audit triggers; the Postgres ones are in test_data_audit_triggers_postgres.py (#193)"
 )
 SQLITE_GUARD = pytest.mark.sqlite_only(
     "tests the audit guard's SQLite rules on SQLite tables; the guard's Postgres review is D6b (#195)"

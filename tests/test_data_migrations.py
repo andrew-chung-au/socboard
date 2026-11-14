@@ -37,7 +37,8 @@ VERSIONS = migrate.SCRIPT_LOCATION / "versions"
 # On Postgres, the same four fields as `sqlite_master` (type, name, owning table, definition) for every
 # object in the `public` schema, so the idempotence and round-trip tests below compare the whole schema
 # on either database (#192). A sequence has no owning table here, so one left behind after a
-# downgrade shows up as an object that belongs to no table.
+# downgrade shows up as an object that belongs to no table, and so does a function (0002's
+# trigger functions, #193).
 POSTGRES_SCHEMA_ROWS = """
 SELECT 'table', table_name, table_name, NULL FROM information_schema.tables
  WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -58,6 +59,9 @@ SELECT 'trigger', g.tgname, t.relname, pg_get_triggerdef(g.oid)
 UNION ALL
 SELECT 'sequence', sequence_name, NULL, data_type FROM information_schema.sequences
  WHERE sequence_schema = 'public'
+UNION ALL
+SELECT 'function', p.proname, NULL, pg_get_functiondef(p.oid)
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'
 ORDER BY 1, 2
 """
 
@@ -512,7 +516,7 @@ def test_new_creates_one_migration_file_after_the_latest(tmp_path, monkeypatch, 
     (name,) = created
     assert "check_the_command" in name
     source = (folder / "versions" / name).read_text(encoding="utf-8")
-    assert "0001" in source  # it follows the first migration
+    assert "0002" in source  # it follows the latest migration (0002 since #193)
     assert "socboard" not in source
     heads = ScriptDirectory.from_config(migrate.make_config(folder)).get_heads()
     assert len(heads) == 1
