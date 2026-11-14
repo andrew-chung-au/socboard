@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (git-ignored) and set your own values. Placeholders only: none of these works as written.
+# The two ids are public numbers, not secrets. Read them with:
+#   gh api repos/<owner>/<repo> --jq '.owner.id, .id'
+github_owner_id   = "REPLACE-WITH-OWNER-ID-DIGITS"
+github_repo_id    = "REPLACE-WITH-REPOSITORY-ID-DIGITS"
+state_bucket_name = "REPLACE-WITH-YOUR-STATE-BUCKET"
+
+# true if this AWS account has no GitHub OIDC provider yet. false if it has one (an account holds
+# one per URL); then also set the line below to its ARN.
+create_oidc_provider = true
+# existing_oidc_provider_arn = "arn:aws:iam::REPLACE-ACCOUNT-NUMBER:oidc-provider/token.actions.githubusercontent.com"
