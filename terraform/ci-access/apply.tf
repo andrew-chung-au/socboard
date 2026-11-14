@@ -39,8 +39,9 @@ locals {
 # against AWS's service reference JSON (servicereference.us-east-1.amazonaws.com) on 2026-11-14.
 #
 # EC2 writes are tag-scoped: what the role creates must carry `project=socboard` in the create call,
-# and what it changes must already carry it. D17b must therefore tag the instance, its volumes
-# (`volume_tags`), the security group and the Elastic IP in the create call. AWS cannot tag-scope:
+# and what it changes must already carry it. D17b must therefore tag the instance, the data volume,
+# the security group and the Elastic IP in the create call, and leave the root volume untagged (#162).
+# Not tag-scoped: the root volume a launch creates (see below). AWS cannot tag-scope:
 # `ec2:Describe*` (reads, no resource); the image, subnet and network interface a launch refers to;
 # the VPC a security group is made in; a new security group rule; and the network interface named
 # when an Elastic IP is moved. Each of those calls also names a tagged resource, which is checked.
@@ -71,14 +72,21 @@ resource "aws_iam_role_policy" "apply" {
         Resource  = "*"
         Condition = { StringEquals = { "aws:RequestedRegion" = "us-east-1" } }
       },
-      # A new instance and its volumes must be tagged in the launch call. VERIFY: that Terraform sends
-      # the volume tags in the launch call (`volume_tags`), not afterwards.
+      # A new instance must be tagged in the launch call.
       {
         Sid       = "LaunchOnlyTaggedInstances"
         Effect    = "Allow"
         Action    = ["ec2:RunInstances"]
-        Resource  = ["${local.ec2_arn}:instance/*", "${local.ec2_arn}:volume/*"]
+        Resource  = ["${local.ec2_arn}:instance/*"]
         Condition = local.request_tagged
+      },
+      # The root volume a launch creates is not tag-scoped: it must NOT carry `project=socboard`, or
+      # the snapshot schedule (#162) snapshots it too. It goes with the instance (delete on termination).
+      {
+        Sid      = "LaunchWithAnUntaggedRootVolume"
+        Effect   = "Allow"
+        Action   = ["ec2:RunInstances"]
+        Resource = ["${local.ec2_arn}:volume/*"]
       },
       # A launch may only use a security group this role made (so already tagged).
       {
@@ -216,7 +224,7 @@ resource "aws_iam_role_policy" "apply" {
       # would also deny the PassRole above, because an explicit deny always wins. Together they need no
       # list of write verbs, so a new IAM action is denied too:
       # 1. every IAM action, reads included, on every resource but the instance role, including this
-      #    role, its policy, any snapshot role (human-applied, #162) and actions on `*`;
+      #    role, its policy, the snapshot role `socboard-snapshot` (#162) and actions on `*`;
       # 2. every action but PassRole on the instance role itself, so it cannot be changed either.
       # IAM reads are denied as well: D17b refers to the instance profile by name and uses no IAM data
       # source, and launching with a profile needs only this PassRole. If D17b ever needs an IAM read,
@@ -239,6 +247,15 @@ resource "aws_iam_role_policy" "apply" {
         Sid      = "DenyHumanAppliedServices"
         Effect   = "Deny"
         Action   = local.human_only_actions
+        Resource = "*"
+      },
+      # The schedule's snapshots are the backups (#162): CI may not delete one, or share one outside
+      # the account (the snapshot's permission, or the account's block on public snapshots).
+      # Nothing above allows these; the deny keeps it so if the allow list grows.
+      {
+        Sid      = "DenySnapshotDeleteAndSharing"
+        Effect   = "Deny"
+        Action   = ["ec2:DeleteSnapshot", "ec2:ModifySnapshotAttribute", "ec2:DisableSnapshotBlockPublicAccess"]
         Resource = "*"
       },
       {
