@@ -601,11 +601,9 @@ def test_a_bound_parameter_for_id_executed_with_none_is_refused(seeded):  # #107
     anonymous, name = _anonymous_bind(seeded, engine)
     before = snapshot(engine)
     for sink, stmt, parameters in [
-        (_conn, statement, {"x": None}),
-        (_conn, statement, [{"x": None}, {"x": None}]),
+        (_conn, statement, {"x": None}), (_conn, statement, [{"x": None}, {"x": None}]),
         (_session, statement, {"x": None}),
-        (_conn, anonymous, {name: None}),
-        (_conn, anonymous, [{name: None}, {name: None}]),
+        (_conn, anonymous, {name: None}), (_conn, anonymous, [{name: None}, {name: None}]),
     ]:
         with pytest.raises(AuditImmutableError):
             sink(engine, stmt, parameters)
@@ -859,9 +857,7 @@ def test_near_misses_of_the_pragma_words_and_names_are_allowed(sql):
     assert not refused_statement(DDL(sql))
 
 
-@pytest.mark.parametrize(
-    "sql", ["DROP TABLE audit_entries", "SELECT a$b FROM audit_entries", "DELETE FROM sqlite_sequence -- x$y"]
-)
+@pytest.mark.parametrize("sql", ["DROP TABLE audit_entries", "SELECT a$b FROM audit_entries", "DELETE FROM sqlite_sequence -- x$y"])
 def test_a_name_beside_a_dollar_identifier_is_still_refused(sql):
     assert refused_statement(DDL(sql))
 
@@ -886,3 +882,10 @@ def test_a_mistyped_execute_key_raises_sqlalchemys_error_not_the_audit_refusal(s
     statement = insert(AUDIT).values(id=None, **{**_row(seeded), "case_id": bindparam("case")})
     with pytest.raises(StatementError, match="case"):  # AuditImmutableError is not a StatementError
         _conn(seeded["engine"], statement, {"cse": seeded["case_id"]})
+
+
+def test_the_replace_upsert_and_lightweight_index_rules_refuse_without_an_id():  # no other rule sees these
+    row, light = dict(case_id=1, actor_id=1, action="a", detail="d", at=NOW), table("audit_entries", column("case_id"))
+    assert refused_statement(insert(AUDIT).prefix_with("OR REPLACE").values(**row))
+    assert refused_statement(sqlite_insert(AUDIT).values(**row).on_conflict_do_update(set_={"detail": "x"}))
+    assert refused_statement(DropIndex(Index("ix_other", light.c.case_id)))
