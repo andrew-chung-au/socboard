@@ -79,10 +79,19 @@ jobs:
       - name: A refused login user gives the generic 500 and leaks no part of the URL
         env:
           SOCBOARD_DATABASE_URL: postgresql+psycopg://ghost_user_5k2q:Distinct-Throwaway-7731@127.0.0.1:5432/no_such_db_9x4w
+          EXPECT_REASON: authentication
         run: bash scripts/postgres_no_leak.sh ghost_user_5k2q Distinct-Throwaway-7731 no_such_db_9x4w
 
       - name: A missing database for the real user gives the generic 500 and leaks no part of the URL
         env:
           # 127.0.0.2 is loopback too, so the host can be told apart from the backend's own 127.0.0.1.
           SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_ci:ci-throwaway-not-a-secret@127.0.0.2:5432/no_such_db_9x4w
+          EXPECT_REASON: database-missing
         run: bash scripts/postgres_no_leak.sh socboard_ci ci-throwaway-not-a-secret no_such_db_9x4w 127.0.0.2 :5432
+
+      - name: A refused connection gives the generic 500 and the refused reason, and leaks no part of the URL
+        env:
+          # Nothing listens on port 1.
+          SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_ci:ci-throwaway-not-a-secret@127.0.0.3:1/no_such_db_9x4w
+          EXPECT_REASON: refused
+        run: bash scripts/postgres_no_leak.sh socboard_ci ci-throwaway-not-a-secret no_such_db_9x4w 127.0.0.3 :1/
