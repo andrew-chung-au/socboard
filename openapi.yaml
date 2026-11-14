@@ -47,6 +47,7 @@ info:
     | Wrong username or password at login | 401 | `invalid_credentials` |
     | Ingest with a missing or invalid API key | 401 | `invalid_api_key` (new) |
     | Too many failed logins from one client address (#178) | 429 | `rate_limited` (new) |
+    | Ingest above the configured rate for the ingest key (#183) | 429 | `rate_limited` |
     | Unknown case | 404 | `not_found` |
     | Reassign target user does not exist (user is in the body) | 404 | `user_not_found` |
     | Wrong role, or not the owner | 403 | `forbidden` |
@@ -109,7 +110,9 @@ info:
       not JSON the 422 comes before the 401, and "401 first" holds for valid JSON.
     - On `ingestAlert` the API key check is a route dependency: a missing or wrong key gives 401
       `invalid_api_key` before any body validation, provided the body parses as JSON. A body that
-      is not parseable JSON gives 422 `validation_error` even without a key.
+      is not parseable JSON gives 422 `validation_error` even without a key. The rate check
+      (429 `rate_limited`) is a second route dependency, after the key and before the body
+      validation.
     - For well-formed requests the order is unchanged: 401, 404, 403, 409, domain 422.
 
     ## Stated facts
@@ -634,7 +637,11 @@ paths:
       description: |
         Called by a source system with the ingest API key in the `X-API-Key` header; no bearer
         token. A missing or wrong key is 401 `invalid_api_key`. A missing required field is 422
-        `validation_error`. Order: 401 `invalid_api_key`, then the schema 422. Alert text is
+        `validation_error`. Order: 401 `invalid_api_key`, then 429 `rate_limited`, then the schema
+        422. A request with a valid key counts toward the rate even if the body is then refused
+        with 422; a wrong or missing key counts for nothing. The rate and its window are set by
+        configuration and are counted in the server process, for the ingest key as a whole (not
+        per `source`, which is untrusted text). Alert text is
         untrusted input: it is stored and returned as plain text, escaped when shown, and never
         treated as instructions. Severity is assigned by a fixed rule table, not supplied by the
         caller.
@@ -667,6 +674,25 @@ paths:
                     message: A valid API key is required.
         "422":
           $ref: "#/components/responses/ValidationError"
+        "429":
+          description: |
+            The holder of the ingest key sent more requests than the configured rate. Code
+            `rate_limited`. Nothing is stored for the refused request.
+          headers:
+            Retry-After:
+              description: Whole seconds until another request is accepted.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                rateLimited:
+                  value:
+                    code: rate_limited
+                    message: Too many alerts. Try again later.
   /health:
     get:
       operationId: getHealth

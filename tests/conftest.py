@@ -30,6 +30,7 @@ def login_limits_raised(monkeypatch):
     """
     monkeypatch.setenv("SOCBOARD_LOGIN_MAX_FAILURES", "100000")
     monkeypatch.setenv("SOCBOARD_LOGIN_CLIENT_MAX_FAILURES", "100000")
+    monkeypatch.setenv("SOCBOARD_INGEST_MAX_REQUESTS", "100000")
 
 
 @pytest.fixture(autouse=True)

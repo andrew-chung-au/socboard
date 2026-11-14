@@ -37,6 +37,11 @@ DEFAULT_CLIENT_MAX_FAILURES = 20
 DEFAULT_WINDOW_SECONDS = 300
 DEFAULT_MAX_TRACKED = 10000
 
+INGEST_MAX_REQUESTS_VAR = "SOCBOARD_INGEST_MAX_REQUESTS"
+INGEST_WINDOW_SECONDS_VAR = "SOCBOARD_INGEST_WINDOW_SECONDS"
+DEFAULT_INGEST_MAX_REQUESTS = 60
+DEFAULT_INGEST_WINDOW_SECONDS = 60
+
 FORWARDED_HEADER = "x-forwarded-for"
 UNKNOWN_CLIENT = "unknown"
 
@@ -97,6 +102,22 @@ def resolve_limits(source: Mapping[str, str]) -> LoginLimits:
         window_seconds=_whole_number(source, WINDOW_SECONDS_VAR, DEFAULT_WINDOW_SECONDS),
         max_tracked=_whole_number(source, MAX_TRACKED_VAR, DEFAULT_MAX_TRACKED),
         trusted_proxies=_trusted_proxies(source),
+    )
+
+
+@dataclass(frozen=True)
+class IngestLimits:
+    max_requests: int
+    window_seconds: int
+
+
+def resolve_ingest_limits(source: Mapping[str, str]) -> IngestLimits:
+    """The ingest limits from the environment, or `LimitConfigError` naming the variable."""
+    return IngestLimits(
+        max_requests=_whole_number(source, INGEST_MAX_REQUESTS_VAR, DEFAULT_INGEST_MAX_REQUESTS),
+        window_seconds=_whole_number(
+            source, INGEST_WINDOW_SECONDS_VAR, DEFAULT_INGEST_WINDOW_SECONDS
+        ),
     )
 
 
@@ -215,3 +236,33 @@ class LoginLimiter:
     def tracked_keys(self) -> int:
         with self._lock:
             return len(self._failures)
+
+
+class IngestLimiter:
+    """A sliding window of request times for the holder of the ingest key (#183).
+
+    One bucket: only a request that already carries the valid key reaches it, so the key is the
+    bucket and nothing a caller chooses (the `source` field, an address) picks another. The window
+    holds at most `max_requests` timestamps. Thread-safe; in the process, one worker.
+    """
+
+    def __init__(self, limits: IngestLimits, clock: Callable[[], float] = time.monotonic) -> None:
+        self._limits = limits
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._times: deque[float] = deque(maxlen=limits.max_requests)
+
+    def admit(self) -> int | None:
+        """Count one request and return None, or return the whole seconds to wait.
+
+        The check and the count are one step under the lock, so a burst cannot all pass. A refused
+        request is not counted, so it does not extend the wait."""
+        now = self._clock()
+        window = self._limits.window_seconds
+        with self._lock:
+            while self._times and self._times[0] <= now - window:
+                self._times.popleft()
+            if len(self._times) >= self._limits.max_requests:
+                return max(1, math.ceil(self._times[0] + window - now))
+            self._times.append(now)
+        return None
