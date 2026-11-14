@@ -117,9 +117,10 @@ resource "aws_iam_role_policy_attachment" "snapshot" {
 # Retention: the 7 newest daily snapshots are kept, older ones are deleted by DLM.
 # The tag must be unique to this deployment: every volume carrying project=socboard is snapshotted.
 # VERIFY: the `policy_details`, `schedule`, `create_rule` (`interval`, `interval_unit`, `times`),
-# `retain_rule` (`count`) and `target_tags` names, and that `times` is in UTC.
+# `retain_rule` (`count`) and `target_tags` names, and that `times` is in UTC. The provider rejects
+# a description with a comma (CI found it); allowed: letters, digits, spaces, underscore, hyphen.
 resource "aws_dlm_lifecycle_policy" "data_volume" {
-  description        = "Daily snapshots of the socboard data volume, 7 kept"
+  description        = "Daily snapshots of the socboard data volume - 7 kept"
   execution_role_arn = aws_iam_role.snapshot.arn
   state              = "ENABLED"
 
