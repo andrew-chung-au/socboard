@@ -14,7 +14,7 @@ names the variable, never its value.
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from socboard import database, ingest, ratelimit, spa
+from socboard import database, ingest, ratelimit, set_password, spa
 from socboard.auth import SECRET_ENV_NAME, ConfigError
 from socboard.seed import USERS
 
@@ -109,6 +109,13 @@ SETTINGS = (
         deployed=False,
         make_run=False,
         rule=f"a whole number of 1 or more (default {ratelimit.DEFAULT_INGEST_WINDOW_SECONDS})",
+    ),
+    Setting(
+        set_password.PASSWORD_VAR,
+        secret=True,
+        deployed=False,
+        make_run=False,
+        rule="at least 12 characters, no NUL; read by make set-password only",
     ),
     Setting("SOCBOARD_HOST", secret=False, deployed=False, make_run=False, rule="127.0.0.1, localhost or ::1 (default 127.0.0.1)"),
     Setting("SOCBOARD_PORT", secret=False, deployed=False, make_run=False, rule="a whole number from 1 to 65535 (default 8000)"),
