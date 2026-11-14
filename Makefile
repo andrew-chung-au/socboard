@@ -147,6 +147,22 @@ contract-check: ## Validate openapi.yaml against the OpenAPI version it declares
 	$(if $(value FILE),$(if $(call kit-root-ok,$(value FILE)),,$(error Usage: make contract-check [FILE=<path>] - FILE must be one word, a relative path of letters, digits and . _ / - only, not starting with - or /, and not containing two dots (..))))
 	uv run --locked openapi-spec-validator "$(if $(value FILE),$(FILE),openapi.yaml)"
 
+# --- Terraform offline checks (issue #199; never plan or apply) ----------------
+
+tf-check: ## Offline fmt, validate and (where tests/ exists) test of every terraform/ folder, on a copy in .scratch/tf-check; no AWS credential: make tf-check [TERRAFORM=<path>]
+	$(if $(value TERRAFORM),$(if $(call kit-root-ok,$(value TERRAFORM)),,$(error Usage: make tf-check [TERRAFORM=<path>] - TERRAFORM must be one word, a relative path of letters, digits and . _ / - only, not starting with - or /, and not containing two dots (..))))
+	@command -v "$(or $(TERRAFORM),terraform)" >/dev/null 2>&1 || { echo "tf-check: $(or $(TERRAFORM),terraform) not found; install the version in terraform/.terraform-version"; exit 2; }
+	$(or $(TERRAFORM),terraform) -chdir=terraform fmt -check -recursive
+	@rm -rf .scratch/tf-check && mkdir -p .scratch/tf-check .scratch/tf-plugin-cache
+	@git ls-files --cached --others --exclude-standard -z -- terraform | xargs -0 cp --parents -t .scratch/tf-check
+	@export TF_PLUGIN_CACHE_DIR="$(CURDIR)/.scratch/tf-plugin-cache" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1; \
+	for d in $$(find .scratch/tf-check/terraform -name '*.tf' -printf '%h\n' | sort -u); do \
+	  echo "== $$d"; \
+	  $(or $(TERRAFORM),terraform) -chdir="$$d" init -backend=false -input=false >/dev/null || exit 1; \
+	  $(or $(TERRAFORM),terraform) -chdir="$$d" validate || exit 1; \
+	  if [ -d "$$d/tests" ]; then $(or $(TERRAFORM),terraform) -chdir="$$d" test || exit 1; fi; \
+	done
+
 # --- Frontend (issue #27) ----------------------------------------------------
 
 frontend-install: ## Install the frontend packages from frontend/bun.lock; fails if the lockfile would change

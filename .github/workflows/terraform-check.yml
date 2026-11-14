@@ -1,4 +1,4 @@
-# Terraform check: format and validate every Terraform folder. No cloud credential, no secret.
+# Terraform check: format, validate and (where a tests folder exists) test every Terraform folder. No cloud credential, no secret.
 name: terraform check
 
 permissions:
@@ -53,3 +53,13 @@ jobs:
             terraform -chdir="$dir" validate
             echo "::endgroup::"
           done < folders.txt
+
+      # Offline: the tests use a mock provider, so no credential is needed (issue #199).
+      - name: Test each folder that has a tests folder
+        run: |
+          find terraform -type d -name tests -printf '%h\n' | sort -u > test-folders.txt
+          while read -r dir; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" test
+            echo "::endgroup::"
+          done < test-folders.txt
