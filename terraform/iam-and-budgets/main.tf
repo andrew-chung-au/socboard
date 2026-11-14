@@ -108,7 +108,10 @@ resource "aws_iam_role" "snapshot" {
   }
 }
 
-# Used only to take, copy and delete snapshots of tagged volumes.
+# Only dlm.amazonaws.com can assume this role, but the managed policy below is probably account-wide
+# with no tag condition: the role can likely act on any volume or snapshot in the account. The tag
+# project=socboard only chooses what the schedule snapshots; it does not limit this role.
+# VERIFY: this against the policy's current document at the first apply.
 resource "aws_iam_role_policy_attachment" "snapshot" {
   role       = aws_iam_role.snapshot.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
@@ -116,6 +119,8 @@ resource "aws_iam_role_policy_attachment" "snapshot" {
 
 # Retention: the 7 newest daily snapshots are kept, older ones are deleted by DLM.
 # The tag must be unique to this deployment: every volume carrying project=socboard is snapshotted.
+# `copy_tags` copies the volume's tags to each snapshot, so after a destroy the snapshots can be found
+# by the tag project=socboard (VERIFY: that it does); destroy stops the expiry, so they are deleted by hand.
 # VERIFY: the `policy_details`, `schedule`, `create_rule` (`interval`, `interval_unit`, `times`),
 # `retain_rule` (`count`) and `target_tags` names, and that `times` is in UTC. The provider rejects
 # a description with a comma (CI found it); allowed: letters, digits, spaces, underscore, hyphen.

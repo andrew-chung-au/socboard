@@ -53,7 +53,8 @@ No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS
 ## What it creates
 
 - Role `socboard-instance` (only `ec2.amazonaws.com` may assume it) with the AWS-managed `AmazonSSMManagedInstanceCore` policy and one inline statement: `secretsmanager:GetSecretValue` on the one secret ARN you set. Nothing else, no write, no other service. Instance profile `socboard-instance` wraps it.
-- **The snapshot schedule lives here, not in D17b.** An Amazon Data Lifecycle Manager policy snapshots every volume tagged `project=socboard` daily at 03:00 UTC and keeps the 7 newest, so it can be applied before the volume exists. Its execution role `socboard-snapshot` (only `dlm.amazonaws.com` may assume it) is here too. The tag must be unique to this deployment.
+- **The snapshot schedule lives here, not in D17b.** An Amazon Data Lifecycle Manager policy snapshots every volume tagged `project=socboard` daily at 03:00 UTC and keeps the 7 newest, so it can be applied before the volume exists. Its execution role `socboard-snapshot` (only `dlm.amazonaws.com` may assume it) is here too. The tag must be unique to this deployment. The role's AWS-managed policy is probably account-wide with no tag condition: the tag only chooses what is scheduled (`VERIFY:` the policy's current document at the first apply).
+- **Rule for D17b:** the server part's root volume must not carry the tag `project=socboard`, or it is snapshotted too (unless you accept the extra snapshots knowingly). D17b's issue must carry this as a criterion.
 - One monthly cost budget with notifications at 50, 80 and 100 percent of actual spend, sent to your address.
 - Every resource is tagged `project=socboard`. No secret is read, held or output.
 
@@ -63,7 +64,7 @@ No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS
 
 ## The cost
 
-A later change to the instance's permissions, the snapshot schedule or its retention is a manual apply by the human here; CI cannot do it. This is the price of keeping every IAM resource out of CI's reach.
+A later change to the instance's permissions, the snapshot schedule or its retention is a manual apply by the human here; CI cannot do it. This is the price of keeping every IAM resource out of CI's reach. For #156 (D16): the CI apply role's deny must cover `iam:*` (including the roles `socboard-instance` and `socboard-snapshot`), `dlm:*`, `budgets:*` and, if CI holds EC2 rights, `ec2:DeleteSnapshot`, so CI cannot shorten retention or change the budget address.
 
 ## Steps for the human (not yet run)
 
@@ -78,9 +79,9 @@ Run each step in `terraform/iam-and-budgets/` with AWS credentials for your own 
 4. `terraform plan`, and read it: the role's inline policy must name exactly your one secret ARN.
    Expected: "Plan: 8 to add, 0 to change, 0 to destroy." (2 roles, 2 role policy attachments, 1 inline role policy, 1 instance profile, 1 lifecycle policy, 1 budget). Stop on any surprise.
 5. `terraform apply`, answering `yes`.
-   Expected: "Apply complete! Resources: 8 added, 0 changed, 0 destroyed." and the output `instance_profile_name = "socboard-instance"`. The budget address may get a confirmation mail.
+   Expected: "Apply complete! Resources: 8 added, 0 changed, 0 destroyed." and the output `instance_profile_name = "socboard-instance"`. The budget address may get a confirmation mail. If the snapshot lifecycle policy fails with a role error on the first apply, run `terraform apply` again: a new IAM role can take seconds to become usable (`VERIFY:`).
 6. Check: in the IAM console the role `socboard-instance` has one managed policy and one inline policy; in the EC2 console under Lifecycle Manager the policy is `ENABLED`.
-   Expected: as described. Whether the managed policy is wider than the agent needs is a `VERIFY:` for you to judge here.
+   Expected: as described. Whether the managed policy is wider than the agent needs is a `VERIFY:` for you to judge here. Also read the current document of `AWSDataLifecycleManagerServiceRole`: it is probably account-wide with no tag condition (`VERIFY:`).
 
 Later `init` runs need the same `-backend-config="bucket=<name>"` argument.
 
@@ -93,4 +94,4 @@ Destroy in this order, because the state bucket holds this part's state: D17b's 
 2. `terraform init -migrate-state`, answering `yes`.
    Expected: `init` says the backend was removed and copies the state to a local `terraform.tfstate`; `terraform state list` shows the 8 resources.
 3. `terraform destroy`.
-   Expected: "Destroy complete! Resources: 8 destroyed." Snapshots the schedule already took are not deleted by this; delete them by hand if you no longer want them (`VERIFY:`).
+   Expected: "Destroy complete! Resources: 8 destroyed." Snapshots the schedule already took are not deleted by this, and destroy stops their expiry, so they are billed until you delete them. The schedule copies the volume's tags to its snapshots (`copy_tags`; `VERIFY:` that it does), so list them in the EC2 console (Snapshots) filtered on the tag `project=socboard` and delete them by hand.
