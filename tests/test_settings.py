@@ -53,6 +53,7 @@ def test_the_list_names_every_runtime_variable_once():
         "SOCBOARD_TRUSTED_PROXIES",
         "SOCBOARD_INGEST_MAX_REQUESTS",
         "SOCBOARD_INGEST_WINDOW_SECONDS",
+        "SOCBOARD_NEW_PASSWORD",
     }
     assert set(NAMES) == expected
     assert len(NAMES) == len(set(NAMES))
@@ -63,7 +64,7 @@ def test_the_list_names_every_runtime_variable_once():
 def test_secret_and_deployed_flags():
     by_name = {setting.name: setting for setting in settings.SETTINGS}
     assert {name for name, s in by_name.items() if s.deployed} == {SECRET, KEY, DB}
-    assert {name for name, s in by_name.items() if s.secret} == {SECRET, KEY, DB, *(v for *_, v in USERS)}
+    assert {name for name, s in by_name.items() if s.secret} == {SECRET, KEY, DB, "SOCBOARD_NEW_PASSWORD", *(v for *_, v in USERS)}
 
 
 def test_every_deployed_setting_has_exactly_one_check():
