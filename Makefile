@@ -250,6 +250,15 @@ migration-new: ## Create a migration file from the model changes: make migration
 	$(if $(call migration-name-ok,$(value NAME)),,$(error Usage: make migration-new NAME=<words> - one word of letters, digits, _ and - only))
 	uv run --locked python -m socboard.migrate new "$$NAME"
 
+smoke-url-chars := $(migration-name-chars) : / . [ ]
+smoke-url-ok = $(and $(filter 1,$(words $(1))),$(if $(call kit-other-strip,$(1),$(smoke-url-chars)),,ok),$(if $(subst x$(strip $(1))x,,x$(1)x),,ok))
+
+smoke: ## Check a running app (issue #191): make smoke URL=<url> [HEALTH_ONLY=1]; the full check needs SOCBOARD_SEED_PASSWORD_LEAD and SOCBOARD_INGEST_API_KEY and adds one New case; HEALTH_ONLY=1 needs no credential
+	$(if $(findstring $$,$(value URL)),$(error Usage: make smoke URL=<url> [HEALTH_ONLY=1] - URL must not contain $$))
+	$(if $(call smoke-url-ok,$(value URL)),,$(error Usage: make smoke URL=<url> [HEALTH_ONLY=1] - URL is one word of letters, digits and : / . - _ [ ] only))
+	$(if $(value HEALTH_ONLY),$(if $(subst x1x,,x$(value HEALTH_ONLY)x),$(error Usage: make smoke URL=<url> [HEALTH_ONLY=1] - HEALTH_ONLY is empty or 1)))
+	uv run --locked python -m socboard.smoke $(if $(value HEALTH_ONLY),--health-only )"$$URL"
+
 # --- Full stack (issue #22) --------------------------------------------------
 
 run: ## Start the whole local stack in the background: migrate, seed, backend, frontend on the real API (needs SOCBOARD_TOKEN_SECRET, SOCBOARD_SEED_PASSWORD_ANALYST_A, SOCBOARD_SEED_PASSWORD_ANALYST_B, SOCBOARD_SEED_PASSWORD_LEAD and SOCBOARD_INGEST_API_KEY; starts nothing if one fails)
