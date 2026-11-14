@@ -52,11 +52,12 @@ def check(environ: Mapping[str, str]) -> list[tuple[str, str]]:
         resolve_url(environ)
     except DatabaseUrlError as error:
         problems.append(("SOCBOARD_DATABASE_URL", str(error)))
-    try:
-        resolve_bind(environ)
-    except BindError as error:
-        name = "SOCBOARD_HOST" if "SOCBOARD_HOST" in str(error) else "SOCBOARD_PORT"
-        problems.append((name, str(error)))
+    # resolve_bind stops at the first bad setting, so ask it about each variable on its own.
+    for name in ("SOCBOARD_HOST", "SOCBOARD_PORT"):
+        try:
+            resolve_bind({name: environ[name]} if name in environ else {})
+        except BindError as error:
+            problems.append((name, str(error)))
     return problems
 
 

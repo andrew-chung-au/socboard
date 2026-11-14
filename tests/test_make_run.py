@@ -68,6 +68,12 @@ ROWS = [
     ("port 65536", {"SOCBOARD_PORT": "65536"}, {"SOCBOARD_PORT"}),
     ("non-loopback host", {"SOCBOARD_HOST": "0.0.0.0"}, {"SOCBOARD_HOST"}),
     ("invalid database URL", {"SOCBOARD_DATABASE_URL": "not a database url"}, {"SOCBOARD_DATABASE_URL"}),
+    ("non-loopback host and invalid port together", {"SOCBOARD_HOST": "0.0.0.0", "SOCBOARD_PORT": "x1"}, {"SOCBOARD_HOST", "SOCBOARD_PORT"}),
+    (
+        "host, port and database URL all invalid",
+        {"SOCBOARD_HOST": "0.0.0.0", "SOCBOARD_PORT": "x1", "SOCBOARD_DATABASE_URL": "not a database url"},
+        {"SOCBOARD_HOST", "SOCBOARD_PORT", "SOCBOARD_DATABASE_URL"},
+    ),
     ("everything required unset", {name: UNSET for name in REQUIRED}, set(REQUIRED)),
 ]
 for _name in REQUIRED:
@@ -182,6 +188,26 @@ def test_make_run_refuses_and_starts_nothing(variable, value, tmp_path):
     assert [path.exists() for path in PID_FILES] == before
     assert not database_file.exists()
     assert not listening(port)
+
+
+def test_make_run_names_every_bad_bind_and_url_setting_one_line_each(tmp_path):
+    bad = {"SOCBOARD_HOST": "0.0.0.0", "SOCBOARD_PORT": "port-x91", "SOCBOARD_DATABASE_URL": "zz-not-a-db-url"}
+    environ = {"PATH": "/usr/local/bin:/usr/bin:/bin", **good_values(), **bad}
+    before = [path.exists() for path in PID_FILES]
+
+    done = subprocess.run(
+        ["make", "--no-print-directory", "run"], cwd=ROOT, env=environ, capture_output=True, text=True, timeout=60
+    )
+
+    output = done.stdout + done.stderr
+    assert done.returncode != 0
+    for name in bad:
+        lines = [line for line in output.splitlines() if name in line]
+        assert len(lines) == 1, (name, lines)
+        assert not any(other in lines[0] for other in bad if other != name)
+    for value in [*bad.values(), *good_values().values()]:
+        assert value not in output
+    assert [path.exists() for path in PID_FILES] == before
 
 
 # --- README quick start -------------------------------------------------------------------------
