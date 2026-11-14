@@ -51,6 +51,8 @@ def test_the_list_names_every_runtime_variable_once():
         "SOCBOARD_LOGIN_WINDOW_SECONDS",
         "SOCBOARD_LOGIN_MAX_TRACKED",
         "SOCBOARD_TRUSTED_PROXIES",
+        "SOCBOARD_INGEST_MAX_REQUESTS",
+        "SOCBOARD_INGEST_WINDOW_SECONDS",
     }
     assert set(NAMES) == expected
     assert len(NAMES) == len(set(NAMES))

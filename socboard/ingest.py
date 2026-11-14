@@ -22,14 +22,14 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from socboard import scoring
+from socboard import ratelimit, scoring
 from socboard.audit import append_audit
-from socboard.auth import require_api_key
+from socboard.auth import ConfigError, require_api_key
 from socboard.domain import ACTION_INGESTED, STATUS_NEW
-from socboard.errors import ApiError
+from socboard.errors import RATE_LIMITED, ApiError, ApiHTTPException
 from socboard.ids import to_public_id
 from socboard.inventory import criticality_for_asset
 from socboard.models import Alert, Case
@@ -56,6 +56,32 @@ def resolve_ingest_key(environ: Mapping[str, str] | None = None) -> str | None:
     return key
 
 
+RATE_LIMITED_MESSAGE = "Too many alerts. Try again later."
+
+
+def resolve_ingest_limiter(environ: Mapping[str, str] | None = None) -> ratelimit.IngestLimiter:
+    """The ingest limiter from the environment, or `ConfigError` naming the variable."""
+    source = os.environ if environ is None else environ
+    try:
+        return ratelimit.IngestLimiter(ratelimit.resolve_ingest_limits(source))
+    except ratelimit.LimitConfigError as error:
+        raise ConfigError(str(error)) from None
+
+
+def limit_ingest_rate(request: Request) -> None:
+    """Route dependency after `require_api_key`: 429 `rate_limited` above the configured rate.
+
+    It runs only for a request with the valid key (a wrong or missing key was refused with 401
+    first), and before the body is validated or anything is stored. It counts every such request,
+    including one the body check later refuses with 422."""
+    retry_after = request.app.state.ingest_limiter.admit()
+    if retry_after is not None:
+        logger.info("Ingest refused: rate limit")
+        raise ApiHTTPException(
+            429, RATE_LIMITED, RATE_LIMITED_MESSAGE, headers={"Retry-After": str(retry_after)}
+        )
+
+
 def add_ingest_route(api_router: APIRouter) -> None:
     """`POST /alerts` on `api_router` (the router from `create_api_router`, which documents the
     contract's 422)."""
@@ -64,10 +90,10 @@ def add_ingest_route(api_router: APIRouter) -> None:
         "/alerts",
         status_code=201,
         response_model=CaseSummary,
-        responses={401: {"model": ApiError}},
+        responses={401: {"model": ApiError}, 429: {"model": ApiError}},
         tags=["ingest"],
         operation_id="ingestAlert",
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(require_api_key), Depends(limit_ingest_rate)],
     )
     def ingest_alert(
         body: IngestRequest, session: Annotated[Session, Depends(get_session)]

@@ -70,16 +70,16 @@ def test_the_201_response_equals_the_contracts_case_summary(contract, generated)
     assert "closingReason" in resolved["required"] and "owner" in resolved["required"]
 
 
-def test_the_response_statuses_are_201_401_and_422_only(contract, generated):
+def test_the_response_statuses_are_201_401_422_and_429_only(contract, generated):
     contract_op, generated_op = operations(contract, generated)
-    assert set(contract_op["responses"]) == {"201", "401", "422"}
-    assert set(generated_op["responses"]) == {"201", "401", "422"}
+    assert set(contract_op["responses"]) == {"201", "401", "422", "429"}
+    assert set(generated_op["responses"]) == {"201", "401", "422", "429"}
 
 
-def test_the_401_and_422_bodies_are_api_error(contract, generated):
+def test_the_401_422_and_429_bodies_are_api_error(contract, generated):
     _, generated_op = operations(contract, generated)
     api_error = canonical(contract, contract["components"]["schemas"]["ApiError"])
-    for status in ("401", "422"):
+    for status in ("401", "422", "429"):
         schema = json_schema(generated_op["responses"][status])
         assert diff(api_error, canonical(generated, schema)) == [], status
     assert sorted(api_error["required"]) == ["code", "message"]
