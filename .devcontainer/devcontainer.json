@@ -1,6 +1,9 @@
 {
   "name": "${localWorkspaceFolderBasename}",
-  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "runServices": ["app", "db"],
+  "workspaceFolder": "/workspaces/socboard-sandbox",
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/node:2": {
@@ -12,7 +15,8 @@
   "containerEnv": {
     "SSH_AUTH_SOCK": "",
     "GIT_TERMINAL_PROMPT": "0",
-    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    "DATABASE_URL": "postgresql+psycopg://socboard_dev:b252edaf805007702cb7ba76@db:5432/socboard_dev"
   },
   "remoteEnv": {
     "PATH": "${containerEnv:PATH}:/home/vscode/.local/bin:/home/vscode/.opencode/bin",
