@@ -92,11 +92,13 @@ Write pass or fail for each step on #22 (or tell the orchestrator in the session
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 branch, install | | |
-| 3 `make run` exit 0, both URLs printed | | |
-| 4 no "Mock mode" box on Sign in | | |
-| 5 signed in as `lead`, no `mock` badge | | |
-| 6 `make stop` stopped both | | |
+| 1 branch, install | pass | `make install`: no changes, no error line |
+| 3 `make run` exit 0, both URLs printed | pass | migrate at latest; seed `0 user(s) added, 3 already present` (an existing database, so `lead` kept its earlier password); backend and frontend started; both URLs printed |
+| 4 no "Mock mode" box on Sign in | pass | reported by the human |
+| 5 signed in as `lead`, no `mock` badge | pass | reported by the human |
+| 6 `make stop` stopped both | pass | `frontend stopped`, `backend stopped`; the human then removed `socboard.db` |
+
+Run by the human on 2026-11-14 in the dev container on branch `claude/blissful-wright-vg0ycj` (`bc7d6ba`). Note for next time: the Step 2 placeholders were exported literally; they pass the length checks but are public text, so the step should say plainly to replace them.
 
 ## Risk
 
