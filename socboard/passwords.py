@@ -87,6 +87,8 @@ def hash_password(password: str) -> str:
     """A new self-describing hash of `password` with a fresh random salt."""
     if not isinstance(password, str):
         raise TypeError("password must be a str")
+    if "\x00" in password:
+        raise ValueError("password must not contain a NUL character")
     salt = secrets.token_bytes(SALT_BYTES)
     digest = _scrypt(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P)
     params = f"n={SCRYPT_N},r={SCRYPT_R},p={SCRYPT_P}"
@@ -123,9 +125,11 @@ def verify_password(password: str, stored: str) -> bool:
     """
     if not isinstance(password, str):
         return False
+    # A NUL is refused because scrypt gives "pw", "pw\x00" and "pw\x00\x00" one key (#144); it
+    # runs the one scrypt against the dummy hash, so it costs what any wrong password costs.
+    valid = "\x00" not in password
     try:
-        n, r, p, salt, expected = parse_hash(stored)
-        valid = True
+        n, r, p, salt, expected = parse_hash(stored if valid else DUMMY_HASH)
     except PasswordHashFormatError:
         n, r, p, salt, expected = parse_hash(DUMMY_HASH)
         valid = False

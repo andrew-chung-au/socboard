@@ -193,6 +193,31 @@ def test_a_lone_surrogate_in_the_login_body_is_a_401_not_a_500(real_crash_client
     assert_error(response, 401, INVALID_CREDENTIALS)
 
 
+# --- a password with a NUL is refused like any wrong password (#144) ---------------------------
+
+
+@pytest.mark.parametrize("username", [ANALYST_USERNAME, "test-nobody"])
+def test_a_password_with_a_trailing_nul_gets_the_same_401_as_a_wrong_password(real_client, username):
+    reference = login(real_client, ANALYST_USERNAME, "test-only-wrong-pw")
+    nul = login(real_client, username, ANALYST_PASSWORD + "\x00")
+    assert_error(nul, 401, INVALID_CREDENTIALS)
+    assert nul.status_code == reference.status_code
+    assert nul.content == reference.content
+    assert dict(nul.headers) == dict(reference.headers)
+
+
+def test_a_nul_password_is_not_in_the_401_body_or_any_log_record(real_client, caplog):
+    secret = ANALYST_PASSWORD + "\x00-test-only-distinctive"
+    caplog.set_level(logging.DEBUG)
+    response = login(real_client, ANALYST_USERNAME, secret)
+    assert_error(response, 401, INVALID_CREDENTIALS)
+    assert secret not in response.text
+    assert "test-only-distinctive" not in response.text
+    for record in caplog.records:
+        assert "test-only-distinctive" not in record.getMessage()
+    assert "test-only-distinctive" not in caplog.text
+
+
 # --- current_user: every refusal is 401 unauthorized, never a 500 ------------------------------
 
 
