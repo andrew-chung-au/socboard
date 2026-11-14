@@ -9,16 +9,90 @@ the default `socboard.db`. The `app` fixture's database is a copy of one migrate
 the two test users of `backend_support.py`, built once per run.
 """
 
-import shutil
-
+import db_target
 import pytest
+
+MARKER_LINE = (
+    "sqlite_only(reason): the test needs SQLite (a database file, SQLite triggers or pragmas); it is "
+    "deselected when SOCBOARD_TEST_POSTGRES_URL is set (#192)"
+)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", MARKER_LINE)
+    try:
+        db_target.server_url()
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from None
+
+
+def pytest_report_header(config):
+    if not db_target.is_postgres():
+        return "test database: SQLite (SOCBOARD_TEST_POSTGRES_URL is not set)"
+    try:
+        before = len(db_target.listed_databases())
+    except Exception as error:  # a server that cannot be reached stops the run here, with fixed text
+        raise pytest.UsageError(f"cannot reach the Postgres server named by SOCBOARD_TEST_POSTGRES_URL: {error}") from None
+    config._postgres_databases_before = before
+    return f"test database: Postgres ({before} test database(s) on the server before the run)"
+
+
+def _reason(marker) -> str:
+    reason = marker.args[0] if marker.args else marker.kwargs.get("reason", "")
+    return reason if isinstance(reason, str) else ""
+
+
+def pytest_collection_modifyitems(config, items):
+    """Check every `sqlite_only` marker has a one-line reason; deselect the marked tests on Postgres."""
+    marked = []
+    for item in items:
+        for marker in item.iter_markers("sqlite_only"):
+            reason = _reason(marker)
+            if not reason.strip() or "\n" in reason.strip():
+                raise pytest.UsageError(f"{item.nodeid}: sqlite_only needs a one-line reason")
+            marked.append(item)
+            break
+    postgres = db_target.is_postgres()
+    if postgres and marked:
+        marked_ids = {id(item) for item in marked}
+        items[:] = [item for item in items if id(item) not in marked_ids]
+        config.hook.pytest_deselected(items=marked)
+    config._sqlite_only_line = (
+        f"sqlite_only: {len(marked)} marked, {len(marked) if postgres else 0} deselected on Postgres"
+    )
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(config._sqlite_only_line)
+
+
+def pytest_terminal_summary(terminalreporter, config):
+    terminalreporter.write_line(getattr(config, "_sqlite_only_line", "sqlite_only: not counted"))
+    if not db_target.is_postgres():
+        return
+    dropped = db_target.drop_databases(final=True)
+    after = len(db_target.listed_databases())
+    before = getattr(config, "_postgres_databases_before", 0)
+    terminalreporter.write_line(
+        f"postgres test databases: {before} before the run, {dropped} dropped at the end, {after} left on the server"
+    )
+    if after > before:
+        terminalreporter.write_line("postgres test databases LEFT BEHIND by this run", red=True)
+
+
+@pytest.fixture(autouse=True)
+def drop_test_databases():
+    """Drop the Postgres databases a test made, whether it passed or failed (a no-op on SQLite)."""
+    start = db_target.created_count()
+    yield
+    if db_target.is_postgres():
+        db_target.drop_databases(start)
 
 
 @pytest.fixture(autouse=True)
 def auth_test_environment(monkeypatch, tmp_path):
     """The signing secret for every test, and a database URL that is never the default file."""
     monkeypatch.setenv("SOCBOARD_TOKEN_SECRET", "test-only-signing-secret-0123456789abcdef")
-    monkeypatch.setenv("SOCBOARD_DATABASE_URL", "sqlite:///" + (tmp_path / "unused.db").as_posix())
+    monkeypatch.setenv("SOCBOARD_DATABASE_URL", db_target.sqlite_url(tmp_path / "unused.db"))
 
 
 @pytest.fixture(autouse=True)
@@ -47,23 +121,19 @@ def template_database(tmp_path_factory):
     """One migrated database with the two test users, copied for each test that needs it."""
     from backend_support import build_test_database
 
-    path = tmp_path_factory.mktemp("template") / "template.db"
-    build_test_database(path)
-    return path
+    url = db_target.new_template_url(tmp_path_factory.mktemp("template"))
+    build_test_database(url)
+    return url
 
 
 @pytest.fixture
 def app_database(template_database, tmp_path_factory, monkeypatch):
     """A fresh copy of the template database; SOCBOARD_DATABASE_URL points at it.
 
-    The copy lives outside the test's own `tmp_path`, which tests use to check that nothing
-    created a database file there.
+    On SQLite the copy is a file outside the test's own `tmp_path`, which tests use to check that
+    nothing created a database file there. On Postgres it is a new database made from the template.
     """
-    from backend_support import sqlite_url
-
-    path = tmp_path_factory.mktemp("appdb") / "app.db"
-    shutil.copyfile(template_database, path)
-    url = sqlite_url(path)
+    url = db_target.copy_of(template_database, tmp_path_factory.mktemp("appdb"))
     monkeypatch.setenv("SOCBOARD_DATABASE_URL", url)
     return url
 

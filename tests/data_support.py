@@ -14,9 +14,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from db_target import empty_database_url, migrated_database_url, sqlite_url  # noqa: F401  (sqlite_url: re-exported)
 from sqlalchemy import insert
 
-from socboard import database, domain, migrate
+from socboard import database, domain
 from socboard.models import Alert, Asset, AuditEntry, Case, Note, User
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,10 +35,6 @@ SEED_PASSWORDS = {
 
 def unique(prefix: str) -> str:
     return f"{prefix}{next(_counter)}"
-
-
-def sqlite_url(path: Path) -> str:
-    return "sqlite:///" + path.as_posix()
 
 
 @pytest.fixture(autouse=True)
@@ -65,18 +62,18 @@ def no_default_database_file():
 
 @pytest.fixture
 def db_url(tmp_path):
-    return sqlite_url(tmp_path / "test.db")
+    """A new empty test database: the file `tmp_path / "test.db"` on SQLite, a new database on Postgres."""
+    return empty_database_url(tmp_path, "test.db")
 
 
 @pytest.fixture
 def migrated_engine(tmp_path):
     """An engine (the application's own settings) on a database built by the real migrations.
 
-    It uses the same file as the `db_url` fixture (`tmp_path / "test.db"`), without depending on
+    It uses the same database as the `db_url` fixture (`tmp_path / "test.db"`), without depending on
     that fixture, so a test module needs to import only this one.
     """
-    db_url = sqlite_url(tmp_path / "test.db")
-    migrate.upgrade(db_url)
+    db_url = migrated_database_url(tmp_path, "test.db")
     engine = database.create_db_engine(db_url)
     yield engine
     engine.dispose()
