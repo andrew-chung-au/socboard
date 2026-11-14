@@ -41,6 +41,7 @@ Layout: `socboard/` (application package), `frontend/` (React + TypeScript front
 
 - **Environment:** local sandbox (dev container; you can't push, and Docker isn't available). See `_docs/agent-kit/environments.md`.
 - **Branching:** commit directly to `main`; the human reviews and pushes from a clean clone.
+- **Cloud sessions:** a cloud session (Claude Code on the web) never works on `main`. It works on a `claude/<topic>` branch: the one the session names if it names one, otherwise a new one from the latest `origin/main`. Once a branch's pull request has merged, the next piece of work starts a new `claude/<topic>` branch from the latest `origin/main`; a merged branch is not reused and nothing is force-pushed. After `make verify` passes and the human says yes at the permission prompt, the agent may run `git push [-u] origin claude/<name>`, and nothing else: no push of `main` or any other branch, no force push, delete or tag. It opens a pull request only when the human asks. The human reviews the diff and merges to `main`. Decision: `_docs/decisions/2026-11-14T0420Z-agent-push-claude-branches.md`.
 - **Dependencies:** use `uv add` for runtime dependencies and `uv add --dev` for development dependencies; commit `pyproject.toml` and `uv.lock`.
 - **Session summaries:** `_session-summaries/`, named per `_docs/agent-kit/procedures/session-summary.md`.
 - **Readable config:** none.
@@ -68,7 +69,7 @@ Rules only judgment can keep. They apply at all times.
 
 ## Enforced by hooks
 
-Hooks and tool settings block broad staging, `--no-verify`, pushes, the tool's own reading and editing of `.env` files, shell commands naming `.env` files (Claude Code's hook; in OpenCode a text-pattern rule), and commits of protected files (listed in `agent-kit.conf`) without human approval. If a hook blocks you, fix the cause or ask the human; never work around it.
+Hooks and tool settings block broad staging, `--no-verify`, pushes (except one plain `git push [-u] origin claude/<name>` from a cloud session, which asks the human first), the tool's own reading and editing of `.env` files, shell commands naming `.env` files (Claude Code's hook; in OpenCode a text-pattern rule), and commits of protected files (listed in `agent-kit.conf`) without human approval. If a hook blocks you, fix the cause or ask the human; never work around it.
 
 ## Read when
 
