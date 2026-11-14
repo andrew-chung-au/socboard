@@ -15,3 +15,14 @@ dist/
 /socboard.db-journal
 /socboard.db-wal
 /socboard.db-shm
+
+# Terraform: state, plans and real variable files stay local; the lock file and *.tfvars.example are tracked.
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.plan
+tfplan
+crash.log
+.terraform/
+*.tfvars
+*.tfvars.json

@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (git-ignored) and set your own bucket name.
+# Placeholder only: bucket names are global, so this one will not work as written.
+bucket_name = "REPLACE-ME-socboard-tfstate"
