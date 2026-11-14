@@ -20,7 +20,9 @@ dist/
 *.tfstate
 *.tfstate.*
 *.tfplan
+*.plan
 tfplan
+crash.log
 .terraform/
 *.tfvars
 *.tfvars.json
