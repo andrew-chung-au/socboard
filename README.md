@@ -121,7 +121,7 @@ Every runtime variable, from the one list in `socboard/settings.py` (a test fail
 | `SOCBOARD_HOST` | no | no | `127.0.0.1`, `localhost` or `::1` (default `127.0.0.1`); see "Binding beyond localhost". |
 | `SOCBOARD_PORT` | no | no | A whole number from 1 to 65535 (default 8000). |
 | `SOCBOARD_STATIC_DIR` | no | no | The built frontend folder (default `frontend/dist`); see "Serving the built site". |
-| `SOCBOARD_MODE` | no | no | Exactly `deployed` turns deployed mode on. Any other value, including an empty one or a different case, leaves it off. `make run`, `make backend-run` and the tests never set it. |
+| `SOCBOARD_MODE` | no | no | Exactly `deployed` turns deployed mode on. Any other value, including an empty one or a different case, leaves it off. `make run`, `make backend-run` and the tests never set it. A development run never starts in deployed mode: `make run` refuses it (exit 2, nothing started) and `make backend-run` removes it from the backend's environment and prints a line saying so. |
 
 Deployed mode: with `SOCBOARD_MODE` set to `deployed`, the backend refuses to start (exit code 2) when the token secret, the ingest key or the database URL is missing, empty, too short or made only of whitespace, when the secret or the key is one repeated character (whitespace ignored), or when the key has leading or trailing whitespace. The message names the variable and never prints its value. Outside deployed mode nothing else changes.
 
