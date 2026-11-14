@@ -15,6 +15,10 @@ echo "---"
 test "$code" = "500"
 grep -q '"internal_error"' .scratch/missing.json
 grep -q "Could not connect to the database." .scratch/backend.log
+# EXPECT_REASON (optional): the one reason word the log must carry, for example `authentication`.
+if [ -n "${EXPECT_REASON:-}" ]; then
+  grep -qF -- "(reason: ${EXPECT_REASON})" .scratch/backend.log
+fi
 status=0
 for word in "$@"; do
   if grep -qF -- "$word" .scratch/missing.json .scratch/backend.log; then echo "leaked: $word"; status=1; fi

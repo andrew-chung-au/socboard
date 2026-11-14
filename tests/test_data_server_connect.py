@@ -40,7 +40,7 @@ def test_a_postgres_engine_replaces_the_driver_error_with_fixed_text(monkeypatch
             engine.connect()
     finally:
         engine.dispose()
-    assert str(caught.value) == database.CONNECT_FAILED_MESSAGE + " (OperationalError, SQLSTATE none)"
+    assert str(caught.value) == database.CONNECT_FAILED_MESSAGE + " (reason: authentication)"
     assert caught.value.__suppress_context__
     text = formatted(caught.value)
     for marker in MARKERS:
@@ -71,8 +71,23 @@ def test_a_real_refused_postgres_connection_gives_the_fixed_text():
     finally:
         engine.dispose()
     text = formatted(caught.value)
+    assert str(caught.value) == database.CONNECT_FAILED_MESSAGE + " (reason: refused)"
     for marker in MARKERS:
         assert marker not in text, marker
+
+
+def test_a_real_unresolvable_host_gives_the_fixed_text_and_the_unknown_reason():
+    engine = database.create_db_engine(
+        "postgresql+psycopg://marker_user_q7:marker_password_q7@marker-host-q7.invalid:5432/marker_db_q7"
+    )
+    try:
+        with pytest.raises(database.DatabaseConnectError) as caught:
+            engine.connect()
+    finally:
+        engine.dispose()
+    assert str(caught.value) == database.CONNECT_FAILED_MESSAGE + " (reason: unknown)"
+    for marker in MARKERS + ("marker-host-q7",):
+        assert marker not in formatted(caught.value), marker
 
 
 def test_only_server_engines_get_the_hook(tmp_path):
@@ -93,36 +108,70 @@ def raising(error):
     return connect
 
 
-def test_the_message_names_the_driver_class_and_sqlstate_of_a_missing_database(monkeypatch):
+# The driver's message as libpq and the server word it (Postgres 16); each carries the markers.
+DRIVER_MESSAGES = [
+    (
+        'connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  '
+        'password authentication failed for user "marker_user_q7" (password "marker_password_q7")',
+        "authentication",
+    ),
+    (
+        'connection failed: connection to server at "127.0.0.1", port 5432 failed: '
+        "fe_sendauth: no password supplied marker_user_q7",
+        "authentication",
+    ),
+    (
+        'connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  '
+        'database "marker_db_q7" does not exist',
+        "database-missing",
+    ),
+    (
+        'connection failed: connection to server at "marker_host_q7", port 5432 failed: Connection refused\n'
+        "\tIs the server running on that host and accepting TCP/IP connections?",
+        "refused",
+    ),
+    (
+        'connection failed: connection to server at "marker_host_q7", port 5432 failed: timeout expired',
+        "timeout",
+    ),
+    (
+        'connection failed: connection to server at "marker_host_q7", port 5432 failed: Connection timed out',
+        "timeout",
+    ),
+    ('could not translate host name "marker_host_q7" to address: Name or service not known', "unknown"),
+    ("marker_user_q7 marker_password_q7 marker_db_q7", "unknown"),
+    ("", "unknown"),
+]
+
+
+@pytest.mark.parametrize(("message", "reason"), DRIVER_MESSAGES)
+def test_the_driver_message_gives_one_fixed_reason_and_is_never_printed(monkeypatch, message, reason):
     engine = database.create_db_engine(POSTGRES_URL)
     dbapi = engine.dialect.loaded_dbapi
-    missing = dbapi.errors.InvalidCatalogName('database "marker_db_q7" does not exist')
-    monkeypatch.setattr(dbapi, "connect", raising(missing))
+    monkeypatch.setattr(dbapi, "connect", raising(dbapi.OperationalError(message)))
     try:
         with pytest.raises(database.DatabaseConnectError) as caught:
             engine.connect()
     finally:
         engine.dispose()
-    assert str(caught.value) == database.CONNECT_FAILED_MESSAGE + " (InvalidCatalogName, SQLSTATE 3D000)"
-    for marker in MARKERS:
+    assert str(caught.value) == database.CONNECT_FAILED_MESSAGE + f" (reason: {reason})"
+    assert reason in database.CONNECT_FAILURE_REASONS
+    for marker in MARKERS + ("marker_host_q7",):
         assert marker not in formatted(caught.value), marker
 
 
-class OddDriverError(Exception):
-    """A made-up driver error whose SQLSTATE is not five plain characters."""
-
-    def __init__(self, sqlstate):
-        super().__init__("marker_user_q7")
-        self.sqlstate = sqlstate
-
-
-@pytest.mark.parametrize("sqlstate", ["marker_user_q7", "3D00", "3d000", "3D000 ", 42, None])
-def test_a_sqlstate_that_is_not_five_plain_characters_is_left_out(sqlstate):
-    api = type("Api", (), {"connect": raising(OddDriverError(sqlstate))})
-    dialect = type("Dialect", (), {"loaded_dbapi": api})()
-    with pytest.raises(database.DatabaseConnectError) as caught:
-        database._connect_without_detail(dialect, None, [], {})
-    assert str(caught.value) == database.CONNECT_FAILED_MESSAGE + " (OddDriverError, SQLSTATE none)"
+def test_an_error_that_is_not_a_driver_error_still_gives_a_fixed_reason(monkeypatch):
+    engine = database.create_db_engine(POSTGRES_URL)
+    dbapi = engine.dialect.loaded_dbapi
+    monkeypatch.setattr(dbapi, "connect", raising(RuntimeError("marker_user_q7 marker_password_q7")))
+    try:
+        with pytest.raises(database.DatabaseConnectError) as caught:
+            engine.connect()
+    finally:
+        engine.dispose()
+    assert str(caught.value) == database.CONNECT_FAILED_MESSAGE + " (reason: unknown)"
+    for marker in MARKERS:
+        assert marker not in formatted(caught.value), marker
 
 
 def test_the_connect_error_is_a_sqlalchemy_error():

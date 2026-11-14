@@ -11,8 +11,9 @@ Engine settings that tests read back:
   default), the driver's default transaction mode, and a busy timeout of 5 s. Never
   `BEGIN IMMEDIATE`. `python -m socboard.migrate` is the one place that switches the pragma off.
 - Any other database (Postgres, #143): a failed connection raises `DatabaseConnectError` with fixed
-  text (plus the driver's error class name and SQLSTATE) and no chained driver error, because the
-  driver's message names the user and the database.
+  text plus one reason word from a fixed list (authentication, database-missing, refused, timeout,
+  unknown) and no chained driver error, because the driver's message names the user and the
+  database.
 """
 
 import os
@@ -37,8 +38,14 @@ BUSY_TIMEOUT_SECONDS = 5
 
 INVALID_URL_MESSAGE = "SOCBOARD_DATABASE_URL is not a valid database URL."
 CONNECT_FAILED_MESSAGE = "Could not connect to the database."
-_CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
-_SQLSTATE = re.compile(r"[0-9A-Z]{5}")
+CONNECT_FAILURE_REASONS = ("authentication", "database-missing", "refused", "timeout", "unknown")
+# Checked in this order; the first phrase found wins. Phrases are libpq's and the server's.
+_CONNECT_FAILURE_PHRASES = (
+    ("authentication", ("password authentication failed", "no password supplied")),
+    ("refused", ("Connection refused",)),
+    ("timeout", ("timeout expired", "Connection timed out")),
+)
+_DATABASE_MISSING = re.compile(r'database ".*" does not exist')
 
 
 class DatabaseUrlError(ValueError):
@@ -54,17 +61,27 @@ class DatabaseConnectError(SQLAlchemyError):
     """
 
 
-def _connect_failure_text(error: Exception) -> str:
-    """The fixed message plus the error's class name and SQLSTATE, each only if it is plain.
+def _connect_failure_reason(error: Exception) -> str:
+    """One word from a fixed list that says why the connection failed, or "unknown".
 
-    A class name is a Python identifier and a SQLSTATE is five digits or capital letters, so
-    neither can carry a user name, password, host or database name.
+    psycopg 3 sets no SQLSTATE on a failure while connecting and the class is always
+    `OperationalError`, so the cause is read from the driver's message text. The text is only
+    matched, never printed: the word returned is one of `CONNECT_FAILURE_REASONS`, chosen here, so
+    no user, password, host or database name can reach the log. A message that is not recognised
+    (another language, another driver) gives "unknown". `VERIFY:` the phrases against libpq on the
+    CI image; the Postgres job's log shows the word it printed.
     """
-    name = type(error).__name__
-    kind = name if _CLASS_NAME.fullmatch(name) else "unknown"
-    code = getattr(error, "sqlstate", None)
-    state = code if isinstance(code, str) and _SQLSTATE.fullmatch(code) else "none"
-    return f"{CONNECT_FAILED_MESSAGE} ({kind}, SQLSTATE {state})"
+    message = str(error)
+    for reason, phrases in _CONNECT_FAILURE_PHRASES:
+        if any(phrase in message for phrase in phrases):
+            return reason
+    if _DATABASE_MISSING.search(message):
+        return "database-missing"
+    return "unknown"
+
+
+def _connect_failure_text(error: Exception) -> str:
+    return f"{CONNECT_FAILED_MESSAGE} (reason: {_connect_failure_reason(error)})"
 
 
 def default_url() -> URL:
