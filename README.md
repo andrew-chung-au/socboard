@@ -98,6 +98,8 @@ Serving the built site: after `make frontend-build`, the backend serves `fronten
 
 Binding beyond localhost: the backend listens on `127.0.0.1`, `localhost` or `::1` only, and `make backend-run` always does. The one exception is the flag `--allow-non-loopback-host` of `python -m socboard.server`, which lets `SOCBOARD_HOST` be an IP address such as `0.0.0.0`. Only the container image's start command may pass it, because the app must listen on an address Docker and the reverse proxy can reach; the image's port is published on the host's loopback only. It is a flag, not an environment variable, so a variable left in a developer's shell cannot open the server to the network. Do not pass it by hand or from `make`. The flag takes no value, and a wrong or unknown argument exits 2.
 
+Postgres: set `SOCBOARD_DATABASE_URL` to a `postgresql+psycopg://` URL and `make migrate`, `make seed` and the backend use Postgres 16 instead of the SQLite default. CI runs migrate, seed, a health check and a login against a Postgres 16 service (`.github/workflows/postgres.yml`); the Python tests still run on SQLite. A failed Postgres connection is logged as fixed text, without the user or database name. The audit trail is not yet append-only on Postgres: the database triggers exist on SQLite only until a later Deploy item adds the Postgres ones.
+
 ### Runtime variables
 
 Every runtime variable, from the one list in `socboard/settings.py` (a test fails if this table and that list disagree on a name or on the Secret and Required in deployed mode columns). The example env file at the repository root has the same names, with no values. Never put a value in this file, a commit or an issue.
