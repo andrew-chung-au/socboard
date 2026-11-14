@@ -239,6 +239,11 @@ migrate: ## Apply all database migrations to SOCBOARD_DATABASE_URL (default: soc
 seed: ## Load the synthetic assets and the users analyst-a, analyst-b and lead into SOCBOARD_DATABASE_URL (run make migrate first; needs SOCBOARD_SEED_PASSWORD_ANALYST_A, SOCBOARD_SEED_PASSWORD_ANALYST_B and SOCBOARD_SEED_PASSWORD_LEAD on every run; a second run changes nothing)
 	uv run --locked python -m socboard.seed
 
+set-password: ## Set a new password for one existing user: make set-password ACCOUNT=<username> (run make migrate first; reads SOCBOARD_NEW_PASSWORD, at least 12 characters, from the environment, never from the command line; the old password stops working)
+	$(if $(findstring $$,$(value ACCOUNT)),$(error Usage: make set-password ACCOUNT=<username> - ACCOUNT must not contain $$))
+	$(if $(call migration-name-ok,$(value ACCOUNT)),,$(error Usage: make set-password ACCOUNT=<username> - one word of letters, digits, _ and - only))
+	uv run --locked python -m socboard.set_password "$$ACCOUNT"
+
 migration-new: ## Create a migration file from the model changes: make migration-new NAME=<letters, digits, _ and ->
 	$(if $(findstring $$,$(value NAME)),$(error Usage: make migration-new NAME=<words> - NAME must not contain $$))
 	$(if $(call migration-name-ok,$(value NAME)),,$(error Usage: make migration-new NAME=<words> - one word of letters, digits, _ and - only))
