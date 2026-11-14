@@ -248,7 +248,15 @@ def step_queue(client: Client, token: str, case_id: str, started: float) -> None
         left = end - time.monotonic()
         if left <= 0:
             raise StepFailed(f"the case was not in the queue within {QUEUE_WAIT:g} seconds")
-        answer = client.request("GET", "/api/queue", headers={"Authorization": f"Bearer {token}"}, timeout_cap=left)
+        # When the time left of the wait is what limits this poll, a poll that runs out of time is
+        # the wait running out, and says so.
+        window_limits_poll = left <= min(REQUEST_TIMEOUT, client.deadline - time.monotonic())
+        try:
+            answer = client.request("GET", "/api/queue", headers={"Authorization": f"Bearer {token}"}, timeout_cap=left)
+        except StepFailed as failure:
+            if window_limits_poll and str(failure) == "timed out":
+                raise StepFailed(f"the case was not in the queue within {QUEUE_WAIT:g} seconds") from None
+            raise
         if answer.status != 200:
             raise StepFailed(_error_text(answer))
         parsed = _json(answer)

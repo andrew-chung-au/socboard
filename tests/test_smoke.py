@@ -235,7 +235,7 @@ def test_the_queue_wait_starts_at_the_ingest_response_and_each_poll_gets_only_th
     started = time.monotonic()
     code, output = run(make_stub(routes).url, capsys)
     assert code == 1
-    assert "step 4 queue: FAILED" in output
+    assert "step 4 queue: FAILED (the case was not in the queue within 0.5 seconds)" in output
     assert time.monotonic() - started < 2.5  # stopped by the wait, not by the 3 second answer
 
 
