@@ -33,8 +33,8 @@ locals {
   resource_tagged = { StringEquals = { "aws:ResourceTag/project" = "socboard" } }
 }
 
-# VERIFY: that the list covers D17b (instance, data volume, Elastic IP, security group, the deploy
-# document). It starts small on purpose: if the first apply is denied, the human adds the one action
+# VERIFY: that the list covers D17b (instance, data volume, Elastic IP, security group) and D20 (the
+# deploy document). It starts small on purpose: if the first apply is denied, the human adds the one action
 # here and applies this part by hand. Action names, resource types and condition keys were checked
 # against AWS's service reference JSON (servicereference.us-east-1.amazonaws.com) on 2026-11-14.
 #
