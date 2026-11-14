@@ -41,6 +41,7 @@ By file. Add project manifests here.
 | `_docs/specs.md` | The product specification (problem, users, journeys, requirements, scope, invariants) | Current |
 | `_docs/planning/lovable-guidance.md` | How to generate and import the frontend base with Lovable | Current |
 | `_docs/planning/deploy-backlog-proposal.md` | Draft Deploy backlog (D1 to D23) for the human's approval: review of roadmap 3, issue drafts, the effect of #22, open questions and spec notes; no issue filed yet | Proposed |
+| `_docs/planning/deploy-coordination.md` | How Session A and Session B work the Deploy issues at the same time: roles, lanes and file ownership, claims, branches, shared files, merge order, the independent second QA, and message hygiene | Proposed |
 | `_docs/planning/deploy-draft/reviewer-brief.md` | Brief for an outside reviewer of the Deploy plan: what to read, what to judge, known gaps, reply format | Proposed |
 | `_docs/planning/deploy-draft/wave-2-issue-drafts.md` | Full draft bodies for Deploy wave 2 (D6a, D6b, D8, D9, D10, D15, D16, D17a to D17c, D18a, D18b, D21, D24); not filed | Proposed |
 | `_docs/planning/deploy-draft/spec-notes-a-b.patch` | The exact diff of spec notes A and B for `_docs/specs.md` (protected; the human commits it) | Proposed |
