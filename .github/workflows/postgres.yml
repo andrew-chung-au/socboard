@@ -76,19 +76,13 @@ jobs:
             -d '{"username": "analyst-a", "password": "ci-analyst-a-password"}' http://127.0.0.1:8000/api/login
           make backend-stop
 
-      - name: A database that does not exist gives the generic 500 and leaks no part of the URL
+      - name: A refused login user gives the generic 500 and leaks no part of the URL
         env:
           SOCBOARD_DATABASE_URL: postgresql+psycopg://ghost_user_5k2q:Distinct-Throwaway-7731@127.0.0.1:5432/no_such_db_9x4w
-        run: |
-          make backend-run
-          code=$(curl -sS -o .scratch-missing.json -w "%{http_code}" -H "Content-Type: application/json" \
-            -d '{"username": "analyst-a", "password": "ci-analyst-a-password"}' http://127.0.0.1:8000/api/login)
-          make backend-stop
-          cat .scratch-missing.json
-          echo
-          test "$code" = "500"
-          grep -q '"internal_error"' .scratch-missing.json
-          for word in ghost_user_5k2q Distinct-Throwaway-7731 no_such_db_9x4w; do
-            if grep -q "$word" .scratch-missing.json .scratch/backend.log; then echo "leaked: $word"; exit 1; fi
-          done
-          echo "no part of the URL in the response or the backend log"
+        run: bash scripts/postgres_no_leak.sh ghost_user_5k2q Distinct-Throwaway-7731 no_such_db_9x4w
+
+      - name: A missing database for the real user gives the generic 500 and leaks no part of the URL
+        env:
+          # 127.0.0.2 is loopback too, so the host can be told apart from the backend's own 127.0.0.1.
+          SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_ci:ci-throwaway-not-a-secret@127.0.0.2:5432/no_such_db_9x4w
+        run: bash scripts/postgres_no_leak.sh socboard_ci ci-throwaway-not-a-secret no_such_db_9x4w 127.0.0.2 :5432
