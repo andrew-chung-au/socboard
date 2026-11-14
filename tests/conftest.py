@@ -22,6 +22,17 @@ def auth_test_environment(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def login_limits_raised(monkeypatch):
+    """Raise the failed-login counts so no other test can trip them (#178).
+
+    The limits come from configuration (README, "Login attempt limits"). `tests/test_login_limit.py`
+    sets its own values where it needs the limits.
+    """
+    monkeypatch.setenv("SOCBOARD_LOGIN_MAX_FAILURES", "100000")
+    monkeypatch.setenv("SOCBOARD_LOGIN_CLIENT_MAX_FAILURES", "100000")
+
+
+@pytest.fixture(autouse=True)
 def no_built_frontend(monkeypatch, tmp_path):
     """Point the site folder at a missing one, so a built `frontend/dist` never reaches the tests (#140).
 

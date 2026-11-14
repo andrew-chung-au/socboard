@@ -5,6 +5,7 @@ Every address, username and password here is synthetic. The HTTP tests build the
 """
 
 import logging
+import threading
 
 import pytest
 from backend_support import ANALYST_PASSWORD, ANALYST_USERNAME, LEAD_PASSWORD, LEAD_USERNAME
@@ -91,40 +92,91 @@ def fail(client, username=ANALYST_USERNAME, times=1):
 # --- the counters -------------------------------------------------------------------------------
 
 
+def reserve(limiter, client, username):
+    return limiter.reserve(client, username).retry_after
+
+
 def test_the_limit_is_reached_at_the_configured_count_and_lifts_when_the_window_passes():
     clock = FakeClock()
     limiter = ratelimit.LoginLimiter(limits(), clock=clock)
-    for _ in range(2):
-        limiter.record_failure("a", "x")
-    assert limiter.retry_after("a", "x") is None
-    limiter.record_failure("a", "x")
-    assert limiter.retry_after("a", "x") == 60
+    assert [reserve(limiter, "a", "x") for _ in range(3)] == [None, None, None]
+    assert reserve(limiter, "a", "x") == 60
     clock.now += 59
-    assert limiter.retry_after("a", "x") == 1
+    assert reserve(limiter, "a", "x") == 1
     clock.now += 1
-    assert limiter.retry_after("a", "x") is None
+    assert reserve(limiter, "a", "x") is None
+
+
+def test_a_refused_attempt_is_not_counted_so_it_does_not_extend_the_wait():
+    clock = FakeClock()
+    limiter = ratelimit.LoginLimiter(limits(max_failures=2), clock=clock)
+    assert [reserve(limiter, "a", "x") for _ in range(2)] == [None, None]
+    clock.now += 30
+    assert reserve(limiter, "a", "x") == 30
+    assert reserve(limiter, "a", "x") == 30
+    clock.now += 30
+    assert reserve(limiter, "a", "x") is None
+
+
+def test_a_released_attempt_is_taken_back():
+    limiter = ratelimit.LoginLimiter(limits(max_failures=1), clock=FakeClock())
+    first = limiter.reserve("a", "x")
+    assert first.retry_after is None
+    limiter.release("a", "x", first)
+    assert limiter.tracked_keys() == 0
+    second = limiter.reserve("a", "x")
+    assert second.retry_after is None
+    assert reserve(limiter, "a", "x") is not None
+
+
+def test_a_release_leaves_the_failures_of_other_attempts_in_place():
+    clock = FakeClock()
+    limiter = ratelimit.LoginLimiter(limits(max_failures=2), clock=clock)
+    reserve(limiter, "a", "x")
+    clock.now += 1
+    good = limiter.reserve("a", "x")
+    limiter.release("a", "x", good)
+    assert reserve(limiter, "a", "x") is None
+    assert reserve(limiter, "a", "x") is not None
+
+
+def test_concurrent_attempts_cannot_all_pass_the_check():
+    limiter = ratelimit.LoginLimiter(limits(max_failures=3, client_max_failures=50), clock=FakeClock())
+    barrier = threading.Barrier(40)
+    allowed = []
+
+    def attempt():
+        barrier.wait()
+        allowed.append(reserve(limiter, "a", "x") is None)
+
+    threads = [threading.Thread(target=attempt) for _ in range(40)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert allowed.count(True) == 3
 
 
 def test_the_username_key_ignores_case_and_edge_spaces_and_differs_by_client():
     limiter = ratelimit.LoginLimiter(limits(max_failures=2), clock=FakeClock())
-    limiter.record_failure("a", "Test-User")
-    limiter.record_failure("a", "  test-user ")
-    assert limiter.retry_after("a", "TEST-USER") is not None
-    assert limiter.retry_after("b", "test-user") is None
+    assert reserve(limiter, "a", "Test-User") is None
+    assert reserve(limiter, "a", "  test-user ") is None
+    assert reserve(limiter, "a", "TEST-USER") is not None
+    assert reserve(limiter, "b", "test-user") is None
 
 
 def test_the_client_counter_spans_usernames():
     limiter = ratelimit.LoginLimiter(limits(client_max_failures=4), clock=FakeClock())
     for index in range(4):
-        limiter.record_failure("a", f"name-{index}")
-    assert limiter.retry_after("a", "name-fresh") is not None
-    assert limiter.retry_after("b", "name-fresh") is None
+        assert reserve(limiter, "a", f"name-{index}") is None
+    assert reserve(limiter, "a", "name-fresh") is not None
+    assert reserve(limiter, "b", "name-fresh") is None
 
 
 def test_the_table_is_bounded_and_every_key_is_a_fixed_size_digest():
     limiter = ratelimit.LoginLimiter(limits(max_tracked=10), clock=FakeClock())
     for index in range(500):
-        limiter.record_failure(f"192.0.2.{index % 250}", f"made-up-{index}-" + "x" * (index * 7))
+        reserve(limiter, f"192.0.2.{index % 250}", f"made-up-{index}-" + "x" * (index * 7))
         assert limiter.tracked_keys() <= 10
     assert limiter.tracked_keys() == 10
     assert all(len(key) == 32 for key in limiter._failures)
@@ -132,11 +184,11 @@ def test_the_table_is_bounded_and_every_key_is_a_fixed_size_digest():
 
 def test_a_dropped_counter_only_loses_its_count():
     limiter = ratelimit.LoginLimiter(limits(max_failures=1, max_tracked=2), clock=FakeClock())
-    limiter.record_failure("a", "one")
-    assert limiter.retry_after("a", "one") is not None
-    limiter.record_failure("b", "two")
-    limiter.record_failure("c", "three")
-    assert limiter.retry_after("a", "one") is None
+    assert reserve(limiter, "a", "one") is None
+    assert reserve(limiter, "a", "one") is not None
+    reserve(limiter, "b", "two")
+    reserve(limiter, "c", "three")
+    assert reserve(limiter, "a", "one") is None
 
 
 # --- the client address -------------------------------------------------------------------------
@@ -158,6 +210,8 @@ TRUSTED = frozenset({PROXY})
         (PROXY, ["198.51.100.7, " + PROXY], TRUSTED, "198.51.100.7"),
         (PROXY, ["not-an-address"], TRUSTED, PROXY),
         (PROXY, ["2001:DB8:0:0:0:0:0:1"], TRUSTED, "2001:db8::1"),
+        ("::ffff:10.0.0.2", ["198.51.100.7"], TRUSTED, "198.51.100.7"),
+        (PROXY, ["::ffff:198.51.100.7"], TRUSTED, "198.51.100.7"),
         ("testclient", [], frozenset(), "testclient"),
     ],
 )
@@ -373,6 +427,9 @@ def test_no_log_line_holds_a_username_an_address_or_a_password(make_site, caplog
         assert forbidden not in text
 
 
-def test_the_test_app_default_limits_are_the_documented_ones(real_app):
+def test_the_test_environment_raises_the_limits_so_other_tests_cannot_trip_them(real_app):
+    # tests/conftest.py raises the three counts; a test that needs the limits sets its own.
     limiter = real_app.state.login_guard.limiter
-    assert limiter._limits == ratelimit.resolve_limits({})
+    assert limiter._limits.max_failures >= 1000
+    assert limiter._limits.client_max_failures >= 1000
+    assert limiter._limits != ratelimit.resolve_limits({})

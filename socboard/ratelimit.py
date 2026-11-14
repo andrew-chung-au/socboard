@@ -67,9 +67,12 @@ def _whole_number(source: Mapping[str, str], name: str, default: int) -> int:
 def normalise_address(text: str) -> str | None:
     """The canonical form of an IP address, or None when `text` is not one."""
     try:
-        return ipaddress.ip_address(text.strip()).compressed
+        address = ipaddress.ip_address(text.strip())
     except ValueError:
         return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped.compressed
+    return address.compressed
 
 
 def _trusted_proxies(source: Mapping[str, str]) -> frozenset[str]:
@@ -131,6 +134,14 @@ def _username_key(username: str) -> str:
     return username.strip().casefold()
 
 
+@dataclass(frozen=True)
+class Reservation:
+    """The answer of `LoginLimiter.reserve`: `retry_after` seconds when refused, else None."""
+
+    retry_after: int | None
+    stamp: float
+
+
 class LoginLimiter:
     """Sliding-window counters of failed logins. Thread-safe: routes run in a thread pool."""
 
@@ -149,15 +160,19 @@ class LoginLimiter:
             (client_key, self._limits.client_max_failures),
         )
 
-    def retry_after(self, client: str, username: str) -> int | None:
-        """Whole seconds until the attempt is allowed again, or None when it is allowed now.
+    def reserve(self, client: str, username: str) -> Reservation:
+        """Check the limits and, when the attempt is allowed, count it as a failure at once.
 
-        Called before any password work."""
+        The check and the count happen under one lock, before any password work, so a burst of
+        concurrent attempts cannot all pass the check before the first is counted. A login that
+        then succeeds calls `release`; one that fails leaves the count in place.
+        """
         now = self._clock()
         window = self._limits.window_seconds
         wait = 0.0
         with self._lock:
-            for key, limit in self._keys(client, username):
+            keys = self._keys(client, username)
+            for key, limit in keys:
                 times = self._failures.get(key)
                 if times is None:
                     continue
@@ -168,12 +183,9 @@ class LoginLimiter:
                 elif len(times) >= limit:
                     # The oldest failure counted leaves the window at times[0] + window.
                     wait = max(wait, times[0] + window - now)
-        return max(1, math.ceil(wait)) if wait > 0 else None
-
-    def record_failure(self, client: str, username: str) -> None:
-        now = self._clock()
-        with self._lock:
-            for key, limit in self._keys(client, username):
+            if wait > 0:
+                return Reservation(retry_after=max(1, math.ceil(wait)), stamp=now)
+            for key, limit in keys:
                 times = self._failures.get(key)
                 if times is None:
                     times = self._failures[key] = deque(maxlen=limit)
@@ -181,6 +193,24 @@ class LoginLimiter:
                 self._failures.move_to_end(key)
             while len(self._failures) > self._limits.max_tracked:
                 self._failures.popitem(last=False)
+        return Reservation(retry_after=None, stamp=now)
+
+    def release(self, client: str, username: str, reservation: Reservation) -> None:
+        """Take back the count of an attempt that turned out to be a successful login.
+
+        Removes one timestamp equal to the reservation's from each key, when it is still there
+        (it may have aged out or been dropped with its key)."""
+        with self._lock:
+            for key, _ in self._keys(client, username):
+                times = self._failures.get(key)
+                if times is None:
+                    continue
+                try:
+                    times.remove(reservation.stamp)
+                except ValueError:
+                    continue
+                if not times:
+                    del self._failures[key]
 
     def tracked_keys(self) -> int:
         with self._lock:

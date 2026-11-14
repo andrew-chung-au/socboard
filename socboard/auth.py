@@ -224,21 +224,22 @@ def add_login_route(api_router: APIRouter) -> None:
             guard.trusted_proxies,
         )
         # Before any lookup or hash work, and the same for a real and a made-up username.
-        retry_after = guard.limiter.retry_after(client, username)
-        if retry_after is not None:
+        # The attempt is counted as a failure here, under the limiter's lock, so concurrent
+        # attempts cannot all pass the check; a successful login takes the count back below.
+        reservation = guard.limiter.reserve(client, username)
+        if reservation.retry_after is not None:
             logger.info("Login refused: too many failures")
-            raise rate_limited(retry_after)
+            raise rate_limited(reservation.retry_after)
         user = _find_user(session, username)
         if user is None:
             # The same work as a wrong password, so the two cannot be told apart by cost.
             passwords.verify_password(body.password, passwords.DUMMY_HASH)
-            guard.limiter.record_failure(client, username)
             logger.info("Login refused")
             raise invalid_credentials()
         if not passwords.verify_password(body.password, user.password_hash):
-            guard.limiter.record_failure(client, username)
             logger.info("Login refused")
             raise invalid_credentials()
+        guard.limiter.release(client, username, reservation)
         token = tokens.create_token(user.id, request.app.state.token_secret, now=time.time())
         response.headers["Cache-Control"] = "no-store"
         logger.info("Login succeeded for user id %d", user.id)
