@@ -35,8 +35,9 @@ resource "aws_iam_role_policy" "deploy" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # `SendCommand` is authorised against two resources, the instance and the document, and the
-      # tag exists only on the instance, so the two are separate statements. VERIFY: this split.
+      # One call to `SendCommand` is checked against the instance and, separately, the document.
+      # Only the instance carries the `project` tag, so each gets its own statement; a single
+      # tag-conditioned statement would fail on the document. VERIFY: this split.
       {
         Sid      = "SendToTaggedInstances"
         Effect   = "Allow"

@@ -1,32 +1,32 @@
-variable "github_owner" {
-  description = "The GitHub account that owns the repository. Part of the trusted subject."
+variable "repo_owner" {
+  description = "Login of the GitHub account that owns this repository. Every trust policy names it."
   type        = string
   default     = "andrew-chung-au"
 }
 
-variable "github_repo" {
-  description = "The repository name. The trust policies name this repository only."
+variable "repo_name" {
+  description = "Name of this repository. Every trust policy names it, and no other repository can match."
   type        = string
   default     = "socboard"
 }
 
-variable "github_owner_id" {
-  description = "Numeric id of the owner account, in the OIDC subject. Not a secret. Read it with: gh api repos/<owner>/<repo> --jq .owner.id"
+variable "repo_owner_id" {
+  description = "Numeric id of the owner account, as it appears inside the OIDC subject. Not a secret. Read it with: gh api repos/<owner>/<repo> --jq .owner.id"
   type        = string
 
   validation {
-    condition     = can(regex("^[0-9]+$", var.github_owner_id))
-    error_message = "github_owner_id must be digits only."
+    condition     = can(regex("^[0-9]+$", var.repo_owner_id))
+    error_message = "repo_owner_id must be digits only."
   }
 }
 
-variable "github_repo_id" {
-  description = "Numeric id of the repository, in the OIDC subject. Not a secret. It changes if the repository is deleted and recreated, and then no role can be assumed until it is updated. Read it with: gh api repos/<owner>/<repo> --jq .id"
+variable "repo_id" {
+  description = "Numeric id of this repository, as it appears inside the OIDC subject. Not a secret. Deleting and recreating the repository gives it a new id, and until this value is updated no role can be assumed. Read it with: gh api repos/<owner>/<repo> --jq .id"
   type        = string
 
   validation {
-    condition     = can(regex("^[0-9]+$", var.github_repo_id))
-    error_message = "github_repo_id must be digits only."
+    condition     = can(regex("^[0-9]+$", var.repo_id))
+    error_message = "repo_id must be digits only."
   }
 }
 
@@ -40,30 +40,25 @@ variable "state_bucket_name" {
   }
 }
 
-variable "create_oidc_provider" {
-  description = "Whether to create the GitHub OIDC provider. An AWS account holds only one provider per URL: set false and pass existing_oidc_provider_arn if the account already has one (the human checks, README step 1)."
-  type        = bool
-}
-
-variable "existing_oidc_provider_arn" {
-  description = "ARN of the account's existing GitHub OIDC provider. Used only when create_oidc_provider is false."
+variable "reuse_oidc_provider_arn" {
+  description = "Null makes this part register GitHub as an identity provider. AWS allows one registration per URL in an account, so when GitHub is already registered, set the existing registration's ARN here and nothing is registered again (the human checks first, README step 1)."
   type        = string
-  default     = ""
+  default     = null
 
   validation {
-    condition     = var.create_oidc_provider || can(regex("^arn:aws:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.existing_oidc_provider_arn))
-    error_message = "When create_oidc_provider is false, existing_oidc_provider_arn must be the ARN of the account's token.actions.githubusercontent.com provider."
+    condition     = var.reuse_oidc_provider_arn == null || can(regex("^arn:aws:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.reuse_oidc_provider_arn))
+    error_message = "reuse_oidc_provider_arn must be null or the full ARN of the token.actions.githubusercontent.com provider already registered in this AWS account."
   }
 }
 
 variable "apply_environment" {
-  description = "Name of the GitHub Environment whose jobs may assume the apply role. The human limits it to main in GitHub (D19)."
+  description = "Name of the GitHub Environment whose jobs may assume the apply role. The human restricts it to main in GitHub (D19)."
   type        = string
   default     = "infra"
 }
 
 variable "deploy_environment" {
-  description = "Name of the GitHub Environment whose jobs may assume the deploy role. The human limits it to main in GitHub (D19)."
+  description = "Name of the GitHub Environment whose jobs may assume the deploy role. The human restricts it to main in GitHub (D19)."
   type        = string
   default     = "deploy"
 }

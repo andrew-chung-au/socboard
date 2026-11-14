@@ -35,16 +35,17 @@ data "aws_caller_identity" "current" {}
 locals {
   account_id = data.aws_caller_identity.current.account_id
 
-  # GitHub's OIDC `sub` claim, up to the part that names the kind of run. For a repository created
-  # after mid-2026 the default prefix carries the immutable owner and repository ids, so a renamed
-  # or recreated repository cannot match. On 2026-11-14 the GitHub API reported
+  # The start of the token's `sub` claim, before the part that names the kind of run. For a
+  # repository created after mid-2026 GitHub puts the immutable owner and repository ids in it, so a
+  # renamed or recreated repository cannot match. On 2026-11-14 the GitHub API reported
   # `use_immutable_subject: true` for this repository and a prefix in exactly this shape.
   # VERIFY: the first real token's `sub` matches (D19). If it has no ids, the trust below fails
   # closed (nobody can assume a role); the fix is the README's "If the subject has no ids" note.
-  sub_prefix = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
+  sub_prefix = "repo:${var.repo_owner}@${var.repo_owner_id}/${var.repo_name}@${var.repo_id}"
 
-  # The provider created here, or the account's existing one (an account holds one per URL).
-  oidc_provider_arn = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : var.existing_oidc_provider_arn
+  # The ARN of whichever provider applies: the reused one if the variable is set, else the one made
+  # below (`one` is null when no provider was made). VERIFY: `coalesce` skips the null.
+  oidc_provider_arn = coalesce(var.reuse_oidc_provider_arn, one(aws_iam_openid_connect_provider.github[*].arn))
 
   # Names shared with other Terraform parts. The instance role and profile are made by
   # terraform/iam-and-budgets (#162); the state bucket by terraform/state (#154).
@@ -74,7 +75,7 @@ locals {
 # validates GitHub's certificate against its own trusted authorities); if `validate` or the apply
 # asks for one, take it from the AWS documentation, not from this repository.
 resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_oidc_provider ? 1 : 0
+  count = var.reuse_oidc_provider_arn == null ? 1 : 0
 
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = [local.oidc_audience]
