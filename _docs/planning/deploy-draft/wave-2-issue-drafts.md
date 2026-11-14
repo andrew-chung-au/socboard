@@ -256,7 +256,7 @@ Terraform defines the OIDC provider and three roles (plan, apply, deploy) with t
 
 ## Acceptance criteria
 - [ ] One OIDC provider for GitHub Actions and three roles: a plan role (read-only, including the state bucket), an apply role, and a deploy role. Each role's trust names the audience and a subject: the plan role trusts the repository's pull-request subject; the apply role trusts the `infra` Environment; the deploy role trusts the `deploy` Environment. `VERIFY:` the exact subject strings and whether a numeric repository id can also be required in the trust policy (it may need the subject claim customised).
-- [ ] The apply role covers only the CI-applied server part (D17b): it may attach the one instance role (and the snapshot role, if one exists) to the instance and has an explicit deny on every other IAM write. A case that must be refused: a plan or test shows the apply role cannot create or modify any IAM role or policy, including its own.
+- [ ] The apply role covers only the CI-applied server part (D17b): it may attach only the one instance role to the instance and has an explicit deny on every other IAM write; it passes no snapshot role (option A, the human's choice of 2026-11-14 on #139). A case that must be refused: a plan or test shows the apply role cannot create or modify any IAM role or policy, including its own.
 - [ ] The deploy role may only run one custom Systems Manager document (fixed script, one parameter, the image digest, validated by a pattern) on instances tagged `project=socboard`, and read that command's result; it cannot run a generic shell document and cannot read any secret. A refused case: the policy names no generic run-command document.
 - [ ] The plan role is denied the value of the application secret.
 - [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. Also, no `data` source or resource reads a secret value into state (for example `aws_secretsmanager_secret_version`).
@@ -266,7 +266,7 @@ Terraform defines the OIDC provider and three roles (plan, apply, deploy) with t
 - [ ] `terraform fmt -check` and `validate` pass.
 
 ## Out of scope
-- The instance role and profile, the snapshot role and budgets (D17a), the server (D17b).
+- The instance role and profile, the snapshot schedule and its role, and budgets (D17a), the server (D17b).
 - The workflows that use the roles (D18b, D22a, D22b).
 
 ## Design
@@ -296,11 +296,11 @@ The human ruled on 2026-11-13 that an apply role able to write IAM could widen i
 
 ## Goal
 
-Terraform defines the instance role and profile, any role the snapshot schedule needs, and the budget notifications, as a part only the human applies.
+Terraform defines the instance role and profile, the daily snapshot schedule and any role it needs, and the budget notifications, as a part only the human applies.
 
 ## Acceptance criteria
 - [ ] The instance role allows Systems Manager's agent operations and reading exactly one named secret (by ARN); it allows nothing else. A refused case: the policy grants no wildcard resource on secrets and no other service.
-- [ ] If the snapshot schedule needs an execution role, it is defined here with only that purpose (`VERIFY:`); the instance and volume in D17b reference it.
+- [ ] The daily snapshot schedule and any execution role it needs are defined here (option A, the human's choice of 2026-11-14 on #139); D17b creates the volume only.
 - [ ] Budget notifications at three thresholds (half, 80 percent and the full limit of a monthly amount the human sets) go to an address the human sets in the variable file, not in the repository. `VERIFY:` the budget's region and API behaviour.
 - [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. Also, no `data` source or resource reads a secret value into state (for example `aws_secretsmanager_secret_version`).
 - [ ] Every resource is tagged `project=socboard`; the trust policy of each role names only the service that assumes it.
@@ -308,7 +308,7 @@ Terraform defines the instance role and profile, any role the snapshot schedule 
 - [ ] `terraform fmt -check` and `validate` pass; the secret scan reports nothing.
 
 ## Out of scope
-- The instance, network, volume and snapshots (D17b), the bootstrap (D17c).
+- The instance, network and volume (D17b), the bootstrap (D17c).
 - The CI roles (D16).
 
 ## Design
@@ -323,7 +323,7 @@ None.
 
 ## D17b
 
-Title: Terraform: the server instance, network, encrypted data volume and snapshots
+Title: Terraform: the server instance, network and encrypted data volume
 
 ## Why
 
@@ -331,12 +331,12 @@ The deployment is one small server running Compose. It is reached through System
 
 ## Goal
 
-Terraform defines the instance, Elastic IP, security group, encrypted data volume and snapshot schedule, as the part CI may apply on `main` after approval.
+Terraform defines the instance, Elastic IP, security group and encrypted data volume, as the part CI may apply on `main` after approval. The daily snapshot schedule is in #162 (D17a), applied by the human.
 
 ## Acceptance criteria
 - [ ] One instance with no key pair, an Elastic IP, and the instance profile from D17a. The security group opens 80 and 443 to the world and nothing else; no rule opens 22 or the app port. A refused case: a test or a plan check fails if a rule opens any other port (`terraform validate` plus a policy check script in CI, `VERIFY:` the approach).
 - [ ] The metadata service requires session tokens with a hop limit of 1, so a container cannot read the instance's credentials. `VERIFY:` the argument names.
-- [ ] An encrypted data volume, attached to the instance, holds the Postgres data and the env file; a daily snapshot schedule with a stated retention covers it. The schedule is defined here and references the execution role that #162 (D17a) defines and exports, if the snapshot service needs one; this part creates no IAM resource.
+- [ ] An encrypted data volume, attached to the instance, holds the Postgres data and the env file; it carries the tag that the snapshot schedule in #162 (D17a) selects, and that tag is a contract with #162: removing or renaming it would stop the backups with no error, so a change to it needs #162 changed in the same sitting. This part creates no snapshot schedule and no IAM resource (option A, the human's choice of 2026-11-14 on #139).
 - [ ] The root volume is encrypted.
 - [ ] Every resource is tagged `project=socboard`.
 - [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. Also, no `data` source or resource reads a secret value into state (for example `aws_secretsmanager_secret_version`).
