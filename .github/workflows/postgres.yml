@@ -54,10 +54,11 @@ jobs:
           diff .scratch-schema-1.txt .scratch-schema-2.txt
           diff .scratch-version-1.txt .scratch-version-2.txt
 
-      - name: The audit ids are 64-bit and no trigger exists yet (D6a adds them)
+      - name: The audit ids are 64-bit and the four audit triggers are enabled always (D6a)
         run: |
           test "$(psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT data_type FROM information_schema.columns WHERE table_name = 'audit_entries' AND column_name = 'id'")" = "bigint"
-          test "$(psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT count(*) FROM pg_trigger WHERE tgrelid = 'audit_entries'::regclass AND NOT tgisinternal")" = "0"
+          psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT tgname || ' ' || tgenabled FROM pg_trigger WHERE tgrelid = 'audit_entries'::regclass AND NOT tgisinternal ORDER BY tgname" | tee .scratch-triggers.txt
+          printf '%s\n' "audit_entries_no_delete A" "audit_entries_no_reuse_id A" "audit_entries_no_truncate A" "audit_entries_no_update A" | diff - .scratch-triggers.txt
 
       - name: Seed twice; the second run inserts nothing
         run: |
