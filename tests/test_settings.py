@@ -45,6 +45,16 @@ def deployed_environ(tmp_path, **overrides):
 def test_the_list_names_every_runtime_variable_once():
     seed_names = [variable for _, _, _, variable in USERS]
     expected = {SECRET, KEY, DB, *seed_names, "SOCBOARD_HOST", "SOCBOARD_PORT", spa.STATIC_DIR_VAR, MODE}
+    expected |= {
+        "SOCBOARD_LOGIN_MAX_FAILURES",
+        "SOCBOARD_LOGIN_CLIENT_MAX_FAILURES",
+        "SOCBOARD_LOGIN_WINDOW_SECONDS",
+        "SOCBOARD_LOGIN_MAX_TRACKED",
+        "SOCBOARD_TRUSTED_PROXIES",
+        "SOCBOARD_INGEST_MAX_REQUESTS",
+        "SOCBOARD_INGEST_WINDOW_SECONDS",
+        "SOCBOARD_NEW_PASSWORD",
+    }
     assert set(NAMES) == expected
     assert len(NAMES) == len(set(NAMES))
     assert spa.STATIC_DIR_VAR == "SOCBOARD_STATIC_DIR"
@@ -54,7 +64,7 @@ def test_the_list_names_every_runtime_variable_once():
 def test_secret_and_deployed_flags():
     by_name = {setting.name: setting for setting in settings.SETTINGS}
     assert {name for name, s in by_name.items() if s.deployed} == {SECRET, KEY, DB}
-    assert {name for name, s in by_name.items() if s.secret} == {SECRET, KEY, DB, *(v for *_, v in USERS)}
+    assert {name for name, s in by_name.items() if s.secret} == {SECRET, KEY, DB, "SOCBOARD_NEW_PASSWORD", *(v for *_, v in USERS)}
 
 
 def test_every_deployed_setting_has_exactly_one_check():

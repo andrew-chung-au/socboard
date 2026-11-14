@@ -177,6 +177,21 @@ describe("401 and login", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   }, TEST_TIMEOUT);
 
+  it("a 429 on sign-in shows the server's message and stays on the login screen (#178)", async () => {
+    const fetchMock = vi.fn(async () => reply(429, { code: "rate_limited", message: "Too many failed sign-in attempts. Try again later." }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderAt("/login");
+
+    fireEvent.change(await screen.findByLabelText("Username", undefined, WAIT), { target: { value: "analyst-a" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByText("Too many failed sign-in attempts. Try again later.", undefined, WAIT)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(session.get()).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  }, TEST_TIMEOUT);
+
   it("a good login keeps the token in session storage and opens the queue", async () => {
     vi.stubGlobal(
       "fetch",

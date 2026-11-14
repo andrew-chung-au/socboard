@@ -210,8 +210,9 @@ def test_login_schemas_and_statuses_match_the_contract(real_app):
     generated = real_app.openapi()
     contract_op = join_server_base(contract)["/api/login"]["post"]
     generated_op = generated["paths"]["/api/login"]["post"]
-    assert set(contract_op["responses"]) == set(generated_op["responses"]) == {"200", "401", "422"}
+    assert set(contract_op["responses"]) == set(generated_op["responses"]) == {"200", "401", "422", "429"}
     assert compare_schemas(contract, _request_schema(contract_op), generated, _request_schema(generated_op)) == []
+    assert compare_schemas(contract, _schema(contract_op, "429"), generated, _schema(generated_op, "429")) == []
     assert compare_schemas(contract, _schema(contract_op, "200"), generated, _schema(generated_op, "200")) == []
     assert compare_schemas(contract, _schema(contract_op, "401"), generated, _schema(generated_op, "401")) == []
     assert generated_op["requestBody"].get("required") is True
