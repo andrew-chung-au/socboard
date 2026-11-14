@@ -30,7 +30,12 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 
 from socboard import __version__, database, settings, spa
-from socboard.auth import add_login_route, create_users_router, resolve_token_secret
+from socboard.auth import (
+    add_login_route,
+    create_users_router,
+    resolve_login_guard,
+    resolve_token_secret,
+)
 from socboard.cases import create_cases_router
 from socboard.errors import ApiError, register_error_handlers
 from socboard.ingest import add_ingest_route, resolve_ingest_key
@@ -65,6 +70,7 @@ def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     if settings.is_deployed(source):
         settings.check_deployed(source)
     ingest_api_key = resolve_ingest_key(source)
+    login_guard = resolve_login_guard(source)
     database_state = DatabaseState(database.resolve_url(source))
 
     @asynccontextmanager
@@ -83,6 +89,7 @@ def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     )
     app.state.token_secret = token_secret
     app.state.ingest_api_key = ingest_api_key
+    app.state.login_guard = login_guard
     app.state.database = database_state
     register_error_handlers(app)
     app.include_router(create_health_router())

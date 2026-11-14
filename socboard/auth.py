@@ -29,11 +29,12 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from socboard import passwords, tokens
+from socboard import passwords, ratelimit, tokens
 from socboard.errors import (
     FORBIDDEN,
     INVALID_API_KEY,
     INVALID_CREDENTIALS,
+    RATE_LIMITED,
     UNAUTHORIZED,
     ApiError,
     ApiHTTPException,
@@ -55,6 +56,7 @@ UNAUTHORIZED_MESSAGE = "Your session has expired. Please sign in again."
 FORBIDDEN_MESSAGE = "You do not have permission to do this."
 INVALID_CREDENTIALS_MESSAGE = "Invalid username or password."
 INVALID_API_KEY_MESSAGE = "A valid API key is required."
+RATE_LIMITED_MESSAGE = "Too many failed sign-in attempts. Try again later."
 KEY_HEADER = "X-API-Key"
 
 ROLE_LEAD = "lead"
@@ -71,6 +73,25 @@ def resolve_token_secret(environ: Mapping[str, str] | None = None) -> str:
     if len(secret.strip()) < MIN_SECRET_LENGTH:
         raise ConfigError(SECRET_MESSAGE)
     return secret
+
+
+@dataclass(frozen=True)
+class LoginGuard:
+    """What `POST /login` needs to refuse repeated failures (#178): the counters and the proxies
+    whose `X-Forwarded-For` is believed. Built once in `create_app`."""
+
+    limiter: ratelimit.LoginLimiter
+    trusted_proxies: frozenset[str]
+
+
+def resolve_login_guard(environ: Mapping[str, str] | None = None) -> LoginGuard:
+    """The login limits from the environment, or `ConfigError` naming the variable."""
+    source = os.environ if environ is None else environ
+    try:
+        limits = ratelimit.resolve_limits(source)
+    except ratelimit.LimitConfigError as error:
+        raise ConfigError(str(error)) from None
+    return LoginGuard(ratelimit.LoginLimiter(limits), limits.trusted_proxies)
 
 
 @dataclass(frozen=True)
@@ -93,6 +114,12 @@ def forbidden() -> ApiHTTPException:
 
 def invalid_credentials() -> ApiHTTPException:
     return ApiHTTPException(401, INVALID_CREDENTIALS, INVALID_CREDENTIALS_MESSAGE)
+
+
+def rate_limited(retry_after: int) -> ApiHTTPException:
+    return ApiHTTPException(
+        429, RATE_LIMITED, RATE_LIMITED_MESSAGE, headers={"Retry-After": str(retry_after)}
+    )
 
 
 def invalid_api_key() -> ApiHTTPException:
@@ -178,7 +205,7 @@ def add_login_route(api_router: APIRouter) -> None:
     @api_router.post(
         "/login",
         response_model=LoginResponse,
-        responses={401: {"model": ApiError}},
+        responses={401: {"model": ApiError}, 429: {"model": ApiError}},
         tags=["auth"],
         operation_id="login",
     )
@@ -189,13 +216,27 @@ def add_login_route(api_router: APIRouter) -> None:
         session: Annotated[Session, Depends(get_session)],
     ) -> LoginResponse:
         # Trimmed before lookup (contract), then matched exactly; the password is used as sent.
-        user = _find_user(session, body.username.strip())
+        username = body.username.strip()
+        guard: LoginGuard = request.app.state.login_guard
+        client = ratelimit.client_address(
+            request.client.host if request.client else None,
+            request.headers.getlist(ratelimit.FORWARDED_HEADER),
+            guard.trusted_proxies,
+        )
+        # Before any lookup or hash work, and the same for a real and a made-up username.
+        retry_after = guard.limiter.retry_after(client, username)
+        if retry_after is not None:
+            logger.info("Login refused: too many failures")
+            raise rate_limited(retry_after)
+        user = _find_user(session, username)
         if user is None:
             # The same work as a wrong password, so the two cannot be told apart by cost.
             passwords.verify_password(body.password, passwords.DUMMY_HASH)
+            guard.limiter.record_failure(client, username)
             logger.info("Login refused")
             raise invalid_credentials()
         if not passwords.verify_password(body.password, user.password_hash):
+            guard.limiter.record_failure(client, username)
             logger.info("Login refused")
             raise invalid_credentials()
         token = tokens.create_token(user.id, request.app.state.token_secret, now=time.time())

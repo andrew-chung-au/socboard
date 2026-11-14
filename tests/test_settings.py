@@ -45,6 +45,13 @@ def deployed_environ(tmp_path, **overrides):
 def test_the_list_names_every_runtime_variable_once():
     seed_names = [variable for _, _, _, variable in USERS]
     expected = {SECRET, KEY, DB, *seed_names, "SOCBOARD_HOST", "SOCBOARD_PORT", spa.STATIC_DIR_VAR, MODE}
+    expected |= {
+        "SOCBOARD_LOGIN_MAX_FAILURES",
+        "SOCBOARD_LOGIN_CLIENT_MAX_FAILURES",
+        "SOCBOARD_LOGIN_WINDOW_SECONDS",
+        "SOCBOARD_LOGIN_MAX_TRACKED",
+        "SOCBOARD_TRUSTED_PROXIES",
+    }
     assert set(NAMES) == expected
     assert len(NAMES) == len(set(NAMES))
     assert spa.STATIC_DIR_VAR == "SOCBOARD_STATIC_DIR"

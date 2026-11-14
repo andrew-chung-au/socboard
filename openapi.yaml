@@ -46,6 +46,7 @@ info:
     | Missing or invalid token | 401 | `unauthorized` |
     | Wrong username or password at login | 401 | `invalid_credentials` |
     | Ingest with a missing or invalid API key | 401 | `invalid_api_key` (new) |
+    | Too many failed logins from one client address (#178) | 429 | `rate_limited` (new) |
     | Unknown case | 404 | `not_found` |
     | Reassign target user does not exist (user is in the body) | 404 | `user_not_found` |
     | Wrong role, or not the owner | 403 | `forbidden` |
@@ -184,7 +185,8 @@ info:
 
     Codes the mock lacks are new: `invalid_target`, the generic 422 `validation_error`, the 405
     `method_not_allowed`, the 500 `internal_error`, and the ingest codes `invalid_api_key` (401)
-    and `validation_error` (422), because the mock has no ingest. `not_found` is not new, but it
+    and `validation_error` (422), because the mock has no ingest, and the login code `rate_limited`
+    (429, #178), because the mock has no attempt limit. `not_found` is not new, but it
     now also covers an unknown route.
 
     ## Choices where the issue left the value open
@@ -217,6 +219,12 @@ paths:
       description: |
         The username is trimmed before lookup. A wrong username or password is 401
         `invalid_credentials`. Login does not clear the session. No bearer token is sent.
+
+        Failed logins are counted per client address and username, and per client address. At the
+        configured limit within the window, login answers 429 `rate_limited` with `Retry-After`
+        (whole seconds) before the password is checked; the answer is the same for a real and a
+        made-up username. A successful login counts nothing. The limits are set by configuration
+        and are counted in the server process.
       security: []
       requestBody:
         required: true
@@ -244,6 +252,23 @@ paths:
                     message: Invalid username or password.
         "422":
           $ref: "#/components/responses/ValidationError"
+        "429":
+          description: Too many failed logins from this client address. Code `rate_limited`.
+          headers:
+            Retry-After:
+              description: Whole seconds until another attempt is accepted.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+              examples:
+                rateLimited:
+                  value:
+                    code: rate_limited
+                    message: Too many failed sign-in attempts. Try again later.
   /queue:
     get:
       operationId: getQueue
