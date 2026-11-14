@@ -7,13 +7,14 @@ fails the whole seed before anything is written.
 import pytest
 from sqlalchemy import func, select, text
 
-from socboard import database, migrate, passwords, seed
+from socboard import database, passwords, seed
 from socboard.models import Asset, User
 from data_support import (  # noqa: F401  (fixtures)
     SEED_PASSWORDS,
+    empty_database_url,
     isolated_database_env,
+    migrated_database_url,
     no_default_database_file,
-    sqlite_url,
 )
 
 VARIABLES = (
@@ -25,9 +26,7 @@ VARIABLES = (
 
 @pytest.fixture
 def seed_url(tmp_path):
-    url = sqlite_url(tmp_path / "seed.db")
-    migrate.upgrade(url)
-    return url
+    return migrated_database_url(tmp_path, "seed.db")
 
 
 def _users(url):
@@ -201,7 +200,7 @@ def test_all_users_seeded_and_one_variable_unset_still_exits_2_and_adds_nothing(
 
 
 def test_an_unmigrated_database_exits_1_before_the_variables_are_looked_at(tmp_path, capsys):
-    env = {database.ENV_NAME: sqlite_url(tmp_path / "bare.db")}  # no password variable at all
+    env = {database.ENV_NAME: empty_database_url(tmp_path, "bare.db")}  # no password variable at all
     assert seed.main(env) == 1
     err = capsys.readouterr().err
     assert err == f"socboard.seed: {seed.NOT_MIGRATED_MESSAGE}\n"

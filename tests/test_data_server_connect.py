@@ -8,6 +8,7 @@ tests run in the default (SQLite) test run; the CI Postgres job shows the same e
 import traceback
 
 import pytest
+from db_target import sqlite_url
 from sqlalchemy import event
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -91,7 +92,7 @@ def test_a_real_unresolvable_host_gives_the_fixed_text_and_the_unknown_reason():
 
 
 def test_only_server_engines_get_the_hook(tmp_path):
-    sqlite_engine = database.create_db_engine("sqlite:///" + (tmp_path / "x.db").as_posix())
+    sqlite_engine = database.create_db_engine(sqlite_url(tmp_path / "x.db"))
     postgres_engine = database.create_db_engine(POSTGRES_URL)
     try:
         assert not event.contains(sqlite_engine, "do_connect", database._connect_without_detail)

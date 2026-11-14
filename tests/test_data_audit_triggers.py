@@ -43,6 +43,7 @@ from socboard import audit_guard, models
 from socboard.audit import append_audit
 from socboard.audit_guard import AuditImmutableError
 from socboard.models import AuditEntry
+from db_target import SQLITE_TRIGGERS
 
 AUDIT = AuditEntry.__table__
 
@@ -128,6 +129,7 @@ def trigger_names(engine):
     return sorted(row[0] for row in rows)
 
 
+@SQLITE_TRIGGERS
 def test_the_guard_listeners_are_restored_after_the_block(seeded):
     with guards_disabled():
         with seeded["engine"].connect() as conn:
@@ -155,6 +157,7 @@ def _update_outcome(engine):
     return None
 
 
+@SQLITE_TRIGGERS
 def test_the_fixture_switches_the_guard_off_and_back_on_even_after_a_failed_test_body(seeded):
     engine = seeded["engine"]
     assert _update_outcome(engine) is AuditImmutableError  # before the fixture
@@ -175,6 +178,7 @@ def test_the_fixture_switches_the_guard_off_and_back_on_even_after_a_failed_test
     assert rows_now(engine) == seeded["before"]
 
 
+@SQLITE_TRIGGERS
 def test_the_guard_listeners_are_restored_after_an_exception():
     with pytest.raises(RuntimeError):
         with guards_disabled():
@@ -183,6 +187,7 @@ def test_the_guard_listeners_are_restored_after_an_exception():
         assert event.contains(target, name, function)
 
 
+@SQLITE_TRIGGERS
 def test_the_three_triggers_exist_on_the_migrated_database(seeded):
     assert trigger_names(seeded["engine"]) == [
         "audit_entries_no_delete",
@@ -643,6 +648,7 @@ def attempt(seeded, kind, function):
 
 
 @pytest.mark.parametrize("name", sorted(ROUTES))
+@SQLITE_TRIGGERS
 def test_the_database_refuses_the_route_with_the_trigger_message(seeded, guards_off, name):
     kind, message, function = ROUTES[name]
     error = attempt(seeded, kind, function)
@@ -686,6 +692,7 @@ OVERWRITE_CASES = {
 
 
 @pytest.mark.parametrize("case", sorted(OVERWRITE_CASES))
+@SQLITE_TRIGGERS
 def test_recursive_triggers_off_and_on_give_the_same_result(seeded, guards_off, case):
     results = {}
     for setting, (pragma, expected) in RECURSIVE.items():
@@ -705,6 +712,7 @@ def test_recursive_triggers_off_and_on_give_the_same_result(seeded, guards_off, 
     assert results["off"] == ("IntegrityError", OVERWRITTEN)
 
 
+@SQLITE_TRIGGERS
 def test_recursive_triggers_on_still_refuses_an_update_and_a_delete(seeded, guards_off):
     for statement, message in ((update(AUDIT).values(detail="changed"), CHANGED), (delete(AUDIT), REMOVED)):
         with seeded["engine"].connect() as conn:
@@ -730,6 +738,7 @@ def test_a_plain_insert_with_a_new_id_succeeds(seeded, guards_off):
     assert ids == [seeded["entry_id"], 50]
 
 
+@SQLITE_TRIGGERS
 def test_an_insert_with_no_id_or_a_null_id_still_autoincrements(seeded, guards_off):
     engine = seeded["engine"]
     values = {key: value for key, value in _values(seeded, "auto").items() if key != "id"}
@@ -747,6 +756,7 @@ def test_an_insert_with_no_id_or_a_null_id_still_autoincrements(seeded, guards_o
     assert len(set(ids)) == 3
 
 
+@SQLITE_TRIGGERS
 def test_insert_or_replace_and_an_upsert_with_a_new_id_succeed(seeded, guards_off):
     with seeded["engine"].begin() as conn:
         conn.execute(insert(AUDIT).prefix_with("OR REPLACE").values(**{**_values(seeded, "new1"), "id": 60}))
@@ -773,6 +783,7 @@ ID_CHECK = "ck_audit_entries_id_positive"
 
 
 @pytest.mark.parametrize("bad_id", [-1, 0])
+@SQLITE_TRIGGERS
 def test_an_explicit_id_below_one_is_refused_by_the_check(seeded, guards_off, bad_id):
     with seeded["engine"].connect() as conn:
         with pytest.raises(IntegrityError) as info:
@@ -784,6 +795,7 @@ def test_an_explicit_id_below_one_is_refused_by_the_check(seeded, guards_off, ba
 
 
 @pytest.mark.parametrize("bad_id", [-1, 0])
+@SQLITE_TRIGGERS
 def test_an_explicit_id_below_one_is_refused_through_raw_sql_and_the_cursor(seeded, guards_off, bad_id):
     sql = (
         "INSERT INTO audit_entries " + _COLUMNS + " VALUES "
@@ -827,6 +839,7 @@ def test_a_plain_insert_and_append_audit_succeed_after_refused_ids_on_a_table_wi
     assert min(ids) >= 1
 
 
+@SQLITE_TRIGGERS
 def test_overwrites_still_give_the_no_reuse_id_message_with_the_id_check_in_place(seeded, guards_off):
     # An overwrite names an id that exists, so it is trigger (c) that refuses it, not the CHECK.
     for case in ("insert_or_replace", "replace", "on_conflict_do_update"):
@@ -838,6 +851,7 @@ def test_overwrites_still_give_the_no_reuse_id_message_with_the_id_check_in_plac
     assert rows_now(seeded["engine"]) == seeded["before"]
 
 
+@SQLITE_TRIGGERS
 def test_an_id_is_not_reused_after_the_database_refuses_a_delete(seeded, guards_off):
     # The row cannot be deleted, so the highest id stays, and the next insert goes above it.
     error = attempt(seeded, "connection", ROUTES["table_delete_connection"][2])
@@ -847,6 +861,7 @@ def test_an_id_is_not_reused_after_the_database_refuses_a_delete(seeded, guards_
     assert again > seeded["entry_id"]
 
 
+@SQLITE_TRIGGERS
 def test_the_refusal_message_holds_no_value(seeded, guards_off):
     marker = "marker-4f9c1e"
     with seeded["engine"].begin() as conn:

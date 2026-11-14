@@ -25,6 +25,7 @@ from socboard.audit import append_audit
 from socboard.audit_guard import AuditImmutableError
 from socboard.domain import AUDIT_ACTIONS
 from socboard.models import AuditEntry, Case
+from db_target import SQLITE_INTERNALS, SQLITE_TRIGGERS
 
 PACKAGE = Path(__file__).resolve().parents[1] / "socboard"
 
@@ -166,6 +167,7 @@ def test_entries_read_back_in_insertion_order_even_when_the_times_tie_or_run_bac
     assert details == ["original", "entry-0", "entry-1", "entry-2", "entry-3"]
 
 
+@SQLITE_TRIGGERS
 def test_an_id_is_never_reused(seeded):
     # Option B: the delete trigger refuses a DELETE, so the test first drops that trigger with
     # raw-SQL DDL, which the guard does not refuse (the recorded known limit in
@@ -180,6 +182,7 @@ def test_an_id_is_never_reused(seeded):
     assert again > last
 
 
+@SQLITE_INTERNALS
 def test_the_audit_table_uses_autoincrement(seeded):
     with seeded["engine"].connect() as conn:
         sql = conn.exec_driver_sql("SELECT sql FROM sqlite_master WHERE name = 'audit_entries'").scalar()
@@ -387,6 +390,7 @@ def test_dropping_the_table_with_the_metadata_helper_is_refused(seeded):
     assert _unchanged(seeded)
 
 
+@SQLITE_INTERNALS  # uses SQLite's INSERT ... ON CONFLICT construct; D6a (#193) shows append_audit on Postgres
 def test_a_plain_insert_and_append_audit_still_work(seeded):
     engine = seeded["engine"]
     with engine.begin() as conn:
@@ -411,6 +415,7 @@ def test_ddl_on_another_table_is_not_blocked(seeded):
         conn.execute(DDL("DROP TABLE scratch_table"))
 
 
+@SQLITE_TRIGGERS
 def test_raw_sql_update_passes_the_guard_but_the_database_trigger_refuses_it(seeded):
     # Option B: exec_driver_sql and text() are raw SQL, which the application guard does not
     # inspect, so the refusal here comes from the database trigger (an IntegrityError carrying the

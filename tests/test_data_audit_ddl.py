@@ -16,6 +16,7 @@ from sqlalchemy import DDL, column, table, text
 from sqlalchemy.schema import DropTable
 
 from socboard.audit_guard import AuditImmutableError, refused_statement
+from db_target import SQLITE_GUARD
 
 TRIGGERS = ("audit_entries_no_update", "audit_entries_no_delete", "audit_entries_no_reuse_id")
 
@@ -50,6 +51,7 @@ def test_ddl_on_a_lightweight_table_is_refused_by_the_guard_function(name):
 
 
 @pytest.mark.parametrize("name", LIGHTWEIGHT_DDL)
+@SQLITE_GUARD
 def test_ddl_on_a_lightweight_table_is_refused_and_the_table_remains(migrated_engine, name):  # noqa: F811
     before = schema_names(migrated_engine)
     with migrated_engine.connect() as conn:
@@ -77,6 +79,7 @@ DROP_TRIGGER_TEXT = [
 
 
 @pytest.mark.parametrize("sql", DROP_TRIGGER_TEXT)
+@SQLITE_GUARD
 def test_a_ddl_construct_dropping_a_trigger_is_refused_and_the_trigger_remains(migrated_engine, sql):  # noqa: F811
     with migrated_engine.connect() as conn:
         with pytest.raises(AuditImmutableError):
@@ -105,6 +108,7 @@ RAW_ROUTES = ["text", "exec_driver_sql", "dbapi_cursor"]
 
 
 @pytest.mark.parametrize("route", RAW_ROUTES)
+@SQLITE_GUARD
 def test_known_limit_raw_sql_can_drop_a_trigger_and_the_guard_does_not_refuse_it(migrated_engine, route):  # noqa: F811
     """KNOWN LIMIT, RECORDED, NOT WANTED BEHAVIOUR (decision record, Trade-offs).
 

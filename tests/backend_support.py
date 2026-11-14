@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import yaml
+from db_target import sqlite_url  # noqa: F401  (re-exported: test modules import it from here)
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import insert
 
@@ -48,13 +49,8 @@ def load_contract() -> dict:
         return yaml.safe_load(handle)
 
 
-def sqlite_url(path: Path) -> str:
-    return "sqlite:///" + path.as_posix()
-
-
-def build_test_database(path: Path) -> str:
-    """A migrated database at `path` holding the two test users; returns its URL."""
-    url = sqlite_url(path)
+def build_test_database(url: str) -> str:
+    """A migrated database at `url` (a new empty one) holding the two test users; returns the URL."""
     migrate.upgrade(url)
     engine = database.create_db_engine(url)
     try:

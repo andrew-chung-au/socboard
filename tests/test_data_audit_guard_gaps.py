@@ -50,6 +50,7 @@ from socboard.audit_guard import (
     refused_statement,
 )
 from socboard.models import AuditEntry
+from db_target import SQLITE_GUARD
 
 AUDIT = AuditEntry.__table__
 BIG = 2**63 - 1
@@ -151,6 +152,7 @@ ID_ROUTES = {
 
 
 @pytest.mark.parametrize("route", ID_ROUTES)
+@SQLITE_GUARD
 def test_an_explicit_id_is_refused_whichever_way_it_arrives(seeded, route):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError) as info:
@@ -161,6 +163,7 @@ def test_an_explicit_id_is_refused_whichever_way_it_arrives(seeded, route):
 
 
 @pytest.mark.parametrize("route", ["values_kwargs", "orm_entry_flush", "parameters_dict_connection"])
+@SQLITE_GUARD
 def test_an_explicit_id_of_two_to_the_63_minus_1_is_refused_and_the_sequence_does_not_move(seeded, route):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError):
@@ -169,6 +172,7 @@ def test_an_explicit_id_of_two_to_the_63_minus_1_is_refused_and_the_sequence_doe
     assert_append_audit_works(seeded)
 
 
+@SQLITE_GUARD
 def test_an_explicit_id_is_still_refused_inside_allow_schema_changes(seeded):
     before = snapshot(seeded["engine"])
     with allow_schema_changes():
@@ -190,6 +194,7 @@ def test_the_guard_function_refuses_a_positional_row_with_an_id_and_a_none_id_pa
     assert not refused_statement(insert(AUDIT).from_select(ALL_COLUMNS[1:], select(literal(1), literal(1), literal("a"), literal("b"), literal(NOW))))
 
 
+@SQLITE_GUARD
 def test_an_insert_with_no_id_or_a_none_id_is_not_refused(seeded):
     engine = seeded["engine"]
     plain = _row(seeded)
@@ -245,6 +250,7 @@ RENDER_REFUSALS = {
 
 
 @pytest.mark.parametrize("name", RENDER_REFUSALS)
+@SQLITE_GUARD
 def test_a_ddl_whose_rendered_text_names_the_table_or_a_trigger_is_refused(seeded, name):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError):
@@ -285,6 +291,7 @@ INDEX_REFUSALS = {
 
 
 @pytest.mark.parametrize("name", INDEX_REFUSALS)
+@SQLITE_GUARD
 def test_drop_index_of_an_audit_index_is_refused_and_the_index_remains(seeded, name):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError):
@@ -295,6 +302,7 @@ def test_drop_index_of_an_audit_index_is_refused_and_the_index_remains(seeded, n
     assert_append_audit_works(seeded)
 
 
+@SQLITE_GUARD
 def test_every_index_of_audit_entries_is_in_the_index_names_constant(seeded):
     with seeded["engine"].connect() as conn:
         names = conn.exec_driver_sql(
@@ -331,6 +339,7 @@ RAW_NEGATIVE_ID = (
 
 
 @pytest.mark.parametrize("sql", _pragma_texts())
+@SQLITE_GUARD
 def test_a_dangerous_pragma_is_refused_and_id_minus_1_is_still_refused_by_the_check(seeded, sql):
     before = snapshot(seeded["engine"])
     with seeded["engine"].connect() as conn:
@@ -384,6 +393,7 @@ SEQUENCE_REFUSALS["ddl_delete_upper"] = lambda: DDL("DELETE FROM SQLITE_SEQUENCE
 
 
 @pytest.mark.parametrize("name", SEQUENCE_REFUSALS)
+@SQLITE_GUARD
 def test_a_write_to_sqlite_sequence_is_refused_and_the_value_is_unchanged(seeded, name):
     before = snapshot(seeded["engine"])
     assert before[1] == 1
@@ -400,6 +410,7 @@ def test_a_write_to_sqlite_sequence_is_not_lifted_by_allow_schema_changes(seeded
                 _conn(seeded["engine"], SEQUENCE_REFUSALS[name]())
 
 
+@SQLITE_GUARD
 def test_a_read_of_sqlite_sequence_is_not_refused(seeded):
     sequence = _sequence_table("sqlite_sequence")
     with seeded["engine"].connect() as conn:
@@ -411,6 +422,7 @@ def test_a_read_of_sqlite_sequence_is_not_refused(seeded):
 
 
 @pytest.mark.parametrize("name", ["audit_entries_archive", "xaudit_entries", "audit_entries2"])
+@SQLITE_GUARD
 def test_ddl_and_dml_on_a_near_miss_table_name_are_allowed(seeded, name):
     near = _light(name)
     with seeded["engine"].begin() as conn:
@@ -424,6 +436,7 @@ def test_ddl_and_dml_on_a_near_miss_table_name_are_allowed(seeded, name):
     assert_append_audit_works(seeded)
 
 
+@SQLITE_GUARD
 def test_a_trigger_named_audit_entries_no_update_log_is_allowed(seeded):
     with seeded["engine"].begin() as conn:
         conn.execute(DDL("CREATE TABLE audit_entries_archive (id INTEGER PRIMARY KEY, detail TEXT)"))
@@ -435,6 +448,7 @@ def test_a_trigger_named_audit_entries_no_update_log_is_allowed(seeded):
     assert_append_audit_works(seeded)
 
 
+@SQLITE_GUARD
 def test_an_index_named_ix_audit_entries_archive_case_id_is_allowed(seeded):
     name = "ix_audit_entries_archive_case_id"
     with seeded["engine"].begin() as conn:
@@ -462,6 +476,7 @@ def test_other_pragmas_as_ddl_are_not_refused(sql):
     assert not refused_statement(DDL(sql))
 
 
+@SQLITE_GUARD
 def test_one_database_survives_every_refusal_and_append_audit_still_works(seeded):
     engine = seeded["engine"]
     before = snapshot(engine)
@@ -499,6 +514,7 @@ CORE_DUPLICATES = {
 
 @pytest.mark.parametrize("guard", ["on", "off"])
 @pytest.mark.parametrize("name", RAW_DUPLICATES)
+@SQLITE_GUARD
 def test_raw_or_ignore_and_on_conflict_do_nothing_on_an_existing_id_raise_the_trigger_message(seeded, name, guard):
     before = snapshot(seeded["engine"])
     args = (seeded["entry_id"], seeded["case_id"], seeded["user_id"])
@@ -512,6 +528,7 @@ def test_raw_or_ignore_and_on_conflict_do_nothing_on_an_existing_id_raise_the_tr
 
 
 @pytest.mark.parametrize("name", CORE_DUPLICATES)
+@SQLITE_GUARD
 def test_core_or_ignore_and_on_conflict_do_nothing_on_an_existing_id_are_refused_by_the_guard(seeded, name):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError):
@@ -520,6 +537,7 @@ def test_core_or_ignore_and_on_conflict_do_nothing_on_an_existing_id_are_refused
 
 
 @pytest.mark.parametrize("name", CORE_DUPLICATES)
+@SQLITE_GUARD
 def test_core_or_ignore_and_on_conflict_do_nothing_on_an_existing_id_raise_the_trigger_message_without_the_guard(
     seeded, name
 ):
@@ -559,6 +577,7 @@ BOUND_ROUTES = {
 
 @pytest.mark.parametrize("route", BOUND_ROUTES)
 @pytest.mark.parametrize("value", [BIG, 7])
+@SQLITE_GUARD
 def test_an_id_through_a_named_bound_parameter_is_refused(seeded, route, value):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError):
@@ -567,6 +586,7 @@ def test_an_id_through_a_named_bound_parameter_is_refused(seeded, route, value):
     assert_append_audit_works(seeded)
 
 
+@SQLITE_GUARD
 def test_a_named_bound_parameter_executed_with_none_is_not_refused(seeded):
     engine = seeded["engine"]
     statement = insert(AUDIT).values(id=bindparam("x"), **_row(seeded))
@@ -602,6 +622,7 @@ EXPRESSION_IDS = {
 
 
 @pytest.mark.parametrize("name", EXPRESSION_IDS)
+@SQLITE_GUARD
 def test_an_expression_in_the_id_position_is_refused(seeded, name):
     expression = EXPRESSION_IDS[name]()
     row = dict(case_id=seeded["case_id"], actor_id=seeded["user_id"], action="a", detail="d", at=NOW)
@@ -629,6 +650,7 @@ COMMENTED_PRAGMA_FORMS = [
 
 @pytest.mark.parametrize("pragma", ["ignore_check_constraints", "writable_schema"])
 @pytest.mark.parametrize("form", COMMENTED_PRAGMA_FORMS)
+@SQLITE_GUARD
 def test_a_dangerous_pragma_behind_a_comment_is_refused(seeded, pragma, form):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError):
@@ -657,6 +679,7 @@ def test_a_commented_dangerous_pragma_is_not_lifted_by_allow_schema_changes(seed
         "UPDATE main./**/sqlite_sequence SET seq = 0",
     ],
 )
+@SQLITE_GUARD
 def test_a_name_beside_a_comment_is_refused(seeded, sql):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError):
@@ -731,6 +754,7 @@ COMPILED_NAME_ROUTES = {
 
 
 @pytest.mark.parametrize("route", COMPILED_NAME_ROUTES)
+@SQLITE_GUARD
 def test_without_the_guard_an_id_under_the_compiled_name_does_reach_the_table(seeded, route):
     engine = seeded["engine"]
     statement, name = COMPILED_NAME_ROUTES[route](seeded, engine)
@@ -742,6 +766,7 @@ def test_without_the_guard_an_id_under_the_compiled_name_does_reach_the_table(se
 @pytest.mark.parametrize("sink", [_conn, _session])
 @pytest.mark.parametrize("value", [BIG, 7])
 @pytest.mark.parametrize("route", COMPILED_NAME_ROUTES)
+@SQLITE_GUARD
 def test_an_id_under_a_compiled_bind_name_is_refused(seeded, route, value, sink):
     engine = seeded["engine"]
     statement, name = COMPILED_NAME_ROUTES[route](seeded, engine)
@@ -752,6 +777,7 @@ def test_an_id_under_a_compiled_bind_name_is_refused(seeded, route, value, sink)
     assert_append_audit_works(seeded)
 
 
+@SQLITE_GUARD
 def test_none_under_a_compiled_bind_name_is_not_refused(seeded):
     engine = seeded["engine"]
     multi = _multi_none(seeded)
@@ -824,6 +850,7 @@ ATTACH_FORMS = [
 
 
 @pytest.mark.parametrize("sql", ATTACH_FORMS)
+@SQLITE_GUARD
 def test_attach_and_detach_are_refused(seeded, sql):
     before = snapshot(seeded["engine"])
     with pytest.raises(AuditImmutableError):
@@ -832,6 +859,7 @@ def test_attach_and_detach_are_refused(seeded, sql):
     assert_append_audit_works(seeded)
 
 
+@SQLITE_GUARD
 def test_attach_with_a_hyphenated_alias_then_the_pragma_is_refused_at_both_steps(seeded):
     before = snapshot(seeded["engine"])
     for sql in ("ATTACH DATABASE ':memory:' AS \"my-db\"", 'PRAGMA "my-db".ignore_check_constraints = ON'):

@@ -10,15 +10,16 @@ import logging
 import pytest
 from data_support import (  # noqa: F401  (fixtures)
     SEED_PASSWORDS,
+    empty_database_url,
     isolated_database_env,
+    migrated_database_url,
     no_default_database_file,
-    sqlite_url,
 )
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 from sqlalchemy.engine import Engine
 
-from socboard import database, migrate, passwords, seed, set_password
+from socboard import database, passwords, seed, set_password
 from socboard.app import create_app
 from socboard.models import AuditEntry, User
 
@@ -30,8 +31,7 @@ SECRET = "test-only-signing-secret-0123456789abcdef"
 
 @pytest.fixture
 def seeded_url(tmp_path):
-    url = sqlite_url(tmp_path / "reset.db")
-    migrate.upgrade(url)
+    url = migrated_database_url(tmp_path, "reset.db")
     assert seed.main({database.ENV_NAME: url, **SEED_PASSWORDS}) == 0
     return url
 
@@ -190,7 +190,7 @@ def test_a_bad_database_url_exits_2_without_printing_it(capsys):
 
 
 def test_an_unmigrated_database_exits_1_before_the_password_is_looked_at(tmp_path, capsys):
-    url = sqlite_url(tmp_path / "bare.db")
+    url = empty_database_url(tmp_path, "bare.db")
     assert set_password.main({database.ENV_NAME: url}, ["lead"]) == 1
     assert capsys.readouterr().err == f"socboard.set_password: {set_password.NOT_MIGRATED_MESSAGE}\n"
 

@@ -4,16 +4,17 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from socboard import database, domain, migrate, seed
+from socboard import database, domain, seed
 from socboard.inventory import criticality_for_asset
 from socboard.models import Asset
 from data_support import (  # noqa: F401  (fixtures)
     SEED_PASSWORDS,
+    empty_database_url,
     insert_asset,
     isolated_database_env,
+    migrated_database_url,
     migrated_engine,
     no_default_database_file,
-    sqlite_url,
 )
 
 
@@ -42,8 +43,7 @@ def _rows(engine):
 
 
 def test_seed_loads_the_inventory_and_a_second_run_changes_nothing(tmp_path, capsys):
-    url = sqlite_url(tmp_path / "seed.db")
-    migrate.upgrade(url)
+    url = migrated_database_url(tmp_path, "seed.db")
     env = {database.ENV_NAME: url, **SEED_PASSWORDS}
     assert seed.main(env) == 0
     engine = database.create_db_engine(url)
@@ -59,8 +59,7 @@ def test_seed_loads_the_inventory_and_a_second_run_changes_nothing(tmp_path, cap
 
 
 def test_seed_never_changes_or_deletes_an_existing_row(tmp_path):
-    url = sqlite_url(tmp_path / "seed.db")
-    migrate.upgrade(url)
+    url = migrated_database_url(tmp_path, "seed.db")
     engine = database.create_db_engine(url)
     try:
         with engine.begin() as conn:
@@ -78,8 +77,7 @@ def test_seed_never_changes_or_deletes_an_existing_row(tmp_path):
 
 
 def test_seed_does_not_write_audit_entries(tmp_path):
-    url = sqlite_url(tmp_path / "seed.db")
-    migrate.upgrade(url)
+    url = migrated_database_url(tmp_path, "seed.db")
     assert seed.main({database.ENV_NAME: url, **SEED_PASSWORDS}) == 0
     engine = database.create_db_engine(url)
     try:
@@ -90,7 +88,7 @@ def test_seed_does_not_write_audit_entries(tmp_path):
 
 
 def test_seed_on_an_unmigrated_database_exits_1_with_fixed_text(tmp_path, capsys):
-    url = sqlite_url(tmp_path / "empty.db")
+    url = empty_database_url(tmp_path, "empty.db")
     assert seed.main({database.ENV_NAME: url}) == 1
     err = capsys.readouterr().err
     assert "make migrate" in err

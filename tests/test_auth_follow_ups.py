@@ -27,6 +27,7 @@ from socboard.app import create_app
 from socboard.errors import INVALID_CREDENTIALS
 from socboard.tokens import create_token
 
+SQLITE_ONLY = pytest.mark.sqlite_only("a missing SQLite file, its URL spellings or #104's SQLite-only hook")
 SECRET_VARIABLE = "SOCBOARD_TOKEN_SECRET"
 SECRET_TEXT = (
     "SOCBOARD_TOKEN_SECRET must be set to at least 32 characters, "
@@ -54,6 +55,7 @@ def _assert_generic_500(response, path, url):
     assert "run make migrate" not in text and "does not exist" not in text
 
 
+@SQLITE_ONLY
 def test_login_against_a_missing_database_is_a_500_and_creates_no_file(missing_db_client):
     client, path, url = missing_db_client
     response = client.post(
@@ -63,6 +65,7 @@ def test_login_against_a_missing_database_is_a_500_and_creates_no_file(missing_d
     assert not path.exists()
 
 
+@SQLITE_ONLY
 def test_a_protected_route_against_a_missing_database_is_a_500_and_creates_no_file(
     missing_db_client,
 ):
@@ -73,6 +76,7 @@ def test_a_protected_route_against_a_missing_database_is_a_500_and_creates_no_fi
     assert not path.exists()
 
 
+@SQLITE_ONLY
 def test_with_a_missing_file_no_token_is_still_a_401_and_creates_no_file(missing_db_client):
     client, path, _ = missing_db_client
     response = client.get("/api/users")
@@ -81,6 +85,7 @@ def test_with_a_missing_file_no_token_is_still_a_401_and_creates_no_file(missing
     assert not path.exists()
 
 
+@SQLITE_ONLY
 def test_with_a_missing_file_a_bad_login_body_is_still_a_422_and_creates_no_file(
     missing_db_client,
 ):
@@ -91,6 +96,7 @@ def test_with_a_missing_file_a_bad_login_body_is_still_a_422_and_creates_no_file
     assert not path.exists()
 
 
+@SQLITE_ONLY
 def test_with_a_missing_file_health_is_200_and_creates_no_file(missing_db_client):
     client, path, _ = missing_db_client
     assert client.get("/api/health").status_code == 200
@@ -170,6 +176,7 @@ FILE_SPELLINGS = [
 
 
 @pytest.mark.parametrize("form", FILE_SPELLINGS)
+@SQLITE_ONLY
 def test_a_missing_file_is_not_created_in_any_spelling(tmp_path, form):
     path = tmp_path / "a b.db"
     message = _assert_fails_and_creates_nothing(_spell(form, path), tmp_path)
@@ -177,6 +184,7 @@ def test_a_missing_file_is_not_created_in_any_spelling(tmp_path, form):
 
 
 @pytest.mark.parametrize("form", FILE_SPELLINGS)
+@SQLITE_ONLY
 def test_an_existing_file_opens_in_every_spelling(tmp_path, form):
     path = tmp_path / "a b.db"
     _make_database(path)
@@ -185,6 +193,7 @@ def test_an_existing_file_opens_in_every_spelling(tmp_path, form):
 
 
 @pytest.mark.parametrize("form", ["sqlite:///there.db", "sqlite:///file:there.db?uri=true"])
+@SQLITE_ONLY
 def test_a_relative_path_opens_an_existing_file_and_never_creates_one(tmp_path, monkeypatch, form):
     monkeypatch.chdir(tmp_path)
     _assert_fails_and_creates_nothing(form, tmp_path)
@@ -194,6 +203,7 @@ def test_a_relative_path_opens_an_existing_file_and_never_creates_one(tmp_path, 
 
 
 @pytest.mark.parametrize("name", ["a b.db", "a?b.db", "a#b.db", "a%b.db", "a%20b.db", "a:b.db"])
+@SQLITE_ONLY
 def test_a_plain_path_keeps_every_character_of_the_file_name(tmp_path, name):
     url = URL.create("sqlite", database=str(tmp_path / name))
     _assert_fails_and_creates_nothing(url, tmp_path)
@@ -202,6 +212,7 @@ def test_a_plain_path_keeps_every_character_of_the_file_name(tmp_path, name):
     assert [entry.name for entry in tmp_path.iterdir()] == [name]
 
 
+@SQLITE_ONLY
 def test_a_path_that_is_not_valid_utf8_opens_an_existing_file_and_never_creates_one(tmp_path):
     name = os.fsdecode(b"caf\xe9.db")  # Python keeps the byte as a lone surrogate
     url = URL.create("sqlite", database=str(tmp_path / name))
@@ -211,6 +222,7 @@ def test_a_path_that_is_not_valid_utf8_opens_an_existing_file_and_never_creates_
     assert os.listdir(os.fsencode(tmp_path)) == [b"caf\xe9.db"]
 
 
+@SQLITE_ONLY
 def test_a_file_created_after_a_failed_request_opens_without_a_restart(tmp_path):
     path = tmp_path / "late.db"
     state = _state_for(sqlite_url(path))
@@ -224,6 +236,7 @@ def test_a_file_created_after_a_failed_request_opens_without_a_restart(tmp_path)
         state.dispose()
 
 
+@SQLITE_ONLY
 def test_the_missing_file_error_holds_neither_path_nor_url(tmp_path):
     path = tmp_path / "secret-dir-name.db"
     message = _assert_fails_and_creates_nothing(sqlite_url(path), tmp_path)
@@ -240,6 +253,7 @@ def test_the_missing_file_error_holds_neither_path_nor_url(tmp_path):
     ],
 )
 @pytest.mark.filterwarnings("ignore:Selection of the SingletonThreadPool:DeprecationWarning")
+@SQLITE_ONLY
 def test_memory_forms_work_and_create_no_file(tmp_path, form):
     state = _state_for(_spell(form, tmp_path / "m.db"))
     try:
@@ -251,6 +265,7 @@ def test_memory_forms_work_and_create_no_file(tmp_path, form):
 
 
 @pytest.mark.parametrize("mode", ["ro", "rw"])
+@SQLITE_ONLY
 def test_a_read_only_or_read_write_uri_of_a_missing_file_fails_and_creates_none(tmp_path, mode):
     form = "sqlite:///file:{path}?mode=" + mode + "&uri=true"
     _assert_fails_and_creates_nothing(_spell(form, tmp_path / "r.db"), tmp_path)
@@ -271,6 +286,7 @@ def _raw_uri(form, path):
         pytest.param("file:{path}?mode=ro&mode=rwc%00", id="ro then rwc NUL"),
     ],
 )
+@SQLITE_ONLY
 def test_a_missing_file_is_not_created_by_a_raw_file_uri(tmp_path, form):
     _assert_fails_and_creates_nothing(_raw_uri(form, tmp_path / "a.db"), tmp_path)
 
@@ -291,6 +307,7 @@ def test_a_missing_file_is_not_created_by_a_raw_file_uri(tmp_path, form):
     ],
 )
 @pytest.mark.filterwarnings("ignore:Selection of the SingletonThreadPool:DeprecationWarning")
+@SQLITE_ONLY
 def test_the_hook_keeps_only_a_plain_last_mode_and_otherwise_appends_mode_rw(url, sent):
     dialect = create_engine(url).dialect
     cargs, cparams = dialect.create_connect_args(database.parse_url(url))
@@ -317,12 +334,14 @@ def _assert_write_refused(url):
         pytest.param("sqlite:///file:{path}?uri=true&mode=ro&nolock=1", id="mode=ro, nolock=1"),
     ],
 )
+@SQLITE_ONLY
 def test_an_existing_file_opened_read_only_stays_read_only(tmp_path, form):
     path = tmp_path / "a.db"
     _make_database(path)
     _assert_write_refused(_spell(form, path))
 
 
+@SQLITE_ONLY
 def test_an_existing_file_opened_with_a_raw_ro_last_stays_read_only(tmp_path):
     path = tmp_path / "a.db"
     _make_database(path)
@@ -330,6 +349,7 @@ def test_an_existing_file_opened_with_a_raw_ro_last_stays_read_only(tmp_path):
 
 
 @pytest.mark.filterwarnings("ignore:Selection of the SingletonThreadPool:DeprecationWarning")
+@SQLITE_ONLY
 def test_mode_memory_with_an_existing_file_stays_in_memory(tmp_path):
     path = tmp_path / "a.db"
     _make_database(path)
@@ -345,6 +365,7 @@ def test_mode_memory_with_an_existing_file_stays_in_memory(tmp_path):
 # Accepted costs of the rule (human ruling), as measured: after `ro` SQLite refuses a later `rw`,
 # so the appended `mode=rw` refuses an oddly encoded `ro`; after `memory` a later `rw` opens the
 # named file read-write, so an oddly encoded `memory` becomes a read-write open of that file.
+@SQLITE_ONLY
 def test_an_oddly_encoded_read_only_mode_is_refused_and_creates_nothing(tmp_path):
     form = "sqlite:///file:{path}?uri=true&mod%2565=ro"
     path = tmp_path / "a.db"
@@ -359,6 +380,7 @@ def test_an_oddly_encoded_read_only_mode_is_refused_and_creates_nothing(tmp_path
     assert [entry.name for entry in tmp_path.iterdir()] == ["a.db"]
 
 
+@SQLITE_ONLY
 def test_an_oddly_encoded_memory_mode_opens_the_existing_file_read_write(tmp_path):
     form = "sqlite:///file:{path}?uri=true&mod%2565=memory"
     path = tmp_path / "a.db"
@@ -376,6 +398,7 @@ def test_an_oddly_encoded_memory_mode_opens_the_existing_file_read_write(tmp_pat
     assert [entry.name for entry in tmp_path.iterdir()] == ["a.db"]
 
 
+@SQLITE_ONLY
 def test_the_connect_hook_is_added_once_per_engine_and_again_after_dispose(tmp_path):
     state = _state_for(sqlite_url(tmp_path / "x.db"))
     first = state.engine()

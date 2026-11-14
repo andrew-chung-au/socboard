@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from socboard.ids import MAX_ID
 from socboard.models import Alert, AuditEntry, Case, Note, User
+from db_target import SQLITE_INTERNALS
 
 
 def refused(engine, build):
@@ -83,6 +84,7 @@ def test_an_existing_owner_is_accepted(migrated_engine):
     assert owner == user_id
 
 
+@SQLITE_INTERNALS
 def test_foreign_keys_are_on_for_a_fresh_connection(migrated_engine):
     with migrated_engine.connect() as conn:
         assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1

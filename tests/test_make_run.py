@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from backend_support import TEST_TOKEN_SECRET
 from data_support import SEED_PASSWORDS
+from db_target import sqlite_url
 from test_audit_api import INGEST_KEY
 
 from socboard.auth import ConfigError, resolve_token_secret
@@ -87,7 +88,7 @@ for _name in REQUIRED:
 
 
 def environ_for(overrides, tmp_path):
-    environ = {**good_values(), "SOCBOARD_DATABASE_URL": "sqlite:///" + (tmp_path / "pf.db").as_posix()}
+    environ = {**good_values(), "SOCBOARD_DATABASE_URL": sqlite_url(tmp_path / "pf.db")}
     for name, value in overrides.items():
         if value is UNSET:
             environ.pop(name, None)
@@ -219,7 +220,7 @@ def test_make_run_refuses_and_starts_nothing(variable, value, tmp_path):
     port = free_port()
     environ = {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
-        "SOCBOARD_DATABASE_URL": "sqlite:///" + database_file.as_posix(),
+        "SOCBOARD_DATABASE_URL": sqlite_url(database_file),
         "SOCBOARD_PORT": str(port),
         **good_values(),
     }
@@ -366,7 +367,7 @@ def test_make_run_refuses_when_port_5173_is_in_use(tmp_path):
     database_file = tmp_path / "missing" / "run.db"
     environ = {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
-        "SOCBOARD_DATABASE_URL": "sqlite:///" + database_file.as_posix(),
+        "SOCBOARD_DATABASE_URL": sqlite_url(database_file),
         **good_values(),
     }
     holder = socket.socket()
