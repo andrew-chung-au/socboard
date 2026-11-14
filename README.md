@@ -88,11 +88,13 @@ export VITE_USE_MOCK=false
 make frontend-start
 ```
 
-The dev server sends every `/api` request to the backend on 127.0.0.1:8000 (`frontend/vite.config.ts`), so the backend needs no cross-origin (CORS) setting. The proxy is for the dev server only; a built site needs `/api` routed to the backend by whatever serves it.
+The dev server sends every `/api` request to the backend on 127.0.0.1:8000 (`frontend/vite.config.ts`), so the backend needs no cross-origin (CORS) setting. The proxy is for the dev server only; a built site gets `/api` from the backend itself (see "Serving the built site" below), or needs `/api` routed to the backend by whatever else serves it.
 
 Where the sign-in token is kept: in memory while the page is open, and in the browser's session storage (key `socboard.session`) so a refresh keeps the session. It is never put in local storage and never logged. It is cleared on log out and on any 401 from the server, which returns the user to the sign-in screen. Closing the tab ends the session.
 
 Ingest (`POST /api/alerts`) takes the key in the `X-API-Key` header, from `SOCBOARD_INGEST_API_KEY` (at least 16 characters; without it ingest answers 401 to every request and the app logs one warning). Alerts are not de-duplicated, by design for Core: posting the same alert twice creates two cases.
+
+Serving the built site: after `make frontend-build`, the backend serves `frontend/dist` itself: `/` and any screen route without a file extension (such as `/cases/1`) return `index.html`, a file in the folder is returned as it is, a missing path with an extension is a 404, and everything under `/api` is unchanged. Only GET and HEAD get the site. The folder comes from `SOCBOARD_STATIC_DIR` (default: `frontend/dist` in the repository root, whatever the working directory; a relative value is relative to the working directory) and is read when the backend starts, so restart it after a rebuild only if `dist` did not exist before. A missing folder, or one without `index.html`, is not an error: the backend then serves the API only. `index.html` is sent with `Cache-Control: no-cache` and files under `assets/` with a one-year `immutable` lifetime (their names carry a content hash).
 
 Binding beyond localhost: the backend listens on `127.0.0.1`, `localhost` or `::1` only, and `make backend-run` always does. The one exception is the flag `--allow-non-loopback-host` of `python -m socboard.server`, which lets `SOCBOARD_HOST` be an IP address such as `0.0.0.0`. Only the container image's start command may pass it, because the app must listen on an address Docker and the reverse proxy can reach; the image's port is published on the host's loopback only. It is a flag, not an environment variable, so a variable left in a developer's shell cannot open the server to the network. Do not pass it by hand or from `make`. The flag takes no value, and a wrong or unknown argument exits 2.
 

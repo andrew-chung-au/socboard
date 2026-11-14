@@ -14,6 +14,8 @@ Settings (#13), read when the app is built:
   explicitly before they return.
 - `SOCBOARD_INGEST_API_KEY`: the ingest API key (#14), at least 16 characters. Unlike the secret
   it is not required: without it `POST /api/alerts` is closed (401) and one warning is logged.
+- `SOCBOARD_STATIC_DIR`: the built frontend (#140), default `frontend/dist`; see `socboard.spa`.
+  A missing folder is not an error: the app then serves the API only.
 """
 
 import os
@@ -24,7 +26,7 @@ from typing import Literal
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 
-from socboard import __version__, database
+from socboard import __version__, database, spa
 from socboard.auth import add_login_route, create_users_router, resolve_token_secret
 from socboard.cases import create_cases_router
 from socboard.errors import ApiError, register_error_handlers
@@ -87,4 +89,8 @@ def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     app.include_router(ingest_router)
     app.include_router(create_users_router(API_PREFIX))
     app.include_router(create_cases_router(API_PREFIX))
+    # Last, so the fallback can never shadow an API route (#140).
+    static_root = spa.resolve_static_dir(source)
+    if static_root is not None:
+        spa.add_spa_route(app, static_root, API_PREFIX)
     return app
