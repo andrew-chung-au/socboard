@@ -23,7 +23,9 @@ import http.client
 import json
 import os
 import re
+import socket
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -74,7 +76,7 @@ def _error_text(answer: Answer) -> str:
     text = f"HTTP {answer.status}"
     try:
         code = json.loads(answer.body).get("code")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         return text
     if isinstance(code, str) and CODE_PATTERN.fullmatch(code):
         text += f" code {code}"
@@ -140,7 +142,26 @@ class Client:
             raise StepFailed("timed out (the total time limit was reached)")
         request_end = time.monotonic() + limit
         connection_class = http.client.HTTPSConnection if self.scheme == "https" else http.client.HTTPConnection
-        connection = connection_class(self.host, self.port, timeout=limit)
+        # An IPv6 address needs its brackets here, or http.client reads "::1" as a host and a port.
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        connection = connection_class(host, self.port, timeout=limit)
+        expired = threading.Event()
+
+        def expire() -> None:
+            """The whole request is out of time: shut the socket so a blocked read ends. The socket
+            timeout alone restarts on every byte, so a server sending one byte at a time would
+            otherwise hold the request open."""
+            expired.set()
+            sock = connection.sock
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        watchdog = threading.Timer(limit, expire)
+        watchdog.daemon = True
+        watchdog.start()
         send_headers = {"Accept": "application/json", "Connection": "close", **(headers or {})}
         data = None
         if body is not None:
@@ -161,22 +182,27 @@ class Client:
                 if size > MAX_RESPONSE_BYTES:
                     raise StepFailed("the response is too large")
                 chunks.append(chunk)
+            if expired.is_set():  # a body that ends at the shut socket is not a whole answer
+                raise StepFailed("timed out")
             return Answer(response.status, b"".join(chunks))
         except StepFailed:
             raise
         except TimeoutError:
             raise StepFailed("timed out") from None
         except (OSError, http.client.HTTPException, ValueError) as error:
+            if expired.is_set():
+                raise StepFailed("timed out") from None
             # The class name only: the message may hold a header value.
             raise StepFailed(f"no usable answer ({type(error).__name__})") from None
         finally:
+            watchdog.cancel()
             connection.close()
 
 
 def _json(answer: Answer) -> object:
     try:
         return json.loads(answer.body)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise StepFailed(f"HTTP {answer.status} with a body that is not JSON") from None
 
 
@@ -246,6 +272,9 @@ def run_steps(client: Client, health_only: bool, password: str, key: str, say: C
             action()
         except StepFailed as failure:
             say(f"step {number} {name}: FAILED ({failure})")
+            return False
+        except Exception as error:  # a shape no step expected: a step line, never a traceback or a value
+            say(f"step {number} {name}: FAILED (unexpected {type(error).__name__})")
             return False
         say(f"step {number} {name}: ok")
         return True

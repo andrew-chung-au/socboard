@@ -5,8 +5,10 @@ network or Docker is needed. Every value here is synthetic.
 """
 
 import ast
+import http.client
 import json
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -500,6 +502,102 @@ def test_a_response_over_the_size_limit_fails_its_step(make_stub, capsys, monkey
     code, output = run(make_stub(routes).url, capsys)
     assert code == 1
     assert "step 1 health: FAILED (the response is too large)" in output
+
+
+class Trickle:
+    """A raw server that sends its answer one byte at a time, so no single read ever times out."""
+
+    def __init__(self, preamble, forever):
+        self.server = socket.socket()
+        self.server.bind(("127.0.0.1", 0))
+        self.server.listen(5)
+        self.preamble, self.forever = preamble, forever
+        self.url = f"http://127.0.0.1:{self.server.getsockname()[1]}"
+        self.stop = threading.Event()
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self):
+        while not self.stop.is_set():
+            try:
+                connection, _ = self.server.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.handle, args=(connection,), daemon=True).start()
+
+    def handle(self, connection):
+        try:
+            connection.recv(65536)
+            for byte in self.preamble:
+                connection.sendall(bytes([byte]))
+                time.sleep(0.1)
+            while not self.stop.is_set() and self.forever:
+                connection.sendall(b" ")
+                time.sleep(0.1)
+        except OSError:
+            pass
+        finally:
+            connection.close()
+
+    def close(self):
+        self.stop.set()
+        self.server.close()
+
+
+TRICKLES = [
+    ("a status line sent byte by byte", b"HTTP/1.0 200 OK\r\nContent-Length: 5000\r\n\r\n" + b"x" * 100, False),
+    ("a body with a length sent byte by byte", b"HTTP/1.0 200 OK\r\nContent-Length: 100000\r\n\r\n", True),
+    ("a body that ends at the close, sent byte by byte", b"HTTP/1.0 200 OK\r\n\r\n", True),
+]
+
+
+@pytest.mark.parametrize(("preamble", "forever"), [case[1:] for case in TRICKLES], ids=[case[0] for case in TRICKLES])
+def test_a_server_sending_one_byte_at_a_time_cannot_hold_a_request_past_the_limit(preamble, forever, capsys, monkeypatch):
+    monkeypatch.setattr(smoke, "REQUEST_TIMEOUT", 0.6)
+    server = Trickle(preamble, forever)
+    try:
+        started = time.monotonic()
+        code, output = run(server.url, capsys)
+    finally:
+        server.close()
+    assert code == 1
+    assert "step 1 health: FAILED (timed out)" in output
+    assert time.monotonic() - started < 2.0
+
+
+def test_a_server_sending_one_byte_at_a_time_cannot_hold_the_run_past_the_total_limit(capsys, monkeypatch):
+    monkeypatch.setattr(smoke, "REQUEST_TIMEOUT", 30.0)
+    monkeypatch.setattr(smoke, "TOTAL_TIMEOUT", 0.6)
+    server = Trickle(b"HTTP/1.0 200 OK\r\nContent-Length: 100000\r\n\r\n", True)
+    try:
+        started = time.monotonic()
+        code, output = run(server.url, capsys)
+    finally:
+        server.close()
+    assert code == 1
+    assert "FAILED (timed out" in output
+    assert time.monotonic() - started < 2.0
+
+
+def test_a_very_deep_json_body_is_a_failed_step_not_a_traceback(make_stub, capsys):
+    deep = b"[" * 500_000
+    for routes in (failing("POST", "/api/login", 403, deep), failing("POST", "/api/alerts", 201, deep)):
+        code, output = run(make_stub(routes).url, capsys)
+        assert code == 1
+        assert "FAILED" in output
+        assert "Traceback" not in output
+
+
+def test_an_ipv6_host_is_given_to_http_client_in_brackets(monkeypatch, capsys):
+    seen = []
+
+    class Recording(http.client.HTTPConnection):
+        def __init__(self, host, port=None, timeout=None):
+            seen.append((host, port))
+            super().__init__("127.0.0.1", 9, timeout=timeout)  # nothing listens there
+
+    monkeypatch.setattr(smoke.http.client, "HTTPConnection", Recording)
+    run("http://[::1]:8000", capsys, "--health-only", environ={})
+    assert seen == [("[::1]", 8000)]
 
 
 def test_a_server_that_is_not_there_fails_step_1_without_a_traceback(capsys):
