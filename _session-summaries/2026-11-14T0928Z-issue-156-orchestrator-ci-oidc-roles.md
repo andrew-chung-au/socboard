@@ -5,7 +5,7 @@
 
 ## What changed and why
 
-Wrote `terraform/ci-access/` (Heavy tier): one GitHub OIDC provider and three roles. The plan role trusts the pull-request subject and is read-only. The apply role trusts the `infra` Environment, reaches only the `server/` state prefix and the server part's EC2 resources, may pass only the instance role, and has an explicit deny on every IAM write verb. The deploy role trusts the `deploy` Environment and may send one custom Systems Manager document (`socboard-deploy`) to instances tagged `project=socboard`. All three deny reading a secret's value. Also added a section in `terraform/README.md`, the decision record `_docs/decisions/2026-11-14T0928Z-ci-oidc-roles.md` (status `proposed`), its row in `_docs/index.md`, and the human task file for the non-`main` branch check (D19's evidence, marked `NOT CHECKED`).
+Wrote `terraform/ci-access/` (Heavy tier): one GitHub OIDC provider and three roles. The plan role trusts the pull-request subject and is read-only. The apply role trusts the `infra` Environment, reaches only the `server/` state prefix and the server part's EC2 resources, may pass only the instance role, and is denied every other IAM action, reads included (two deny statements); it is also denied the human-applied services (DLM and budgets) and snapshot delete and sharing. The deploy role trusts the `deploy` Environment and may send one custom Systems Manager document (`socboard-deploy`) to instances tagged `project=socboard`. All three deny reading a secret's value. Also added a section in `terraform/README.md`, the decision record `_docs/decisions/2026-11-14T0928Z-ci-oidc-roles.md` (status `proposed`), its row in `_docs/index.md`, and the human task file for the non-`main` branch check (D19's evidence, marked `NOT CHECKED`).
 
 Work ran in one Kiro Web session as Engineer; no PM, QA or Reviewer launch happened. Issue body hash checked before starting: `a825cebe...3eb9`, matches the recorded one.
 
@@ -41,7 +41,7 @@ None this session beyond starting the work. Open for the human: approve the deci
 - **Verify:** `make verify`: Python tests could not run here (uv could not write its cache: read-only file system), whitespace passed, no test files changed. Not a result about this change (no Python touched); CI is the evidence.
 - `terraform fmt -check` and `validate`: not run locally (Terraform and the provider could not be downloaded: 403 and no package access). They have run only in CI: the `terraform check` workflow ran `fmt -check -recursive` and `validate` on 51aa301 and passed (run 43593591460). `plan` and apply have not run.
 - Refused-case searches, run by `grep` over `terraform/ci-access`: no `aws_secretsmanager_secret_version`, no secret-reading `data` block (the only `data` block is `aws_caller_identity`), no access key or user, no AWS-owned document named in an allow, three outputs that are role ARNs. The kit's secret scan reported nothing on every file.
-- The apply role cannot create or modify IAM: shown by reading the policy (explicit deny on 17 write verbs and on passing any other role). No plan or test could run; the human's plan (README step 5) is where it is read.
+- The apply role cannot create or modify IAM: shown by reading the policy (two denies: `iam:*` with `NotResource` = the instance role, and `NotAction` = `iam:PassRole` on the instance role, so the only IAM action left is passing that one role). No plan or test could run; the human's plan (README step 5) is where it is read.
 
 ## Proposed AGENTS.md changes
 
