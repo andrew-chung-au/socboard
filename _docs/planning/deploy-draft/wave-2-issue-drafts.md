@@ -223,7 +223,7 @@ A `terraform/` folder holds the state bucket's definition and the steps to move 
 - [ ] `.gitignore` covers state files, plan files, `.terraform/` and real variable files; an example variable file is tracked and holds names and placeholder values only. A case that must be refused: committing a real variable file or a state file is blocked by `.gitignore` (shown with `git check-ignore` on both paths).
 - [ ] The migration steps (create with local state, then configure the backend and move state) are written in `terraform/README.md` as numbered steps for the human, each with the expected output; they are marked as not yet run.
 - [ ] No access key, secret, account number or password appears in any file (the kit's secret scan reports none).
-- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. A case that must be refused: a throwaway `output` that prints a variable named like a secret makes the check (a search of the folder in the review, until a CI check exists) fail.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. Also, no `data` source or resource reads a secret value into state (for example `aws_secretsmanager_secret_version`). A case that must be refused: a throwaway `output` that prints a variable named like a secret makes the check (a search of the folder in the review, until a CI check exists) fail.
 - [ ] The new folder and its `AGENTS.md` Layout line are approved by the human (protected).
 
 ## Out of scope
@@ -259,7 +259,7 @@ Terraform defines the OIDC provider and three roles (plan, apply, deploy) with t
 - [ ] The apply role covers only the CI-applied server part (D17b): it may attach the one instance role (and the snapshot role, if one exists) to the instance and has an explicit deny on every other IAM write. A case that must be refused: a plan or test shows the apply role cannot create or modify any IAM role or policy, including its own.
 - [ ] The deploy role may only run one custom Systems Manager document (fixed script, one parameter, the image digest, validated by a pattern) on instances tagged `project=socboard`, and read that command's result; it cannot run a generic shell document and cannot read any secret. A refused case: the policy names no generic run-command document.
 - [ ] The plan role is denied the value of the application secret.
-- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. Also, no `data` source or resource reads a secret value into state (for example `aws_secretsmanager_secret_version`).
 - [ ] No access key exists for any role, user or workflow; the Terraform creates none, and the secret scan on the folder reports nothing.
 - [ ] A non-`main` branch cannot assume the apply or deploy role: the Environments' deployment-branch rule (D19) is checked by the human, and a failed assume-role attempt from a throwaway branch is recorded in D19's task file.
 - [ ] The whole file set is human-applied only (the decision record's amendment): the apply role cannot change any of it.
@@ -286,6 +286,8 @@ PM's draft, to be copied here at grooming from #139's Decision 3 and the OIDC de
 
 ## D17a
 
+(Filed as #162 on 2026-11-14, groomed; the text below is the earlier draft and is kept for history. #154 is D15, #155 is D18a, #156 is D16.)
+
 Title: Terraform: the instance's IAM role and the budgets, applied by the human
 
 ## Why
@@ -300,7 +302,7 @@ Terraform defines the instance role and profile, any role the snapshot schedule 
 - [ ] The instance role allows Systems Manager's agent operations and reading exactly one named secret (by ARN); it allows nothing else. A refused case: the policy grants no wildcard resource on secrets and no other service.
 - [ ] If the snapshot schedule needs an execution role, it is defined here with only that purpose (`VERIFY:`); the instance and volume in D17b reference it.
 - [ ] Budget notifications at three thresholds (half, 80 percent and the full limit of a monthly amount the human sets) go to an address the human sets in the variable file, not in the repository. `VERIFY:` the budget's region and API behaviour.
-- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. Also, no `data` source or resource reads a secret value into state (for example `aws_secretsmanager_secret_version`).
 - [ ] Every resource is tagged `project=socboard`; the trust policy of each role names only the service that assumes it.
 - [ ] The README states the cost: a later change to the instance's permissions is a manual apply by the human.
 - [ ] `terraform fmt -check` and `validate` pass; the secret scan reports nothing.
@@ -334,10 +336,10 @@ Terraform defines the instance, Elastic IP, security group, encrypted data volum
 ## Acceptance criteria
 - [ ] One instance with no key pair, an Elastic IP, and the instance profile from D17a. The security group opens 80 and 443 to the world and nothing else; no rule opens 22 or the app port. A refused case: a test or a plan check fails if a rule opens any other port (`terraform validate` plus a policy check script in CI, `VERIFY:` the approach).
 - [ ] The metadata service requires session tokens with a hop limit of 1, so a container cannot read the instance's credentials. `VERIFY:` the argument names.
-- [ ] An encrypted data volume, attached to the instance, holds the Postgres data and the env file; a daily snapshot schedule with a stated retention covers it.
+- [ ] An encrypted data volume, attached to the instance, holds the Postgres data and the env file; a daily snapshot schedule with a stated retention covers it. The schedule is defined here and references the execution role that #162 (D17a) defines and exports, if the snapshot service needs one; this part creates no IAM resource.
 - [ ] The root volume is encrypted.
 - [ ] Every resource is tagged `project=socboard`.
-- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. Also, no `data` source or resource reads a secret value into state (for example `aws_secretsmanager_secret_version`).
 - [ ] The apply role (D16) can create these resources and attach the one instance role, and nothing in this folder creates IAM resources (a search of the folder finds none).
 - [ ] `terraform fmt -check` and `validate` pass; the secret scan reports nothing.
 
@@ -371,7 +373,7 @@ The instance boots into a host that has Docker, Compose and Caddy, the data volu
 - [ ] The bootstrap installs Docker, the Compose plugin and Caddy, and mounts the encrypted volume at the data directory D11's Compose file takes as its Postgres path. The mount survives a reboot and does not block boot if the volume is missing. `VERIFY:` device naming on this instance type (use a stable identifier, not a guessed device name).
 - [ ] Caddy proxies to the app on the host's loopback only, and its certificate and account data live on the data volume. The hostname is derived from the Elastic IP through a public wildcard-DNS service (the decision of 2026-11-12). The certificate authority's staging endpoint is a variable for testing. `VERIFY:` the service's name format and the contact address rule.
 - [ ] Containers restart after a reboot; container logs are rotated with a stated size limit; unused images are pruned on a schedule.
-- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret; the user data and the Caddy file contain no secret.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret; the user data and the Caddy file contain no secret; and no `data` source or resource reads a secret value into state (for example `aws_secretsmanager_secret_version`).
 - [ ] The bootstrap writes no secret, and does not deliver the Compose file (D20 delivers it at the deployed commit).
 - [ ] The bootstrap is idempotent on a re-run (a second boot changes nothing) (`VERIFY:` by the human's first apply).
 - [ ] `terraform fmt -check` and `validate` pass; the secret scan reports nothing.
