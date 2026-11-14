@@ -55,6 +55,7 @@ def build_client(app_database, monkeypatch, key=KEY):
         monkeypatch.delenv(ENV_NAME, raising=False)
     else:
         monkeypatch.setenv(ENV_NAME, key)
+    # The app must be built after the ingest key is set, so no shared crash fixture.
     return TestClient(create_app(), raise_server_exceptions=False)
 
 
@@ -68,6 +69,7 @@ def ingest_app(app_database, monkeypatch):
 
 @pytest.fixture
 def ingest_client(ingest_app):
+    # The app must be built after the ingest key is set, so no shared crash fixture.
     return TestClient(ingest_app, raise_server_exceptions=False)
 
 
@@ -263,6 +265,7 @@ def test_the_api_key_sent_as_a_bearer_token_does_not_ingest(ingest_client, app_d
 
 
 def test_the_api_key_is_no_credential_on_any_other_route(ingest_app):
+    # The app must be built after the ingest key is set, so no shared crash fixture.
     client = TestClient(ingest_app, raise_server_exceptions=False)
     checked = []
     for method, path_format in sorted(_every_route(ingest_app)):

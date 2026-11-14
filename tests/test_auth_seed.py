@@ -173,3 +173,37 @@ def test_there_is_no_default_password(seed_url):
     found, problems = seed.read_seed_passwords({})
     assert found == {}
     assert len(problems) == 3
+
+
+# --- #104: all three variables are needed on every run, and the migration check comes first ----
+
+
+def test_all_users_seeded_and_one_variable_unset_still_exits_2_and_adds_nothing(seed_url, capsys):
+    assert seed.main({database.ENV_NAME: seed_url, **SEED_PASSWORDS}) == 0
+    engine = database.create_db_engine(seed_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(Asset.__table__.delete().where(Asset.__table__.c.id == 1))
+    finally:
+        engine.dispose()
+    assets_before = _count(seed_url, Asset.__table__)
+    users_before = _users(seed_url)
+    capsys.readouterr()
+    env = {database.ENV_NAME: seed_url, **SEED_PASSWORDS}
+    del env["SOCBOARD_SEED_PASSWORD_LEAD"]
+    assert seed.main(env) == 2
+    out = capsys.readouterr()
+    assert "SOCBOARD_SEED_PASSWORD_LEAD" in out.err
+    for value in SEED_PASSWORDS.values():
+        assert value not in out.out + out.err
+    assert _count(seed_url, Asset.__table__) == assets_before  # the missing asset stays missing
+    assert _users(seed_url) == users_before
+
+
+def test_an_unmigrated_database_exits_1_before_the_variables_are_looked_at(tmp_path, capsys):
+    env = {database.ENV_NAME: sqlite_url(tmp_path / "bare.db")}  # no password variable at all
+    assert seed.main(env) == 1
+    err = capsys.readouterr().err
+    assert err == f"socboard.seed: {seed.NOT_MIGRATED_MESSAGE}\n"
+    for variable in VARIABLES:
+        assert variable not in err

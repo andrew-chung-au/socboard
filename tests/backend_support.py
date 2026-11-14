@@ -1,8 +1,8 @@
 """Test-only routes, test users and tokens for the backend tests (#10, #13).
 
-The test routes use the REAL authentication dependencies (`socboard.auth.current_user` and
-`require_lead`, #13) as route DEPENDENCIES, never inline in a handler: the order of checks in the
-contract (401, then a case-free role check, then the schema 422) holds only that way.
+`create_test_router()` adds routes that only the tests use (`/items`, `/boom`, `/raise-*`) to the
+real API router, to exercise path and query validation and the error mapping. `GET /api/cases` is
+the real route (`socboard/cases.py`); no test route serves it.
 
 `ANALYST_TOKEN` and `LEAD_TOKEN` are real tokens, signed with `TEST_TOKEN_SECRET` for the two test
 users that `build_test_database` inserts with fixed ids. `tests/conftest.py` sets the secret in the
@@ -12,15 +12,13 @@ here is synthetic and test-only.
 
 import time
 from pathlib import Path
-from typing import Annotated, Literal
 
 import yaml
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import insert
 
 from socboard import database, migrate
 from socboard.app import create_api_router
-from socboard.auth import CurrentUser, require_lead
 from socboard.errors import ApiHTTPException
 from socboard.models import User
 from socboard.passwords import hash_password
@@ -87,13 +85,6 @@ def build_test_database(path: Path) -> str:
 
 def create_test_router() -> APIRouter:
     router = create_api_router()
-
-    @router.get("/cases")
-    def closed_cases(
-        status: Literal["Closed"],
-        user: Annotated[CurrentUser, Depends(require_lead)],
-    ) -> list[dict]:
-        return []
 
     @router.get("/items/{item_id}")
     def item_by_path(item_id: int) -> dict:

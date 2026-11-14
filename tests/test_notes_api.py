@@ -9,7 +9,6 @@ from urllib.parse import quote
 
 import pytest
 from backend_support import ANALYST_ID, ANALYST_TOKEN, LEAD_ID, LEAD_TOKEN
-from fastapi.testclient import TestClient
 from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
 from test_queue_api import (
@@ -126,7 +125,7 @@ def test_a_success_is_one_transaction_and_one_commit(real_app, real_client, app_
 
 
 def test_a_refused_audit_flush_rolls_back_the_note_and_is_not_a_409(
-    real_app, app_database, monkeypatch
+    real_app, real_crash_client, app_database, monkeypatch
 ):
     add_case(app_database, 1)
 
@@ -136,7 +135,7 @@ def test_a_refused_audit_flush_rolls_back_the_note_and_is_not_a_409(
     monkeypatch.setattr("socboard.cases.append_audit", refuse)
     commits = []
     event.listen(real_app.state.database.engine(), "commit", lambda conn: commits.append(1))
-    response = post(TestClient(real_app, raise_server_exceptions=False), 1, {"text": "x"})
+    response = post(real_crash_client, 1, {"text": "x"})
     assert response.status_code == 500
     assert response.json()["code"] == "internal_error"
     assert commits == []

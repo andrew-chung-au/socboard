@@ -21,6 +21,15 @@ def auth_test_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("SOCBOARD_DATABASE_URL", "sqlite:///" + (tmp_path / "unused.db").as_posix())
 
 
+@pytest.fixture(autouse=True)
+def no_built_frontend(monkeypatch, tmp_path):
+    """Point the site folder at a missing one, so a built `frontend/dist` never reaches the tests (#140).
+
+    `tests/test_spa_serving.py` sets the variable itself, which overrides this.
+    """
+    monkeypatch.setenv("SOCBOARD_STATIC_DIR", (tmp_path / "no-built-frontend").as_posix())
+
+
 @pytest.fixture(scope="session")
 def template_database(tmp_path_factory):
     """One migrated database with the two test users, copied for each test that needs it."""
@@ -57,7 +66,10 @@ def real_app(app_database):
 
 @pytest.fixture
 def app(app_database):
-    """The real app plus test-only routes (the business routes do not exist yet)."""
+    """The real app plus the test-only routes of `backend_support.py`.
+
+    Those are `/items`, `/boom` and `/raise-*`.
+    """
     from backend_support import create_test_router
 
     from socboard.app import create_app
@@ -87,3 +99,11 @@ def crash_client(app):
     from fastapi.testclient import TestClient
 
     return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def real_crash_client(real_app):
+    """Like `crash_client`, over the real app only: no test-only routes."""
+    from fastapi.testclient import TestClient
+
+    return TestClient(real_app, raise_server_exceptions=False)

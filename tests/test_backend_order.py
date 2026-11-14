@@ -2,12 +2,12 @@
 
 Contract order: 401, then a role check that needs no case lookup (403), then the generic schema
 422, then the case-bound checks. This holds only because authentication and the role check are
-route dependencies (tests/backend_support.py), never inline in a handler.
+route dependencies (`socboard/auth.py`, `socboard/cases.py`), never inline in a handler.
 
 These tests are the repository's proof of the contract's TESTED claim (fastapi 0.162.4,
 starlette 1.10.0, pydantic 2.14.3). The contract's probe is not in the repository. Keep them, and
-do not weaken them, when #13 and #14 replace the test-only dependencies with the real ones.
-Each body is exactly `{ code, message }`.
+do not weaken them. The `GET /api/cases` tests hit the real route. Each body is exactly
+`{ code, message }`.
 """
 
 from backend_support import ANALYST_ID, ANALYST_TOKEN, KNOWN_CASE_ID, LEAD_TOKEN
@@ -25,7 +25,7 @@ def check(response, status, code):
     assert body["code"] == code
 
 
-# --- GET /cases (the closed-cases list) --------------------------------------------------------
+# --- GET /cases (the closed-cases list; the real route, socboard/cases.py) ---------------------
 
 
 def test_cases_a_no_token_and_no_status_is_401(client):
