@@ -48,7 +48,7 @@ No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS
 
 `ci-access/` defines what a GitHub Actions job may do in AWS: one OIDC identity provider and three roles. **The human applies it, and only the human**: an agent never runs `init`, `plan`, `apply` or `destroy`, and CI never applies it (Deploy decision 10), so CI cannot widen its own permissions. Apply it after `state/`. It does not depend on `iam-and-budgets/` being applied first, because the apply role names the instance role by its ARN only.
 
-**Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have run only in CI. Every "Expected" line below is what the author expects, not something seen. Every AWS argument and behaviour in `ci-access/*.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19). Decision record: `_docs/decisions/2026-11-14T0928Z-ci-oidc-roles.md` (proposed).
+**Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have run only in CI. Every "Expected" line below is what the author expects, not something seen. Every AWS argument and behaviour in `ci-access/*.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19). Decision record: `_docs/decisions/2026-11-14T0928Z-ci-oidc-roles.md` (approved).
 
 ### What it creates
 
