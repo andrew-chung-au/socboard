@@ -57,6 +57,7 @@ FORBIDDEN_MESSAGE = "You do not have permission to do this."
 INVALID_CREDENTIALS_MESSAGE = "Invalid username or password."
 INVALID_API_KEY_MESSAGE = "A valid API key is required."
 RATE_LIMITED_MESSAGE = "Too many failed sign-in attempts. Try again later."
+INGEST_RATE_LIMITED_MESSAGE = "Too many alerts. Try again later."
 KEY_HEADER = "X-API-Key"
 
 ROLE_LEAD = "lead"
@@ -148,6 +149,23 @@ def require_api_key(
     sent = _digest(provided.encode("latin-1", "replace"))
     if not hmac.compare_digest(sent, _digest(expected.encode("utf-8"))):
         raise invalid_api_key()
+
+
+def limit_ingest_rate(request: Request) -> None:
+    """Route dependency after `require_api_key`: 429 `rate_limited` above the configured rate (#183).
+
+    It runs only for a request with the valid key (a wrong or missing key was refused with 401
+    first), and before the body is validated or anything is stored. It counts every such request,
+    including one the body check later refuses with 422."""
+    retry_after = request.app.state.ingest_limiter.admit()
+    if retry_after is not None:
+        logger.info("Ingest refused: rate limit")
+        raise ApiHTTPException(
+            429,
+            RATE_LIMITED,
+            INGEST_RATE_LIMITED_MESSAGE,
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def current_user(

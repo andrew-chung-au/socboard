@@ -19,7 +19,7 @@ from test_ingest_api import (
     table_rows,
 )
 
-from socboard import ingest, ratelimit
+from socboard import auth, ingest, ratelimit
 from socboard.app import create_app
 from socboard.auth import ConfigError
 from socboard.models import Alert, AuditEntry, Case
@@ -167,7 +167,7 @@ def test_above_the_rate_the_answer_is_429_with_a_code_a_fixed_message_and_retry_
         assert post(site.client).status_code == 201
     response = post(site.client)
     assert response.status_code == 429
-    assert response.json() == {"code": "rate_limited", "message": ingest.RATE_LIMITED_MESSAGE}
+    assert response.json() == {"code": "rate_limited", "message": auth.INGEST_RATE_LIMITED_MESSAGE}
     assert response.headers["retry-after"] == "60"
 
 
