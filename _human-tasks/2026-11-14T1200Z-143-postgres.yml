@@ -1,0 +1,88 @@
+# Postgres job (#143): migrate, seed and a health and login smoke against a Postgres 16 service.
+# Throwaway credentials, defined here and used nowhere else; no repository secret is read.
+name: socboard postgres
+
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16.15
+        env:
+          POSTGRES_DB: socboard_ci
+          POSTGRES_USER: socboard_ci
+          POSTGRES_PASSWORD: ci-throwaway-not-a-secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U socboard_ci -d socboard_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_ci:ci-throwaway-not-a-secret@127.0.0.1:5432/socboard_ci
+      SOCBOARD_TOKEN_SECRET: ci-only-token-secret-0123456789abcdef
+      SOCBOARD_SEED_PASSWORD_ANALYST_A: ci-analyst-a-password
+      SOCBOARD_SEED_PASSWORD_ANALYST_B: ci-analyst-b-password
+      SOCBOARD_SEED_PASSWORD_LEAD: ci-lead-password-xyz
+      PGPASSWORD: ci-throwaway-not-a-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+
+      - run: uv sync --locked
+
+      - name: Check Python version
+        run: uv run --locked python scripts/check_python_version.py
+
+      - name: Migrate twice; the second run changes nothing
+        run: |
+          make migrate
+          psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2" > .scratch-schema-1.txt
+          psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT version_num FROM alembic_version" | tee .scratch-version-1.txt
+          make migrate
+          psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2" > .scratch-schema-2.txt
+          psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT version_num FROM alembic_version" > .scratch-version-2.txt
+          diff .scratch-schema-1.txt .scratch-schema-2.txt
+          diff .scratch-version-1.txt .scratch-version-2.txt
+
+      - name: The audit ids are 64-bit and no trigger exists yet (D6a adds them)
+        run: |
+          test "$(psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT data_type FROM information_schema.columns WHERE table_name = 'audit_entries' AND column_name = 'id'")" = "bigint"
+          test "$(psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT count(*) FROM pg_trigger WHERE tgrelid = 'audit_entries'::regclass AND NOT tgisinternal")" = "0"
+
+      - name: Seed twice; the second run inserts nothing
+        run: |
+          make seed
+          psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM assets)" | tee .scratch-counts-1.txt
+          make seed
+          psql -h 127.0.0.1 -U socboard_ci -d socboard_ci -Atc "SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM assets)" > .scratch-counts-2.txt
+          diff .scratch-counts-1.txt .scratch-counts-2.txt
+
+      - name: Backend answers health and a seeded login
+        run: |
+          make backend-run
+          curl -fsS http://127.0.0.1:8000/api/health
+          echo
+          curl -fsS -o /dev/null -w "login %{http_code}\n" -H "Content-Type: application/json" \
+            -d '{"username": "analyst-a", "password": "ci-analyst-a-password"}' http://127.0.0.1:8000/api/login
+          make backend-stop
+
+      - name: A refused login user gives the generic 500 and leaks no part of the URL
+        env:
+          SOCBOARD_DATABASE_URL: postgresql+psycopg://ghost_user_5k2q:Distinct-Throwaway-7731@127.0.0.1:5432/no_such_db_9x4w
+        run: bash scripts/postgres_no_leak.sh ghost_user_5k2q Distinct-Throwaway-7731 no_such_db_9x4w
+
+      - name: A missing database for the real user gives the generic 500 and leaks no part of the URL
+        env:
+          # 127.0.0.2 is loopback too, so the host can be told apart from the backend's own 127.0.0.1.
+          SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_ci:ci-throwaway-not-a-secret@127.0.0.2:5432/no_such_db_9x4w
+        run: bash scripts/postgres_no_leak.sh socboard_ci ci-throwaway-not-a-secret no_such_db_9x4w 127.0.0.2 :5432
