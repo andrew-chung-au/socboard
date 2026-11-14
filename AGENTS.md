@@ -45,7 +45,7 @@ Layout: `socboard/` (application package), `frontend/` (React + TypeScript front
 - **Dependencies:** use `uv add` for runtime dependencies and `uv add --dev` for development dependencies; commit `pyproject.toml` and `uv.lock`.
 - **Session summaries:** `_session-summaries/`, named per `_docs/agent-kit/procedures/session-summary.md`.
 - **Readable config:** none.
-- **Ponytail:** the Engineer reads `_docs/vendor/ponytail/ponytail.md` before implementing and follows it at level `full`; this file, the role file and the issue's criteria win where they differ. After the last QA PASS, the orchestrator launches the Reviewer (`_docs/team/reviewer.md`) and posts its report on the issue, starting `Orchestrator: Reviewer report`; the human labels each finding at the decision point and decides what to apply. Why and how it is measured: `_docs/decisions/2026-11-12T2300Z-ponytail-adopt.md`.
+- **Ponytail:** the Engineer reads `_docs/vendor/ponytail/ponytail.md` before implementing and follows it at level `full`; this file, the role file and the issue's criteria win where they differ. There is no Reviewer launch (`_docs/decisions/2026-11-14T0953Z-drop-reviewer.md`). Why ponytail is used: `_docs/decisions/2026-11-12T2300Z-ponytail-adopt.md`.
 
 <!-- SHARED START: from _docs/agent-kit/templates/AGENTS.md.template. Change it there first, then copy it here, down to SHARED END. -->
 
