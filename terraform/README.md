@@ -43,3 +43,54 @@ The bucket has `force_destroy = false` and holds every version of the state, so 
 ## What is deliberately not here
 
 No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS account number enters the repository. Noncurrent versions expire after 90 days (`state/main.tf`).
+
+# Terraform: the instance's IAM role, the snapshot schedule and the budgets
+
+`iam-and-budgets/` defines the instance role and profile, the daily snapshot schedule of the data volume with its execution role, and three budget notifications. **The human applies it, and only the human**: an agent never runs `init`, `plan`, `apply` or `destroy`, and CI never applies it (Deploy decision 10). Apply it after `state/` and **before D17b** (the CI-applied server part, not filed yet), which needs its output.
+
+**Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have run only in CI. Every "Expected" line below is what the author expects, not something seen. Every AWS argument and behaviour in `iam-and-budgets/main.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19). Decision record: `_docs/decisions/2026-11-14T0907Z-instance-iam-snapshots-budgets.md` (proposed).
+
+## What it creates
+
+- Role `socboard-instance` (only `ec2.amazonaws.com` may assume it) with the AWS-managed `AmazonSSMManagedInstanceCore` policy and one inline statement: `secretsmanager:GetSecretValue` on the one secret ARN you set. Nothing else, no write, no other service. Instance profile `socboard-instance` wraps it.
+- **The snapshot schedule lives here, not in D17b.** An Amazon Data Lifecycle Manager policy snapshots every volume tagged `project=socboard` daily at 03:00 UTC and keeps the 7 newest, so it can be applied before the volume exists. Its execution role `socboard-snapshot` (only `dlm.amazonaws.com` may assume it) is here too. The tag must be unique to this deployment.
+- One monthly cost budget with notifications at 50, 80 and 100 percent of actual spend, sent to your address.
+- Every resource is tagged `project=socboard`. No secret is read, held or output.
+
+## Outputs D17b reads
+
+`instance_profile_name`: the name of the instance profile D17b attaches to the instance. Nothing else.
+
+## The cost
+
+A later change to the instance's permissions, the snapshot schedule or its retention is a manual apply by the human here; CI cannot do it. This is the price of keeping every IAM resource out of CI's reach.
+
+## Steps for the human (not yet run)
+
+Run each step in `terraform/iam-and-budgets/` with AWS credentials for your own account in your shell (never in a file in this repository). The state bucket from `state/` must already exist, and you create the Secrets Manager secret yourself, outside Terraform.
+
+1. Copy `terraform.tfvars.example` to `terraform.tfvars` (git-ignored). Set `app_secret_arn` to your secret's ARN, `monthly_budget_usd` to your monthly limit and `notification_email` to your address.
+   Expected: `git status` does not list `terraform.tfvars`.
+2. Copy `backend.tf.example` to `backend.tf`, then run `terraform init -backend-config="bucket=<your state bucket_name>"`. Commit `backend.tf`: it holds no bucket name and no secret.
+   Expected: "Successfully configured the backend "s3"!" and "Terraform has been successfully initialized!"; `.terraform.lock.hcl` appears.
+3. Before committing `.terraform.lock.hcl`, add the checksums for every platform that will use it: `terraform providers lock -platform=linux_amd64 -platform=<your own platform>` (skip the second if yours is `linux_amd64`). Then commit it.
+   Expected: "Success! Terraform has updated the lock file."
+4. `terraform plan`, and read it: the role's inline policy must name exactly your one secret ARN.
+   Expected: "Plan: 8 to add, 0 to change, 0 to destroy." (2 roles, 2 role policy attachments, 1 inline role policy, 1 instance profile, 1 lifecycle policy, 1 budget). Stop on any surprise.
+5. `terraform apply`, answering `yes`.
+   Expected: "Apply complete! Resources: 8 added, 0 changed, 0 destroyed." and the output `instance_profile_name = "socboard-instance"`. The budget address may get a confirmation mail.
+6. Check: in the IAM console the role `socboard-instance` has one managed policy and one inline policy; in the EC2 console under Lifecycle Manager the policy is `ENABLED`.
+   Expected: as described. Whether the managed policy is wider than the agent needs is a `VERIFY:` for you to judge here.
+
+Later `init` runs need the same `-backend-config="bucket=<name>"` argument.
+
+## Teardown (the human's step, destructive)
+
+Destroy in this order, because the state bucket holds this part's state: D17b's server part first (it uses the instance profile), then this part, the CI-access part, and the state bucket last (Deploy item D23). Before the state bucket is emptied, this part's state must be back in a local file. Run these in `terraform/iam-and-budgets/`. All **not yet run**.
+
+1. Delete `backend.tf` (and commit the deletion).
+   Expected: `backend.tf` is gone; `backend.tf.example` stays.
+2. `terraform init -migrate-state`, answering `yes`.
+   Expected: `init` says the backend was removed and copies the state to a local `terraform.tfstate`; `terraform state list` shows the 8 resources.
+3. `terraform destroy`.
+   Expected: "Destroy complete! Resources: 8 destroyed." Snapshots the schedule already took are not deleted by this; delete them by hand if you no longer want them (`VERIFY:`).
