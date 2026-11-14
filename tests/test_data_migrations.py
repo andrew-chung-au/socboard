@@ -16,6 +16,7 @@ from alembic.script import ScriptDirectory
 from data_support import (
     REPO_ROOT,
     db_url,  # noqa: F401
+    empty_database_url,
     insert_alert,
     insert_user,
     isolated_database_env,  # noqa: F401
@@ -143,6 +144,7 @@ def test_a_round_trip_leaves_empty_tables(db_url):
 # --- the command: exit codes and fixed text ----------------------------------------------------
 
 
+@pytest.mark.sqlite_only("asserts that the SQLite database file exists after the run")
 def test_main_applies_the_migrations_and_prints_no_url(tmp_path, capsys):
     url = sqlite_url(tmp_path / "main.db")
     assert migrate.main({database.ENV_NAME: url}) == 0
@@ -184,7 +186,7 @@ def test_main_exits_1_when_the_migration_fails_and_prints_no_message(monkeypatch
         raise RuntimeError("secret-password-9")
 
     monkeypatch.setattr(migrate, "upgrade", explode)
-    assert migrate.main({database.ENV_NAME: sqlite_url(tmp_path / "x.db")}) == 1
+    assert migrate.main({database.ENV_NAME: empty_database_url(tmp_path, "x.db")}) == 1
     captured = capsys.readouterr()
     assert "secret-password" not in captured.out + captured.err
     assert "RuntimeError" in captured.err
@@ -296,6 +298,7 @@ def make_script_dir(root: Path, name: str, migrations: dict[str, str]) -> Path:
 # --- the foreign-key pragma and the migration connection (F9) ------------------------------------
 
 
+@pytest.mark.sqlite_only("uses SQLite pragmas (table_info, foreign_key_check) and a SQLite table rebuild")
 def test_a_two_migration_example_that_rebuilds_a_referenced_table_applies(tmp_path):
     scripts = make_script_dir(
         tmp_path, "two", {"a1_parent_and_child.py": PARENT_AND_CHILD, "b2_rebuild.py": REBUILD_PARENT}
@@ -318,6 +321,7 @@ def test_a_two_migration_example_that_rebuilds_a_referenced_table_applies(tmp_pa
     assert violations == []
 
 
+@pytest.mark.sqlite_only("shows the SQLite foreign-key pragma that is off for the migration connection")
 def test_the_same_two_migrations_fail_on_an_engine_with_foreign_keys_on(tmp_path):
     # The control: with the pragma on (the engine's setting for everything but the migration
     # connection) the DROP of a table with child rows is refused. It shows the example is real.
@@ -334,6 +338,7 @@ def test_the_same_two_migrations_fail_on_an_engine_with_foreign_keys_on(tmp_path
         engine.dispose()
 
 
+@pytest.mark.sqlite_only("reads the SQLite foreign_keys pragma")
 def test_the_migration_connection_switches_foreign_keys_off_and_the_engine_does_not(tmp_path):
     seen = {}
 
@@ -352,12 +357,14 @@ def test_the_migration_connection_switches_foreign_keys_off_and_the_engine_does_
         engine.dispose()
 
 
+@pytest.mark.sqlite_only("the foreign-key check after a migration runs only on SQLite")
 def test_a_foreign_key_violation_left_by_a_migration_is_a_failure(tmp_path):
     scripts = make_script_dir(tmp_path, "orphan", {"c3_orphan.py": ORPHAN_CHILD})
     with pytest.raises(migrate.MigrationError):
         migrate.upgrade(sqlite_url(tmp_path / "orphan.db"), script_location=scripts)
 
 
+@pytest.mark.sqlite_only("the foreign-key check after a migration runs only on SQLite")
 def test_main_exits_1_for_a_foreign_key_violation(monkeypatch, tmp_path, capsys):
     scripts = make_script_dir(tmp_path, "orphan", {"c3_orphan.py": ORPHAN_CHILD})
     monkeypatch.setattr(migrate, "SCRIPT_LOCATION", scripts)
@@ -374,7 +381,7 @@ def test_a_generated_migration_runs_unedited_and_imports_nothing_from_socboard(t
     shutil.copy(migrate.SCRIPT_LOCATION / "env.py", folder / "env.py")
     shutil.copy(migrate.SCRIPT_LOCATION / "script.py.mako", folder / "script.py.mako")
 
-    empty_url = sqlite_url(tmp_path / "empty.db")
+    empty_url = empty_database_url(tmp_path, "empty.db")
     engine = database.create_db_engine(empty_url)
     try:
         with engine.connect() as conn:
@@ -396,7 +403,7 @@ def test_a_generated_migration_runs_unedited_and_imports_nothing_from_socboard(t
     assert "from socboard" not in source
     assert "socboard.db_types" not in source
 
-    target_url = sqlite_url(tmp_path / "from-generated.db")
+    target_url = empty_database_url(tmp_path, "from-generated.db")
     migrate.upgrade(target_url, script_location=folder)
     assert model_differences(target_url) == []
 
@@ -406,14 +413,14 @@ def test_the_generated_migration_gives_a_database_the_application_can_use(tmp_pa
     (folder / "versions").mkdir(parents=True)
     shutil.copy(migrate.SCRIPT_LOCATION / "env.py", folder / "env.py")
     shutil.copy(migrate.SCRIPT_LOCATION / "script.py.mako", folder / "script.py.mako")
-    engine = database.create_db_engine(sqlite_url(tmp_path / "empty.db"))
+    engine = database.create_db_engine(empty_database_url(tmp_path, "empty.db"))
     try:
         with engine.connect() as conn:
             command.revision(migrate.make_config(folder, conn), message="gen", autogenerate=True, rev_id="gen2")
     finally:
         engine.dispose()
 
-    url = sqlite_url(tmp_path / "used.db")
+    url = empty_database_url(tmp_path, "used.db")
     migrate.upgrade(url, script_location=folder)
     engine = database.create_db_engine(url)
     try:
@@ -436,7 +443,7 @@ def test_new_refuses_a_bad_name_and_creates_nothing(name, tmp_path, monkeypatch,
     shutil.copytree(migrate.SCRIPT_LOCATION, folder, ignore=shutil.ignore_patterns("__pycache__"))
     monkeypatch.setattr(migrate, "SCRIPT_LOCATION", folder)
     before = sorted(path.name for path in (folder / "versions").iterdir())
-    env = {database.ENV_NAME: sqlite_url(tmp_path / "new.db")}
+    env = {database.ENV_NAME: empty_database_url(tmp_path, "new.db")}
     assert migrate.main(env, ["new", name]) == 2
     assert sorted(path.name for path in (folder / "versions").iterdir()) == before
     assert not (tmp_path / "new.db").exists()
@@ -459,7 +466,7 @@ def test_new_creates_one_migration_file_after_the_latest(tmp_path, monkeypatch, 
     shutil.copytree(migrate.SCRIPT_LOCATION, folder, ignore=shutil.ignore_patterns("__pycache__"))
     monkeypatch.setattr(migrate, "SCRIPT_LOCATION", folder)
     before = {path.name for path in (folder / "versions").glob("*.py")}
-    env = {database.ENV_NAME: sqlite_url(tmp_path / "new.db")}
+    env = {database.ENV_NAME: empty_database_url(tmp_path, "new.db")}
     assert migrate.main(env, ["new", "check_the_command"]) == 0
     created = {path.name for path in (folder / "versions").glob("*.py")} - before
     assert len(created) == 1

@@ -1,4 +1,5 @@
 import pytest
+from db_target import SQLITE_MEMORY_URL
 
 from socboard.server import DEFAULT_HOST, DEFAULT_PORT, BindError, main, resolve_bind
 
@@ -38,7 +39,7 @@ FLAG = "--allow-non-loopback-host"
 USAGE = "usage: python -m socboard.server [--allow-non-loopback-host]"
 GOOD_ENV = {
     "SOCBOARD_TOKEN_SECRET": "test-only-signing-secret-0123456789abcdef",
-    "SOCBOARD_DATABASE_URL": "sqlite:///:memory:",
+    "SOCBOARD_DATABASE_URL": SQLITE_MEMORY_URL,
 }
 
 

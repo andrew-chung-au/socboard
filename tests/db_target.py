@@ -36,8 +36,16 @@ _created: list[str] = []
 _kept: set[str] = set()
 
 
+SQLITE_MEMORY_URL = "sqlite:///:memory:"
+
+
 def sqlite_url(path: Path) -> str:
-    """The URL of an SQLite file. The only place in the tests that writes the SQLite URL text."""
+    """The URL of an SQLite file. The one place in the tests that writes the SQLite URL text.
+
+    Tests that need a database to work with ask for `empty_database_url` or `migrated_database_url`
+    instead. A test that needs an SQLite URL on purpose (it never opens a database, or tests an
+    SQLite-only form) uses this and, where it opens SQLite files, carries `sqlite_only`.
+    """
     return "sqlite:///" + path.as_posix()
 
 

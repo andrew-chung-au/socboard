@@ -21,19 +21,22 @@ MARKER_LINE = (
 def pytest_configure(config):
     config.addinivalue_line("markers", MARKER_LINE)
     try:
-        db_target.server_url()
+        selected = db_target.server_url() is not None
     except ValueError as error:
         raise pytest.UsageError(str(error)) from None
+    if selected:
+        # Stop the run here, before any test, when the server cannot be reached. The error text is the
+        # application's fixed connection text, which holds no part of the URL.
+        try:
+            config._postgres_databases_before = len(db_target.listed_databases())
+        except Exception as error:
+            raise pytest.UsageError(f"cannot reach the Postgres server named by {db_target.ENV_NAME}: {error}") from None
 
 
 def pytest_report_header(config):
     if not db_target.is_postgres():
         return "test database: SQLite (SOCBOARD_TEST_POSTGRES_URL is not set)"
-    try:
-        before = len(db_target.listed_databases())
-    except Exception as error:  # a server that cannot be reached stops the run here, with fixed text
-        raise pytest.UsageError(f"cannot reach the Postgres server named by SOCBOARD_TEST_POSTGRES_URL: {error}") from None
-    config._postgres_databases_before = before
+    before = config._postgres_databases_before
     return f"test database: Postgres ({before} test database(s) on the server before the run)"
 
 
