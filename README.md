@@ -98,6 +98,27 @@ Serving the built site: after `make frontend-build`, the backend serves `fronten
 
 Binding beyond localhost: the backend listens on `127.0.0.1`, `localhost` or `::1` only, and `make backend-run` always does. The one exception is the flag `--allow-non-loopback-host` of `python -m socboard.server`, which lets `SOCBOARD_HOST` be an IP address such as `0.0.0.0`. Only the container image's start command may pass it, because the app must listen on an address Docker and the reverse proxy can reach; the image's port is published on the host's loopback only. It is a flag, not an environment variable, so a variable left in a developer's shell cannot open the server to the network. Do not pass it by hand or from `make`. The flag takes no value, and a wrong or unknown argument exits 2.
 
+### Runtime variables
+
+Every runtime variable, from the one list in `socboard/settings.py` (a test fails if this table and that list disagree). The example env file at the repository root has the same names, with no values. Never put a value in this file, a commit or an issue.
+
+| Variable | Secret | Required in deployed mode | Rule |
+|---|---|---|---|
+| `SOCBOARD_TOKEN_SECRET` | yes | yes | At least 32 characters, not counting leading and trailing spaces; required in every mode. In deployed mode it must also not be one repeated character. |
+| `SOCBOARD_SEED_PASSWORD_ANALYST_A` | yes | no (the seed step needs it) | At least 12 characters; read by `make seed` only. |
+| `SOCBOARD_SEED_PASSWORD_ANALYST_B` | yes | no (the seed step needs it) | At least 12 characters; read by `make seed` only. |
+| `SOCBOARD_SEED_PASSWORD_LEAD` | yes | no (the seed step needs it) | At least 12 characters; read by `make seed` only. |
+| `SOCBOARD_INGEST_API_KEY` | yes | yes | At least 16 characters; without it ingest is closed and one warning is logged. In deployed mode it is required: at least 16 characters not counting leading and trailing spaces, and not one repeated character. |
+| `SOCBOARD_DATABASE_URL` | yes | yes | A valid database URL; default `socboard.db` in the repository root. In deployed mode it must be set. |
+| `SOCBOARD_HOST` | no | no | `127.0.0.1`, `localhost` or `::1` (default `127.0.0.1`); see "Binding beyond localhost". |
+| `SOCBOARD_PORT` | no | no | A whole number from 1 to 65535 (default 8000). |
+| `SOCBOARD_STATIC_DIR` | no | no | The built frontend folder (default `frontend/dist`); see "Serving the built site". |
+| `SOCBOARD_MODE` | no | no | Exactly `deployed` turns deployed mode on. Any other value, including an empty one or a different case, leaves it off. `make run`, `make backend-run` and the tests never set it. |
+
+Deployed mode: with `SOCBOARD_MODE` set to `deployed`, the backend refuses to start (exit code 2) when the token secret, the ingest key or the database URL is missing, empty, too short, made only of whitespace or (for the secret and the key) one repeated character. The message names the variable and never prints its value. Outside deployed mode nothing else changes.
+
+Build arguments, not runtime variables: `VITE_API_BASE_URL`, `VITE_FEATURE_REASSIGN`, `VITE_POLL_INTERVAL_MS` and `VITE_USE_MOCK` are fixed when the frontend is built (`make frontend-build`), so changing them later needs a rebuild.
+
 ## Currently Out of Scope
 
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
