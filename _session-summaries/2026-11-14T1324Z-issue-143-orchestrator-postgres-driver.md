@@ -84,7 +84,7 @@ none
 
 - `.venv` and the frontend packages installed in the sandbox with `make install`; the uv Python variables were set on single commands only. Not undone: the sandbox is discarded after the session.
 - `.scratch/` holds QA reports, CI logs and the new workflow copy (git-ignored). Not cleaned: `make clean-scratch` deletes everything in it, and the QA reports are posted on the issue.
-- Ten-odd log files in `/tmp` from the 20-run loop (outside the folder, against AGENTS.md); deleted at once.
+- Twenty log files in `/tmp` from the 20-run loop (outside the folder, against AGENTS.md); deleted at once.
 
 ## Interruptions
 
