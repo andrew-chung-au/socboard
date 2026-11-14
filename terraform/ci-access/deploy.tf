@@ -37,7 +37,8 @@ resource "aws_iam_role_policy" "deploy" {
     Statement = [
       # One call to `SendCommand` is checked against the instance and, separately, the document.
       # Only the instance carries the `project` tag, so each gets its own statement; a single
-      # tag-conditioned statement would fail on the document. VERIFY: this split.
+      # tag-conditioned statement would fail on the document. The service reference lists `SendCommand`
+      # resources as bucket, document, instance and managed-instance. VERIFY: this split at D19.
       {
         Sid      = "SendToTaggedInstances"
         Effect   = "Allow"
@@ -53,11 +54,14 @@ resource "aws_iam_role_policy" "deploy" {
         Action   = ["ssm:SendCommand"]
         Resource = [local.deploy_doc_arn]
       },
-      # VERIFY: whether these three accept a narrower resource than `*`.
+      # AWS authorises `GetCommandInvocation` only on `*`, with no condition key (service reference
+      # JSON, 2026-11-14), so it cannot be limited to the deploy document or the tagged instance. It
+      # needs a command id, which the workflow has from its own `SendCommand`. `ListCommands` and
+      # `ListCommandInvocations` (also `*` only) are left out so the role cannot list other commands.
       {
         Sid      = "ReadTheCommandResult"
         Effect   = "Allow"
-        Action   = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:ListCommands"]
+        Action   = ["ssm:GetCommandInvocation"]
         Resource = "*"
       },
       # Backs up the allow list: a document owned by AWS has no account number in its ARN, so this
@@ -67,6 +71,13 @@ resource "aws_iam_role_policy" "deploy" {
         Effect   = "Deny"
         Action   = ["ssm:SendCommand"]
         Resource = ["arn:aws:ssm:*::document/*"]
+      },
+      # Sending the document passes no role, so no IAM action is needed at all.
+      {
+        Sid      = "DenyHumanAppliedServices"
+        Effect   = "Deny"
+        Action   = concat(["iam:*"], local.human_only_actions)
+        Resource = "*"
       },
       {
         Sid      = "DenySecretValues"

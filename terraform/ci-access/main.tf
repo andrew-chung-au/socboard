@@ -68,6 +68,10 @@ locals {
     "secretsmanager:BatchGetSecretValue",
   ]
 
+  # The budgets and the snapshot schedule (DLM) are human-applied, with every IAM resource (Deploy
+  # decision 10, #162), so all three roles are denied them. IAM is denied separately in each role.
+  human_only_actions = ["dlm:*", "budgets:*"]
+
   oidc_audience = "sts.amazonaws.com"
 }
 

@@ -60,6 +60,13 @@ resource "aws_iam_role_policy" "plan" {
         Action   = ["ssm:DescribeDocument", "ssm:GetDocument", "ssm:ListTagsForResource"]
         Resource = [local.deploy_doc_arn]
       },
+      # A plan of the server part reads no IAM, budget or snapshot schedule.
+      {
+        Sid      = "DenyHumanAppliedServices"
+        Effect   = "Deny"
+        Action   = concat(["iam:*"], local.human_only_actions)
+        Resource = "*"
+      },
       {
         Sid      = "DenySecretValues"
         Effect   = "Deny"

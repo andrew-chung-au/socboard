@@ -44,19 +44,19 @@ The bucket has `force_destroy = false` and holds every version of the state, so 
 
 No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS account number enters the repository. Noncurrent versions expire after 90 days (`state/main.tf`).
 
-# Terraform: CI access (the GitHub OIDC provider and three roles)
+## CI access (the GitHub OIDC provider and three roles)
 
 `ci-access/` defines what a GitHub Actions job may do in AWS: one OIDC identity provider and three roles. **The human applies it, and only the human**: an agent never runs `init`, `plan`, `apply` or `destroy`, and CI never applies it (Deploy decision 10), so CI cannot widen its own permissions. Apply it after `state/`. It does not depend on `iam-and-budgets/` being applied first, because the apply role names the instance role by its ARN only.
 
-**Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have run only in CI. Every "Expected" line below is what the author expects, not something seen. Every AWS argument and behaviour in `ci-access/*.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19). Decision record: `_docs/decisions/2026-11-14T0928Z-ci-oidc-roles.md` (proposed).
+**Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have not run anywhere yet; the `terraform check` workflow runs them on the first pull request. Every "Expected" line below is what the author expects, not something seen. Every AWS argument and behaviour in `ci-access/*.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19). Decision record: `_docs/decisions/2026-11-14T0928Z-ci-oidc-roles.md` (proposed).
 
-## What it creates
+### What it creates
 
 | Role | Assumed by | May do | Never |
 |---|---|---|---|
-| `socboard-ci-plan` | any pull request run in this repository (subject ends `:pull_request`) | read the server state under `server/` in the state bucket, `ec2:Describe*`, read the deploy document | write anything, read a secret value |
-| `socboard-ci-apply` | a job in the `infra` Environment (subject ends `:environment:infra`) | read and write the server state under `server/`, create and change the server part's EC2 resources in `us-east-1`, manage the one deploy document, pass the instance role to EC2 | any IAM write (explicit deny on every write verb, so it cannot change its own role or policy), pass any other role, read a secret value |
-| `socboard-ci-deploy` | a job in the `deploy` Environment (subject ends `:environment:deploy`) | send the one deploy document to instances tagged `project=socboard`, read command results | run any AWS-owned document (so no generic shell), read a secret value |
+| `socboard-ci-plan` | any pull request run in this repository (subject ends `:pull_request`) | read the server state under `server/` in the state bucket, `ec2:Describe*`, read the deploy document | write anything, any `iam:*`, `dlm:*` or `budgets:*` action, read a secret value |
+| `socboard-ci-apply` | a job in the `infra` Environment (subject ends `:environment:infra`) | read and write the server state under `server/`, create EC2 resources in `us-east-1` only with the tag `project=socboard`, change only resources that carry it, manage the one deploy document, pass the instance role to EC2 | any IAM action but that one PassRole (explicit deny on `iam:*`, so it cannot change its own role or policy, or pass any other role), any `dlm:*` or `budgets:*` action, tag an existing untagged resource, read a secret value |
+| `socboard-ci-deploy` | a job in the `deploy` Environment (subject ends `:environment:deploy`) | send the one deploy document to instances tagged `project=socboard`, read a command's result by its id | run any AWS-owned document (so no generic shell), any `iam:*`, `dlm:*` or `budgets:*` action, read a secret value |
 
 - The provider is made here unless `reuse_oidc_provider_arn` is set. AWS allows one provider per URL in an account, so an account that already has one must reuse it.
 - Every trust condition requires the audience `sts.amazonaws.com` and one exact subject. The subject starts with `repo:<owner>@<owner id>/<repo>@<repo id>`, which is the form GitHub reported for this repository on 2026-11-14 (its API said `use_immutable_subject: true`). The numeric ids are therefore part of every trust, and a repository that was renamed or recreated cannot reuse a role. `VERIFY:` that a real token has this shape (D19).
@@ -64,19 +64,22 @@ No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS
 - **The plan role is open to every pull request**, including a pull request that edits a workflow. That is why it is read-only and cannot read a secret value. Pull requests from forks get no OIDC token from GitHub by default (`VERIFY:` in D18b).
 - The state bucket is shared by every part. The plan and apply roles reach only the `server/` prefix, so the CI-applied server part (D17b) must set its backend `key` under `server/`. The state of this part and of `iam-and-budgets/` lives outside that prefix, so the CI roles can neither read nor change it. A read-only plan cannot write the native lock file, so the plan job runs with `-lock=false` (D18b).
 - The apply role's EC2 list is a first guess at D17b's needs. If the first CI apply is refused an action, the human adds that one action and applies this part by hand. That is the intended cost of keeping IAM out of CI's reach.
+- **CI makes no IAM change.** The only IAM action any CI role may take is the apply role passing `socboard-instance` to `ec2.amazonaws.com`. Two explicit denies do it: `iam:*` on every resource except the instance role, and every action except `iam:PassRole` on the instance role. (A plain `Deny iam:*` would also block that PassRole, since an explicit deny always wins.) IAM reads are denied too, so D17b must name the instance profile directly and use no IAM data source. The plan and deploy roles deny `iam:*` outright. All three deny `dlm:*` and `budgets:*`: the snapshot schedule and the budgets are human-applied (#162).
+- The apply role's EC2 writes are tag-scoped. D17b must put `project=socboard` on the instance, its volumes (`volume_tags`), the security group and the Elastic IP in the create call; tags can be added afterwards only to a resource that already has it. AWS cannot tag-scope the reads (`ec2:Describe*`), the image, subnet and network interface a launch refers to, the VPC a security group is made in, a new security group rule, or the network interface named when an Elastic IP is moved; each of those calls also names a tagged resource. The role can still change the tagged instance itself, including its user data, which is how D17b manages the server.
+- The deploy role reads results with `ssm:GetCommandInvocation` only. AWS authorises it on `*` with no condition key, so it cannot be limited to the deploy document or the instance; the role needs a command id and cannot list other commands.
 - The deploy document is created by the CI-applied server part (D17b or D17c), named `socboard-deploy`. This part only names it. The pattern that checks the image digest lives inside the document, not in this role's policy.
 - No access key, user or secret exists here. No `data` source reads a secret, and no output holds a secret value. The three outputs are role ARNs.
 
-## Outputs
+### Outputs
 
 `plan_role_arn`, `apply_role_arn` and `deploy_role_arn`. The workflows (D18b, D22a, D22b) take them as repository variables, not secrets.
 
-## Steps for the human (not yet run)
+### Steps for the human (not yet run)
 
 Run each step in `terraform/ci-access/` with AWS credentials for your own account in your shell (never in a file in this repository). The state bucket from `state/` must already exist.
 
 1. Find out whether the account already has a GitHub OIDC provider: `aws iam list-open-id-connect-providers`.
-   Expected: a list of provider ARNs. If one ends in `oidc-provider/token.actions.githubusercontent.com` (an earlier project in the same account may have made it), put that ARN in `reuse_oidc_provider_arn` in step 2. If none does, leave the variable out. A second provider for the same URL cannot be created.
+   Expected: a list of provider ARNs. If one ends in `oidc-provider/token.actions.githubusercontent.com`, put that ARN in `reuse_oidc_provider_arn` in step 2. If none does, leave the variable out. A second provider for the same URL cannot be created.
 2. Copy `terraform.tfvars.example` to `terraform.tfvars` (git-ignored) and set `repo_owner_id` and `repo_id` (`gh api repos/<owner>/<repo> --jq '.owner.id, .id'`), your state bucket name, and `reuse_oidc_provider_arn` if step 1 found a provider.
    Expected: `git status` does not list `terraform.tfvars`.
 3. Copy `backend.tf.example` to `backend.tf`, then run `terraform init -backend-config="bucket=<your state bucket_name>"`. Commit `backend.tf`: it holds no bucket name and no secret.
@@ -91,11 +94,11 @@ Run each step in `terraform/ci-access/` with AWS credentials for your own accoun
 
 Later `init` runs need the same `-backend-config="bucket=<name>"` argument.
 
-## If the subject has no ids
+### If the subject has no ids
 
 If a real token's subject is `repo:<owner>/<repo>:...` without the numeric ids (for example if this repository was set to the old format), every assume-role attempt is refused, because the trust names the id form. Do not loosen the trust. Either switch the repository to the immutable format in GitHub, or change `local.sub_prefix` in `ci-access/main.tf` to the name-only form and note the weaker guarantee in the decision record. The ids cannot be required separately: AWS accepts conditions on the audience and the subject for this provider, not on arbitrary token claims (`VERIFY:`).
 
-## Teardown (the human's step, destructive)
+### Teardown (the human's step, destructive)
 
 Destroy this part after D17b's server part, because the CI roles are what CI uses for that part, and before the state bucket (Deploy item D23). Before the state bucket is emptied, this part's state must be back in a local file. Run these in `terraform/ci-access/`. All **not yet run**.
 
