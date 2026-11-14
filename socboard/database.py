@@ -10,9 +10,13 @@ Engine settings that tests read back:
 - SQLite: foreign keys switched on for every connection the engine opens (the pragma is off by
   default), the driver's default transaction mode, and a busy timeout of 5 s. Never
   `BEGIN IMMEDIATE`. `python -m socboard.migrate` is the one place that switches the pragma off.
+- Any other database (Postgres, #143): a failed connection raises `DatabaseConnectError` with fixed
+  text (plus the driver's error class name and SQLSTATE) and no chained driver error, because the
+  driver's message names the user and the database.
 """
 
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -22,7 +26,7 @@ require("sqlalchemy")
 
 from sqlalchemy import create_engine, event  # noqa: E402
 from sqlalchemy.engine import URL, Engine, make_url  # noqa: E402
-from sqlalchemy.exc import ArgumentError  # noqa: E402
+from sqlalchemy.exc import ArgumentError, SQLAlchemyError  # noqa: E402
 
 import socboard.audit_guard  # noqa: E402,F401  (registers the append-only guards)
 
@@ -32,10 +36,35 @@ DEFAULT_DATABASE_FILE = REPO_ROOT / "socboard.db"
 BUSY_TIMEOUT_SECONDS = 5
 
 INVALID_URL_MESSAGE = "SOCBOARD_DATABASE_URL is not a valid database URL."
+CONNECT_FAILED_MESSAGE = "Could not connect to the database."
+_CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+_SQLSTATE = re.compile(r"[0-9A-Z]{5}")
 
 
 class DatabaseUrlError(ValueError):
     """The database URL is not usable. The message is fixed text and never holds the value."""
+
+
+class DatabaseConnectError(SQLAlchemyError):
+    """A server database refused or failed the connection. The message is fixed text.
+
+    The driver's own message names the user and the database (Postgres: `password authentication
+    failed for user "..."`), and the 500 handler logs the exception, so it is replaced (#143).
+    A SQLAlchemy error type, so code that catches database errors still catches it.
+    """
+
+
+def _connect_failure_text(error: Exception) -> str:
+    """The fixed message plus the error's class name and SQLSTATE, each only if it is plain.
+
+    A class name is a Python identifier and a SQLSTATE is five digits or capital letters, so
+    neither can carry a user name, password, host or database name.
+    """
+    name = type(error).__name__
+    kind = name if _CLASS_NAME.fullmatch(name) else "unknown"
+    code = getattr(error, "sqlstate", None)
+    state = code if isinstance(code, str) and _SQLSTATE.fullmatch(code) else "none"
+    return f"{CONNECT_FAILED_MESSAGE} ({kind}, SQLSTATE {state})"
 
 
 def default_url() -> URL:
@@ -67,6 +96,14 @@ def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
         cursor.close()
 
 
+def _connect_without_detail(dialect, connection_record, cargs, cparams):
+    """Open a server connection; on failure raise fixed text with no chained driver error."""
+    try:
+        return dialect.loaded_dbapi.connect(*cargs, **cparams)
+    except Exception as error:
+        raise DatabaseConnectError(_connect_failure_text(error)) from None
+
+
 def create_db_engine(url: "str | URL | None" = None) -> Engine:
     """Create the engine for `url` (default: from the environment)."""
     resolved = resolve_url() if url is None else parse_url(url)
@@ -80,4 +117,6 @@ def create_db_engine(url: "str | URL | None" = None) -> Engine:
         raise DatabaseUrlError(INVALID_URL_MESSAGE) from None
     if is_sqlite:
         event.listen(engine, "connect", _enable_foreign_keys)
+    else:
+        event.listen(engine, "do_connect", _connect_without_detail)
     return engine

@@ -55,6 +55,13 @@ def _id():
     return sa.BigInteger().with_variant(sa.Integer(), "sqlite")
 
 
+def _is_sqlite() -> bool:
+    # The triggers above are SQLite syntax (`RAISE(ABORT, ...)`), so they are created only on
+    # SQLite; the Postgres append-only rule is a later issue (D6a). `sqlite_autoincrement` is
+    # a SQLite-prefixed option that other dialects ignore, so it needs no guard.
+    return op.get_context().dialect.name == "sqlite"
+
+
 def upgrade() -> None:
     op.create_table(
         "users",
@@ -174,15 +181,17 @@ def upgrade() -> None:
     # triggers; Postgres gets equivalents in the Deploy phase. Each message is fixed text with
     # no value in it. Trigger (c) fires before the insert is attempted, so it also blocks
     # INSERT OR REPLACE, REPLACE and ON CONFLICT DO UPDATE, whether or not PRAGMA
-    # recursive_triggers is on.
-    for statement in AUDIT_TRIGGERS.values():
-        op.execute(statement)
+    # recursive_triggers is on. SQLite only (see `_is_sqlite`).
+    if _is_sqlite():
+        for statement in AUDIT_TRIGGERS.values():
+            op.execute(statement)
 
 
 def downgrade() -> None:
     # The triggers go before the table. Literal statements: no query is built by formatting.
-    for statement in AUDIT_TRIGGER_DROPS:
-        op.execute(statement)
+    if _is_sqlite():
+        for statement in AUDIT_TRIGGER_DROPS:
+            op.execute(statement)
     op.drop_index(op.f("ix_audit_entries_case_id"), table_name="audit_entries")
     op.drop_table("audit_entries")
     op.drop_index(op.f("ix_notes_case_id"), table_name="notes")
