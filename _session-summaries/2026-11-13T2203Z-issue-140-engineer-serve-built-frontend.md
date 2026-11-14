@@ -13,7 +13,15 @@ The app now serves `frontend/dist`: `socboard/spa.py` adds one GET/HEAD fallback
 
 ### Engineer
 
-Not asked yet (the orchestrator asks after QA PASS).
+unknown (role not asked). The Engineer's comments on the issue carry no Reflection block; the launches were separate and cannot be resumed.
+
+### QA
+
+unknown (role not asked)
+
+### Orchestrator
+
+unknown (role not asked). Close-out by the Hardening session on 2026-11-14: PR #150 merged as `efbf67c` (on `origin/main`); the closing QA PASS is the second Heavy launch at `35cad54` (https://github.com/andrew-chung-au/socboard/issues/140#issuecomment-6872787764), after the re-check PASS at `2d030c5` (https://github.com/andrew-chung-au/socboard/issues/140#issuecomment-6869889192). The follow-up issue 160 holds the Reviewer findings and the QA Lows left unfixed by the human's decision.
 
 ## Launch usage
 
