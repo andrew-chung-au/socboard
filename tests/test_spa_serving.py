@@ -162,6 +162,11 @@ def test_absolute_path_is_refused(client, site):
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize("path", ["/a%00.js", "/%00"])
+def test_encoded_nul_byte_is_the_json_404(client, path):
+    assert_json_error(client.get(path), 404, "not_found")
+
+
 def test_symlink_out_of_dist_is_refused(client, site):
     link = site / "assets" / "link.js"
     os.symlink(site.parent.parent / "secret.txt", link)

@@ -83,7 +83,7 @@ export VITE_USE_MOCK=false
 make frontend-start
 ```
 
-The dev server sends every `/api` request to the backend on 127.0.0.1:8000 (`frontend/vite.config.ts`), so the backend needs no cross-origin (CORS) setting. The proxy is for the dev server only; a built site needs `/api` routed to the backend by whatever serves it.
+The dev server sends every `/api` request to the backend on 127.0.0.1:8000 (`frontend/vite.config.ts`), so the backend needs no cross-origin (CORS) setting. The proxy is for the dev server only; a built site gets `/api` from the backend itself (see "Serving the built site" below), or needs `/api` routed to the backend by whatever else serves it.
 
 Where the sign-in token is kept: in memory while the page is open, and in the browser's session storage (key `socboard.session`) so a refresh keeps the session. It is never put in local storage and never logged. It is cleared on log out and on any 401 from the server, which returns the user to the sign-in screen. Closing the tab ends the session.
 
