@@ -198,7 +198,8 @@ backend-run: ## Start the backend in the background on localhost (SOCBOARD_PORT,
 	@test -x .venv/bin/python || { echo "backend-run: .venv/bin/python is missing; run make install first"; exit 1; }
 	@if [ -f .scratch/backend.pid ]; then pid=$$(cat .scratch/backend.pid); case "$$pid" in ''|*[!0-9]*|0*) echo "backend-run: .scratch/backend.pid does not hold a plain pid; check it and remove it by hand"; exit 1;; esac; if kill -0 "$$pid" 2>/dev/null; then echo "backend is already running (pid $$pid)"; exit 1; fi; fi
 	@.venv/bin/python scripts/backend_probe.py port; rc=$$?; if [ "$$rc" != 0 ] && [ "$$rc" != 3 ]; then exit 1; fi
-	@nohup sh -c 'exec .venv/bin/python -m socboard.server' > .scratch/backend.log 2>&1 & echo $$! > .scratch/backend.pid
+	@if [ -n "$${SOCBOARD_MODE+x}" ]; then echo "backend-run: SOCBOARD_MODE is ignored for this development run"; fi
+	@nohup sh -c 'exec env -u SOCBOARD_MODE .venv/bin/python -m socboard.server' > .scratch/backend.log 2>&1 & echo $$! > .scratch/backend.pid
 	@pid=$$(cat .scratch/backend.pid); \
 	alive() { kill -0 "$$pid" 2>/dev/null && ! grep -q '^State:[[:space:]]*Z' "/proc/$$pid/status" 2>/dev/null; }; \
 	end=$$(( $$(date +%s) + 30 )); \

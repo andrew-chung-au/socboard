@@ -154,6 +154,34 @@ def test_the_required_list_is_the_five_variables():
     assert preflight.REQUIRED == REQUIRED
 
 
+# --- deployed mode is refused (#175) ------------------------------------------------------------
+
+MODE = "SOCBOARD_MODE"
+
+
+def test_the_preflight_refuses_deployed_mode_and_nothing_else(tmp_path):
+    environ = {**environ_for({}, tmp_path), MODE: "deployed"}
+    problems = preflight.check(environ)
+    assert [name for name, _ in problems] == [MODE]
+    assert "make run is a development command" in problems[0][1]
+    assert "deployed" not in problems[0][1].replace("deployed mode", "")  # the value is not printed
+
+
+@pytest.mark.parametrize(
+    "value", [UNSET, "", "Deployed", "DEPLOYED", "deployed ", " deployed", "development"], ids=repr
+)
+def test_a_value_that_leaves_deployed_mode_off_is_not_refused(value, tmp_path):
+    environ = environ_for({MODE: value}, tmp_path)
+    assert MODE not in {name for name, _ in preflight.check(environ)}
+
+
+def test_the_preflight_takes_the_mode_rule_from_the_settings_module():
+    from socboard import settings
+
+    assert preflight.MODE_VAR is settings.MODE_VAR
+    assert preflight.is_deployed is settings.is_deployed
+
+
 # --- make run refuses and starts nothing --------------------------------------------------------
 
 
@@ -219,6 +247,48 @@ def test_make_run_refuses_and_starts_nothing(variable, value, tmp_path):
     assert not listening(port)
 
 
+DEPLOYED_CASES = {
+    "database URL unset": {"SOCBOARD_DATABASE_URL": UNSET},
+    "ingest key of one repeated character": {KEY: "k" * 16},
+    "every other variable valid": {},
+}
+
+
+@pytest.mark.parametrize("overrides", DEPLOYED_CASES.values(), ids=DEPLOYED_CASES.keys())
+def test_make_run_in_deployed_mode_exits_2_before_migrate_and_writes_nothing(overrides, tmp_path):
+    database_file = tmp_path / "run.db"
+    port = free_port()
+    environ = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "SOCBOARD_DATABASE_URL": "sqlite:///" + database_file.as_posix(),
+        "SOCBOARD_PORT": str(port),
+        MODE: "deployed",
+        **good_values(),
+    }
+    for name, value in overrides.items():
+        if value is UNSET:
+            del environ[name]
+        else:
+            environ[name] = value
+    default_database = ROOT / "socboard.db"  # where an unset URL would have written
+    before = [path.exists() for path in (*PID_FILES, default_database)]
+
+    done = subprocess.run(
+        ["make", "--no-print-directory", "run"], cwd=ROOT, env=environ, capture_output=True, text=True, timeout=60
+    )
+
+    output = done.stdout + done.stderr
+    assert done.returncode == 2
+    assert [line for line in output.splitlines() if MODE in line and "development command" in line] != []
+    assert "make run: nothing was started" in output
+    assert "deployed" not in output.replace("deployed mode", "")  # the value is never printed
+    for synthetic in good_values().values():
+        assert synthetic not in output
+    assert [path.exists() for path in (*PID_FILES, default_database)] == before
+    assert not database_file.exists()
+    assert not listening(port)
+
+
 def test_make_run_names_every_bad_bind_and_url_setting_one_line_each(tmp_path):
     bad = {"SOCBOARD_HOST": "0.0.0.0", "SOCBOARD_PORT": "port-x91", "SOCBOARD_DATABASE_URL": "zz-not-a-db-url"}
     environ = {"PATH": "/usr/local/bin:/usr/bin:/bin", **good_values(), **bad}
@@ -258,6 +328,35 @@ def make_in(work, target, environ):
         text=True,
         timeout=60,
     )
+
+
+IGNORED_LINE = "backend-run: SOCBOARD_MODE is ignored for this development run"
+
+
+@pytest.mark.parametrize(
+    ("mode", "says_ignored"),
+    [("deployed", True), ("development", True), (UNSET, False)],
+    ids=["deployed", "development", "unset"],
+)
+def test_make_backend_run_never_passes_the_mode_to_the_backend(mode, says_ignored, tmp_path):
+    work = isolated_checkout(tmp_path)
+    port = free_port()
+    # No database URL: in deployed mode the backend would exit 2 here, so a started backend shows
+    # that the variable did not reach it. The default database file lands in the folder `work`.
+    environ = {"PATH": "/usr/local/bin:/usr/bin:/bin", "SOCBOARD_TOKEN_SECRET": TEST_TOKEN_SECRET, "SOCBOARD_PORT": str(port)}
+    if mode is not UNSET:
+        environ[MODE] = mode
+    try:
+        done = make_in(work, "backend-run", environ)
+        output = done.stdout + done.stderr
+        assert done.returncode == 0, output
+        assert "backend started" in output
+        assert (IGNORED_LINE in output) == says_ignored
+        assert "deployed" not in output.replace("deployed mode", "")  # the value is never printed
+        assert listening(port)
+    finally:
+        make_in(work, "backend-stop", environ)
+    assert not listening(port)
 
 
 def test_make_run_refuses_when_port_5173_is_in_use(tmp_path):

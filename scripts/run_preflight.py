@@ -21,7 +21,7 @@ from socboard.auth import SECRET_ENV_NAME, ConfigError, resolve_token_secret  # 
 from socboard.database import DatabaseUrlError, resolve_url  # noqa: E402
 from socboard.seed import USERS, read_seed_passwords  # noqa: E402
 from socboard.server import BindError, resolve_bind  # noqa: E402
-from socboard.settings import SETTINGS  # noqa: E402
+from socboard.settings import MODE_VAR, SETTINGS, is_deployed  # noqa: E402
 
 REQUIRED = tuple(setting.name for setting in SETTINGS if setting.make_run)
 INGEST_MESSAGE = (
@@ -34,11 +34,15 @@ PORT_MESSAGE = (
     f"SOCBOARD_PORT must be {FRONTEND_PROXY_PORT} or unset for make run: the frontend dev server "
     f"sends /api to 127.0.0.1:{FRONTEND_PROXY_PORT} (frontend/vite.config.ts)"
 )
+# make run seeds development users and binds to loopback, so a deployed run through it has no use (#175).
+MODE_MESSAGE = f"{MODE_VAR} turns deployed mode on, and make run is a development command; unset {MODE_VAR} to use it"
 
 
 def check(environ: Mapping[str, str]) -> list[tuple[str, str]]:
     """(variable, message) for every failing variable; empty when all pass."""
     problems: list[tuple[str, str]] = []
+    if is_deployed(environ):
+        problems.append((MODE_VAR, MODE_MESSAGE))
     try:
         resolve_token_secret(environ)
     except ConfigError as error:
