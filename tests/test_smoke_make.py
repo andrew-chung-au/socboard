@@ -96,6 +96,16 @@ def test_make_smoke_full_check_runs_through_make_with_the_credentials_from_the_e
         assert value not in done.stdout + done.stderr
 
 
+def test_make_smoke_reports_a_failed_step_as_exit_2_and_names_the_step():
+    server = Stub({})  # every route answers 404, so step 1 fails
+    try:
+        done = make_smoke(f"URL={server.url}", "HEALTH_ONLY=1")
+    finally:
+        server.close()
+    assert done.returncode == 2  # make reports any failed recipe as 2; the module itself exits 1
+    assert "step 1 health: FAILED (HTTP 404" in done.stdout
+
+
 def test_make_smoke_without_credentials_exits_2_naming_the_variables(stub):
     done = make_smoke(f"URL={stub.url}", environ={"SOCBOARD_SEED_PASSWORD_LEAD": "", "SOCBOARD_INGEST_API_KEY": ""})
     assert done.returncode != 0

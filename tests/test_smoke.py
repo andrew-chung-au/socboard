@@ -507,7 +507,8 @@ def test_a_response_over_the_size_limit_fails_its_step(make_stub, capsys, monkey
 class Trickle:
     """A raw server that sends its answer one byte at a time, so no single read ever times out."""
 
-    def __init__(self, preamble, forever):
+    def __init__(self, preamble, forever, slow_preamble=True):
+        self.slow_preamble = slow_preamble
         self.server = socket.socket()
         self.server.bind(("127.0.0.1", 0))
         self.server.listen(5)
@@ -527,9 +528,12 @@ class Trickle:
     def handle(self, connection):
         try:
             connection.recv(65536)
-            for byte in self.preamble:
-                connection.sendall(bytes([byte]))
-                time.sleep(0.1)
+            if self.slow_preamble:
+                for byte in self.preamble:
+                    connection.sendall(bytes([byte]))
+                    time.sleep(0.1)
+            else:
+                connection.sendall(self.preamble)
             while not self.stop.is_set() and self.forever:
                 connection.sendall(b" ")
                 time.sleep(0.1)
@@ -548,6 +552,29 @@ TRICKLES = [
     ("a body with a length sent byte by byte", b"HTTP/1.0 200 OK\r\nContent-Length: 100000\r\n\r\n", True),
     ("a body that ends at the close, sent byte by byte", b"HTTP/1.0 200 OK\r\n\r\n", True),
 ]
+# The headers arrive at once and only the body is slow. http.client drops its socket when the
+# answer will close the connection, which is where the first watchdog had nothing to shut.
+SLOW_BODIES = [
+    ("headers at once, HTTP/1.0 body with no length", b"HTTP/1.0 200 OK\r\n\r\n"),
+    ("headers at once, HTTP/1.0 body with a length", b"HTTP/1.0 200 OK\r\nContent-Length: 100000\r\n\r\n"),
+    ("headers at once, HTTP/1.1 Connection close with a length", b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 100000\r\n\r\n"),
+    ("headers at once, HTTP/1.1 Connection close with no length", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"),
+    ("headers at once, HTTP/1.1 chunked", b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n64\r\n"),
+]
+
+
+@pytest.mark.parametrize(("preamble",), [(case[1],) for case in SLOW_BODIES], ids=[case[0] for case in SLOW_BODIES])
+def test_a_slow_body_after_quick_headers_cannot_hold_a_request_past_the_limit(preamble, capsys, monkeypatch):
+    monkeypatch.setattr(smoke, "REQUEST_TIMEOUT", 0.6)
+    server = Trickle(preamble, True, slow_preamble=False)
+    try:
+        started = time.monotonic()
+        code, output = run(server.url, capsys)
+    finally:
+        server.close()
+    assert code == 1
+    assert "step 1 health: FAILED (timed out)" in output
+    assert time.monotonic() - started < 2.0
 
 
 @pytest.mark.parametrize(("preamble", "forever"), [case[1:] for case in TRICKLES], ids=[case[0] for case in TRICKLES])
@@ -567,7 +594,7 @@ def test_a_server_sending_one_byte_at_a_time_cannot_hold_a_request_past_the_limi
 def test_a_server_sending_one_byte_at_a_time_cannot_hold_the_run_past_the_total_limit(capsys, monkeypatch):
     monkeypatch.setattr(smoke, "REQUEST_TIMEOUT", 30.0)
     monkeypatch.setattr(smoke, "TOTAL_TIMEOUT", 0.6)
-    server = Trickle(b"HTTP/1.0 200 OK\r\nContent-Length: 100000\r\n\r\n", True)
+    server = Trickle(b"HTTP/1.0 200 OK\r\n\r\n", True, slow_preamble=False)
     try:
         started = time.monotonic()
         code, output = run(server.url, capsys)

@@ -147,12 +147,16 @@ class Client:
         connection = connection_class(host, self.port, timeout=limit)
         expired = threading.Event()
 
+        held: list[socket.socket] = []
+
         def expire() -> None:
             """The whole request is out of time: shut the socket so a blocked read ends. The socket
             timeout alone restarts on every byte, so a server sending one byte at a time would
-            otherwise hold the request open."""
+            otherwise hold the request open. `http.client` drops `connection.sock` when the answer
+            will close the connection, but the response keeps reading from it, so the socket is
+            also held here."""
             expired.set()
-            sock = connection.sock
+            sock = connection.sock or (held[0] if held else None)
             if sock is not None:
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
@@ -169,6 +173,8 @@ class Client:
             send_headers["Content-Type"] = "application/json"
         try:
             connection.request(method, self.prefix + path, body=data, headers=send_headers)
+            if connection.sock is not None:
+                held.append(connection.sock)
             response = connection.getresponse()
             chunks = []
             size = 0
