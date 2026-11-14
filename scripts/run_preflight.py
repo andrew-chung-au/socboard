@@ -4,7 +4,8 @@
 
 Each verdict comes from the function the backend or `make seed` uses for that variable, so this
 script holds no length or format rule of its own and can never be looser or stricter than they
-are. `make run` also requires the ingest key, which the backend alone may start without.
+are. `make run` also requires the ingest key, which the backend alone may start without, and
+port 8000, the one port the frontend dev server's proxy reaches.
 Exit 0 when every variable passes; exit 2 with one line per failing variable, naming it and never
 printing its value.
 """
@@ -26,6 +27,12 @@ REQUIRED = (SECRET_ENV_NAME, *SEED_VARIABLES, ingest.KEY_ENV_NAME)
 INGEST_MESSAGE = (
     f"{ingest.KEY_ENV_NAME} must be set to at least {ingest.MIN_KEY_LENGTH} characters "
     "(make run needs ingest open)"
+)
+# Not an app rule: the dev server's /api proxy is fixed to 127.0.0.1:8000 (frontend/vite.config.ts).
+FRONTEND_PROXY_PORT = 8000
+PORT_MESSAGE = (
+    f"SOCBOARD_PORT must be {FRONTEND_PROXY_PORT} or unset for make run: the frontend dev server "
+    f"sends /api to 127.0.0.1:{FRONTEND_PROXY_PORT} (frontend/vite.config.ts)"
 )
 
 
@@ -55,9 +62,12 @@ def check(environ: Mapping[str, str]) -> list[tuple[str, str]]:
     # resolve_bind stops at the first bad setting, so ask it about each variable on its own.
     for name in ("SOCBOARD_HOST", "SOCBOARD_PORT"):
         try:
-            resolve_bind({name: environ[name]} if name in environ else {})
+            _, port = resolve_bind({name: environ[name]} if name in environ else {})
         except BindError as error:
             problems.append((name, str(error)))
+            continue
+        if name == "SOCBOARD_PORT" and port != FRONTEND_PROXY_PORT:
+            problems.append((name, PORT_MESSAGE))
     return problems
 
 
