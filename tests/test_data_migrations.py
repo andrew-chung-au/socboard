@@ -29,19 +29,50 @@ from sqlalchemy.exc import IntegrityError
 from socboard import database, migrate
 from socboard._requirements import MissingPackageError
 from socboard.models import Alert, metadata
-from db_target import SQLITE_INTERNALS
+from db_target import is_postgres
 
 VERSIONS = migrate.SCRIPT_LOCATION / "versions"
 
 
+# On Postgres, the same four fields as `sqlite_master` (type, name, owning table, definition) for every
+# object in the `public` schema, so the idempotence and round-trip tests below compare the whole schema
+# on either database (#192). A sequence has no owning table here, so one left behind after a
+# downgrade shows up as an object that belongs to no table.
+POSTGRES_SCHEMA_ROWS = """
+SELECT 'table', table_name, table_name, NULL FROM information_schema.tables
+ WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+UNION ALL
+SELECT 'column', table_name || '.' || column_name, table_name,
+       data_type || ' ' || is_nullable || ' ' || coalesce(column_default, '')
+  FROM information_schema.columns WHERE table_schema = 'public'
+UNION ALL
+SELECT 'index', indexname, tablename, indexdef FROM pg_indexes WHERE schemaname = 'public'
+UNION ALL
+SELECT 'constraint', c.conname, t.relname, pg_get_constraintdef(c.oid)
+  FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+  JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = 'public'
+UNION ALL
+SELECT 'trigger', g.tgname, t.relname, pg_get_triggerdef(g.oid)
+  FROM pg_trigger g JOIN pg_class t ON t.oid = g.tgrelid
+  JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = 'public' AND NOT g.tgisinternal
+UNION ALL
+SELECT 'sequence', sequence_name, NULL, data_type FROM information_schema.sequences
+ WHERE sequence_schema = 'public'
+ORDER BY 1, 2
+"""
+
+
 def table_rows(url):
-    """The `sqlite_master` rows: type, name, table and SQL."""
+    """The schema rows: type, name, table and SQL (`sqlite_master` on SQLite; the query above on Postgres)."""
     engine = database.create_db_engine(url)
     try:
         with engine.connect() as conn:
-            rows = conn.exec_driver_sql(
-                "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name"
-            ).all()
+            if is_postgres():
+                rows = conn.exec_driver_sql(POSTGRES_SCHEMA_ROWS).all()
+            else:
+                rows = conn.exec_driver_sql(
+                    "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name"
+                ).all()
     finally:
         engine.dispose()
     return [tuple(row) for row in rows]
@@ -110,7 +141,6 @@ def test_migration_files_hold_literals_and_import_nothing_from_socboard():
                 assert not name.startswith("socboard"), (path.name, name)
 
 
-@SQLITE_INTERNALS
 def test_a_second_run_changes_nothing(db_url):
     migrate.upgrade(db_url)
     first = table_rows(db_url), version_rows(db_url)
@@ -119,14 +149,20 @@ def test_a_second_run_changes_nothing(db_url):
     assert first == second
 
 
-@SQLITE_INTERNALS
 def test_downgrade_to_base_and_upgrade_again_gives_identical_schema_rows(db_url):
     migrate.upgrade(db_url)
     before = table_rows(db_url)
+    assert len(before) > 1
 
     migrate.downgrade(db_url, "base")
     at_base = [row for row in table_rows(db_url) if not row[1].startswith("sqlite_")]
-    assert [(row[0], row[1]) for row in at_base] == [("table", "alembic_version")]
+    if is_postgres():
+        # Only alembic_version and what belongs to it (its column, primary key and index) remain;
+        # a leftover sequence would belong to no table and fail the first check.
+        assert {row[2] for row in at_base} == {"alembic_version"}
+        assert [(row[0], row[1]) for row in at_base if row[0] == "table"] == [("table", "alembic_version")]
+    else:
+        assert [(row[0], row[1]) for row in at_base] == [("table", "alembic_version")]
 
     migrate.upgrade(db_url)
     assert table_rows(db_url) == before
