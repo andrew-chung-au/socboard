@@ -330,6 +330,35 @@ def make_in(work, target, environ):
     )
 
 
+IGNORED_LINE = "backend-run: SOCBOARD_MODE is ignored for this development run"
+
+
+@pytest.mark.parametrize(
+    ("mode", "says_ignored"),
+    [("deployed", True), ("development", True), (UNSET, False)],
+    ids=["deployed", "development", "unset"],
+)
+def test_make_backend_run_never_passes_the_mode_to_the_backend(mode, says_ignored, tmp_path):
+    work = isolated_checkout(tmp_path)
+    port = free_port()
+    # No database URL: in deployed mode the backend would exit 2 here, so a started backend shows
+    # that the variable did not reach it. The default database file lands in the folder `work`.
+    environ = {"PATH": "/usr/local/bin:/usr/bin:/bin", "SOCBOARD_TOKEN_SECRET": TEST_TOKEN_SECRET, "SOCBOARD_PORT": str(port)}
+    if mode is not UNSET:
+        environ[MODE] = mode
+    try:
+        done = make_in(work, "backend-run", environ)
+        output = done.stdout + done.stderr
+        assert done.returncode == 0, output
+        assert "backend started" in output
+        assert (IGNORED_LINE in output) == says_ignored
+        assert "deployed" not in output.replace("deployed mode", "")  # the value is never printed
+        assert listening(port)
+    finally:
+        make_in(work, "backend-stop", environ)
+    assert not listening(port)
+
+
 def test_make_run_refuses_when_port_5173_is_in_use(tmp_path):
     work = isolated_checkout(tmp_path)
     # A database in a folder that does not exist: if the check were missing, migrate would fail
