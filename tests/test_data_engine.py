@@ -15,12 +15,17 @@ from data_support import (
     sqlite_url,
 )
 from sqlalchemy import insert, text
-from sqlalchemy.exc import IntegrityError, OperationalError, StatementError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, StatementError
 
 from socboard import database
 from socboard.models import User
+from db_target import SQLITE_INTERNALS, is_postgres
 
 MARKER = "zz-marker-5c1e77"
+# The error a statement on a missing table raises: SQLite says "no such table" (OperationalError),
+# Postgres says "relation does not exist" (ProgrammingError, SQLSTATE 42P01). Each database is held
+# to its own exact class, so the SQLite run is unchanged (#192).
+MISSING_TABLE_ERROR = ProgrammingError if is_postgres() else OperationalError
 
 # The statement in the decision record (#11). The claim function and its concurrency test are #16.
 CLAIM = text(
@@ -51,7 +56,7 @@ def test_an_integrity_error_traceback_holds_no_parameter_value(migrated_engine):
 
 
 def test_an_operational_error_traceback_holds_no_parameter_value(migrated_engine):
-    with pytest.raises(OperationalError) as caught:
+    with pytest.raises(MISSING_TABLE_ERROR) as caught:
         with migrated_engine.begin() as conn:
             conn.execute(text("INSERT INTO no_such_table (a) VALUES (:a)"), {"a": MARKER})
     assert MARKER not in _traceback_text(caught.value)
@@ -70,7 +75,7 @@ def test_the_marker_would_be_found_without_hide_parameters(db_url, migrated_engi
 
     leaky = create_engine(db_url)
     try:
-        with pytest.raises(OperationalError) as caught:
+        with pytest.raises(MISSING_TABLE_ERROR) as caught:
             with leaky.begin() as conn:
                 conn.execute(text("INSERT INTO no_such_table (a) VALUES (:a)"), {"a": MARKER})
         assert MARKER in _traceback_text(caught.value)
@@ -85,18 +90,21 @@ def test_the_application_engine_hides_parameters(migrated_engine):
 # --- SQLite settings ---------------------------------------------------------------------------
 
 
+@SQLITE_INTERNALS
 def test_the_busy_timeout_is_five_seconds(migrated_engine):
     with migrated_engine.connect() as conn:
         assert conn.exec_driver_sql("PRAGMA busy_timeout").scalar() == 5000
     assert database.BUSY_TIMEOUT_SECONDS == 5
 
 
+@SQLITE_INTERNALS
 def test_the_driver_default_transaction_mode_is_kept(migrated_engine):
     with migrated_engine.connect() as conn:
         raw = conn.connection.dbapi_connection
         assert raw.isolation_level == ""  # the sqlite3 default: DEFERRED, never BEGIN IMMEDIATE
 
 
+@SQLITE_INTERNALS
 def test_foreign_keys_are_on_for_every_new_connection(migrated_engine):
     first = migrated_engine.connect()
     second = migrated_engine.connect()

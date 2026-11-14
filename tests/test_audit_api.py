@@ -30,6 +30,7 @@ from socboard import database
 from socboard.audit import append_audit
 from socboard.audit_guard import AuditImmutableError
 from socboard.models import AuditEntry
+from db_target import SQLITE_TRIGGERS
 
 PACKAGE = Path(__file__).resolve().parents[1] / "socboard"
 LEAD = {"Authorization": f"Bearer {LEAD_TOKEN}"}
@@ -242,6 +243,7 @@ def test_a_write_to_the_audit_path_is_405(real_client, app_database, method, hea
     assert stored_entries(app_database) == before
 
 
+@SQLITE_TRIGGERS
 def test_the_data_layer_refuses_to_change_or_remove_an_entry_after_a_journey(journey):
     # Builds on #11 (tests/test_data_audit.py): the ORM guard and the database triggers.
     url = journey["url"]

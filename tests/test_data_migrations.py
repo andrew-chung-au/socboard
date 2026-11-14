@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from socboard import database, migrate
 from socboard._requirements import MissingPackageError
 from socboard.models import Alert, metadata
+from db_target import SQLITE_INTERNALS
 
 VERSIONS = migrate.SCRIPT_LOCATION / "versions"
 
@@ -109,6 +110,7 @@ def test_migration_files_hold_literals_and_import_nothing_from_socboard():
                 assert not name.startswith("socboard"), (path.name, name)
 
 
+@SQLITE_INTERNALS
 def test_a_second_run_changes_nothing(db_url):
     migrate.upgrade(db_url)
     first = table_rows(db_url), version_rows(db_url)
@@ -117,6 +119,7 @@ def test_a_second_run_changes_nothing(db_url):
     assert first == second
 
 
+@SQLITE_INTERNALS
 def test_downgrade_to_base_and_upgrade_again_gives_identical_schema_rows(db_url):
     migrate.upgrade(db_url)
     before = table_rows(db_url)

@@ -16,6 +16,7 @@ from sqlalchemy.schema import CreateTable
 
 from socboard import database, migrate
 from socboard.models import metadata
+from db_target import SQLITE_TRIGGERS
 
 TRIGGERS = ["audit_entries_no_delete", "audit_entries_no_reuse_id", "audit_entries_no_update"]
 
@@ -64,6 +65,7 @@ def audit_table_sql(url):
         engine.dispose()
 
 
+@SQLITE_TRIGGERS
 def test_the_three_triggers_are_present_after_migrate_and_on_audit_entries(db_url):
     migrate.upgrade(db_url)
     triggers = audit_table_triggers(db_url)
@@ -74,6 +76,7 @@ def test_the_three_triggers_are_present_after_migrate_and_on_audit_entries(db_ur
     assert [row[1] for row in master_rows(db_url, "trigger")] == TRIGGERS
 
 
+@SQLITE_TRIGGERS
 def test_the_table_keeps_autoincrement_and_the_id_check(db_url):
     migrate.upgrade(db_url)
     sql = audit_table_sql(db_url)
@@ -81,6 +84,7 @@ def test_the_table_keeps_autoincrement_and_the_id_check(db_url):
     assert "CONSTRAINT ck_audit_entries_id_positive CHECK (id >= 1)" in sql, REBUILD_HINT
 
 
+@SQLITE_TRIGGERS
 def test_only_audit_entries_has_an_id_check(db_url):
     # The id rule for the other tables is unchanged.
     migrate.upgrade(db_url)
@@ -102,6 +106,7 @@ def test_the_model_declares_the_same_named_id_check():
             assert "id >= 1" not in ddl, table.name
 
 
+@SQLITE_TRIGGERS
 def test_the_trigger_sql_holds_fixed_messages_and_the_id_reuse_condition(db_url):
     migrate.upgrade(db_url)
     by_name = {row[1]: row[3] for row in master_rows(db_url, "trigger")}
@@ -116,6 +121,7 @@ def test_the_trigger_sql_holds_fixed_messages_and_the_id_reuse_condition(db_url)
         assert "NEW." not in sql.split("BEGIN", 1)[1]  # the message names no value
 
 
+@SQLITE_TRIGGERS
 def test_the_triggers_are_absent_at_base(db_url):
     migrate.upgrade(db_url)
     migrate.downgrade(db_url, "base")
@@ -124,6 +130,7 @@ def test_the_triggers_are_absent_at_base(db_url):
     assert names == ["alembic_version"]
 
 
+@SQLITE_TRIGGERS
 def test_the_trigger_rows_are_identical_after_a_downgrade_and_upgrade_round_trip(db_url):
     migrate.upgrade(db_url)
     before_all = master_rows(db_url)
@@ -137,6 +144,7 @@ def test_the_trigger_rows_are_identical_after_a_downgrade_and_upgrade_round_trip
     assert master_rows(db_url) == before_all  # type, name, table and sql, triggers included
 
 
+@SQLITE_TRIGGERS
 def test_a_second_upgrade_keeps_the_triggers_unchanged(db_url):
     migrate.upgrade(db_url)
     before = master_rows(db_url, "trigger")
@@ -144,6 +152,7 @@ def test_a_second_upgrade_keeps_the_triggers_unchanged(db_url):
     assert master_rows(db_url, "trigger") == before
 
 
+@SQLITE_TRIGGERS
 def test_the_models_comparison_shows_no_differences_with_the_triggers_present(db_url):
     migrate.upgrade(db_url)
     assert len(master_rows(db_url, "trigger")) == 3

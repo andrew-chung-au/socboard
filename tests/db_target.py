@@ -16,6 +16,8 @@ import os
 import uuid
 from pathlib import Path
 
+import pytest
+
 # SQLAlchemy is imported inside the functions: `conftest.py` imports this module, and a missing
 # package must fail only the tests that need it (see the note at the top of `conftest.py`).
 
@@ -37,6 +39,19 @@ _kept: set[str] = set()
 
 
 SQLITE_MEMORY_URL = "sqlite:///:memory:"
+
+# The reasons a test is SQLite-only, one marker each, so every module states the same reason and the
+# owner issue of the Postgres version (#192 criterion 6). Found by the first Postgres run (CI job
+# 132520543923): every test that carries one of these failed there, and no test that passed does.
+SQLITE_TRIGGERS = pytest.mark.sqlite_only(
+    "needs the SQLite audit triggers; the Postgres triggers are D6a (#193)"
+)
+SQLITE_GUARD = pytest.mark.sqlite_only(
+    "tests the audit guard's SQLite rules on SQLite tables; the guard's Postgres review is D6b (#195)"
+)
+SQLITE_INTERNALS = pytest.mark.sqlite_only(
+    "reads SQLite internals (sqlite_master, a PRAGMA, the driver's transaction mode or SQLite-only SQL)"
+)
 
 
 def sqlite_url(path: Path) -> str:
