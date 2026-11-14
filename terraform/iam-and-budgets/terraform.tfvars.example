@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars (git-ignored) and set your own values. Placeholders only: none of these works as written.
+# The secret is created by you outside Terraform; this file holds only its ARN, never a value.
+app_secret_arn     = "arn:aws:secretsmanager:us-east-1:REPLACE-ACCOUNT-NUMBER:secret:REPLACE-SECRET-NAME"
+monthly_budget_usd = 0
+notification_email = "REPLACE-ME@example.invalid"
