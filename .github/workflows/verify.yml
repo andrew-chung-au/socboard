@@ -30,5 +30,8 @@ jobs:
 
       - run: make install
 
+      - name: Check Python version
+        run: uv run --locked python scripts/check_python_version.py
+
       - name: Verify
         run: make verify BASE="${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}"
