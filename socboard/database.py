@@ -10,6 +10,8 @@ Engine settings that tests read back:
 - SQLite: foreign keys switched on for every connection the engine opens (the pragma is off by
   default), the driver's default transaction mode, and a busy timeout of 5 s. Never
   `BEGIN IMMEDIATE`. `python -m socboard.migrate` is the one place that switches the pragma off.
+- Any other database (Postgres, #143): a failed connection raises `DatabaseConnectError` with fixed
+  text and no chained driver error, because the driver's message names the user and the database.
 """
 
 import os
@@ -32,10 +34,19 @@ DEFAULT_DATABASE_FILE = REPO_ROOT / "socboard.db"
 BUSY_TIMEOUT_SECONDS = 5
 
 INVALID_URL_MESSAGE = "SOCBOARD_DATABASE_URL is not a valid database URL."
+CONNECT_FAILED_MESSAGE = "Could not connect to the database."
 
 
 class DatabaseUrlError(ValueError):
     """The database URL is not usable. The message is fixed text and never holds the value."""
+
+
+class DatabaseConnectError(Exception):
+    """A server database refused or failed the connection. The message is fixed text.
+
+    The driver's own message names the user and the database (Postgres: `password authentication
+    failed for user "..."`), and the 500 handler logs the exception, so it is replaced (#143).
+    """
 
 
 def default_url() -> URL:
@@ -67,6 +78,14 @@ def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
         cursor.close()
 
 
+def _connect_without_detail(dialect, connection_record, cargs, cparams):
+    """Open a server connection; on failure raise fixed text with no chained driver error."""
+    try:
+        return dialect.loaded_dbapi.connect(*cargs, **cparams)
+    except Exception:
+        raise DatabaseConnectError(CONNECT_FAILED_MESSAGE) from None
+
+
 def create_db_engine(url: "str | URL | None" = None) -> Engine:
     """Create the engine for `url` (default: from the environment)."""
     resolved = resolve_url() if url is None else parse_url(url)
@@ -80,4 +99,6 @@ def create_db_engine(url: "str | URL | None" = None) -> Engine:
         raise DatabaseUrlError(INVALID_URL_MESSAGE) from None
     if is_sqlite:
         event.listen(engine, "connect", _enable_foreign_keys)
+    else:
+        event.listen(engine, "do_connect", _connect_without_detail)
     return engine
