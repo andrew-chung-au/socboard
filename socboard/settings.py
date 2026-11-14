@@ -42,8 +42,16 @@ SETTINGS = (
         "in deployed mode also not one repeated character, whitespace ignored",
     ),
     *(
-        Setting(variable, secret=True, deployed=False, make_run=True, rule="at least 12 characters; read by make seed only")
-        for _, _, _, variable in USERS
+        Setting(
+            variable,
+            secret=True,
+            deployed=False,
+            make_run=True,
+            rule="at least 12 characters; read by make seed, and by the smoke check"
+            if username == "lead"
+            else "at least 12 characters; read by make seed only",
+        )
+        for username, _, _, variable in USERS
     ),
     Setting(
         ingest.KEY_ENV_NAME,
@@ -52,7 +60,7 @@ SETTINGS = (
         make_run=True,
         rule="at least 16 characters (without it ingest is closed); in deployed mode required, "
         "at least 16 characters, no leading or trailing whitespace, and not one repeated character "
-        "(whitespace ignored)",
+        "(whitespace ignored); also read by the smoke check",
     ),
     Setting(
         database.ENV_NAME,
