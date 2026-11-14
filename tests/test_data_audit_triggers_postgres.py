@@ -388,6 +388,50 @@ def test_the_app_works_as_the_application_role(seeded, monkeypatch):
     assert [entry["action"] for entry in audit.json()] == ["claimed", "claimed"]
 
 
+def test_no_role_password_is_sent_to_the_server(monkeypatch):
+    """QA finding on #193: a failed CREATE ROLE would echo its statement, so the statement holds the
+    SCRAM verifier, never the password; the roles still log in with the password (the next tests)."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    passwords, statements = [], []
+    real = pg_roles.secrets.token_hex
+
+    def remember(n):
+        value = real(n)
+        if n == 16:
+            passwords.append(value)
+        return value
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    monkeypatch.setattr(pg_roles.secrets, "token_hex", remember)
+    event.listen(Engine, "before_cursor_execute", record)
+    try:
+        made = pg_roles.create()
+    finally:
+        event.remove(Engine, "before_cursor_execute", record)
+    try:
+        assert len(passwords) == 2 and any("CREATE ROLE" in s for s in statements)
+        for password in passwords:
+            assert not any(password in statement for statement in statements)
+        for url in (made.owner_url, made.app_url):  # the password still works for a login
+            engine = _engine(url)
+            try:
+                with engine.connect() as conn:
+                    assert conn.exec_driver_sql("SELECT 1").scalar() == 1
+            finally:
+                engine.dispose()
+    finally:
+        pg_roles.drop(made)
+
+
+def test_the_scram_verifier_holds_no_part_of_the_password():
+    verifier = pg_roles.scram_verifier("0123456789abcdef0123456789abcdef", salt=b"0" * 16)
+    assert verifier.startswith("SCRAM-SHA-256$4096:") and "0123456789abcdef" not in verifier
+
+
 def test_no_trigger_text_holds_a_row_value(seeded):
     with guards_disabled():
         error = refused(seeded["engine"], "UPDATE audit_entries SET detail = 'zz-secret-77'", CHANGED)

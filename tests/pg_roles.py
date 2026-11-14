@@ -17,6 +17,9 @@ on the server after a run. Passwords never appear in a repr, a test id or a fail
 fixture returns a `Roles` object whose repr names nothing.
 """
 
+import base64
+import hashlib
+import hmac
 import secrets
 from dataclasses import dataclass, field
 
@@ -36,6 +39,22 @@ class Roles:
 
     def __repr__(self) -> str:
         return "<Roles (owner and application role; names and passwords not shown)>"
+
+
+def scram_verifier(password: str, salt: bytes | None = None, iterations: int = 4096) -> str:
+    """The SCRAM-SHA-256 verifier Postgres stores for `password` (RFC 5802 and 7677).
+
+    `CREATE ROLE ... PASSWORD '<verifier>'` is stored as given, so the password itself never reaches
+    the server: not in the statement, not in a failed statement's error text, not in the server log.
+    The password is 32 random hex characters, so the verifier cannot be guessed back to it.
+    """
+    salt = salt if salt is not None else secrets.token_bytes(16)
+    salted = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    client_key = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
+    stored_key = hashlib.sha256(client_key).digest()
+    server_key = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
+    b64 = lambda raw: base64.b64encode(raw).decode()  # noqa: E731
+    return f"SCRAM-SHA-256${iterations}:{b64(salt)}${b64(stored_key)}:{b64(server_key)}"
 
 
 def _admin():
@@ -71,11 +90,13 @@ def _set_up(roles: Roles, owner_pw: str, app_pw: str) -> None:
     try:
         with admin.connect() as conn:
             q = admin.dialect.identifier_preparer.quote
-            # Names and passwords are hex made here, never outside text; quoted anyway.
-            conn.execute(text(f"CREATE ROLE {q(owner)} LOGIN NOSUPERUSER PASSWORD '{owner_pw}'"))
-            conn.execute(
-                text(f"CREATE ROLE {q(app)} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '{app_pw}'")
-            )
+            # Names are hex made here, never outside text; quoted anyway. The statements carry only
+            # the SCRAM verifiers, never the passwords (QA finding on #193).
+            owner_v, app_v = scram_verifier(owner_pw), scram_verifier(app_pw)
+            # exec_driver_sql, not text(): a verifier holds ':' and text() would read ':xyz' as a
+            # bind parameter. A verifier is base64 and '$', so it holds no quote or '%'.
+            conn.exec_driver_sql(f"CREATE ROLE {q(owner)} LOGIN NOSUPERUSER PASSWORD '{owner_v}'")
+            conn.exec_driver_sql(f"CREATE ROLE {q(app)} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '{app_v}'")
             conn.execute(text(f"CREATE DATABASE {q(name)} OWNER {q(owner)}"))
             conn.execute(text(f"REVOKE CREATE, TEMPORARY ON DATABASE {q(name)} FROM PUBLIC"))
     finally:
@@ -110,7 +131,7 @@ def listed_roles() -> list[str]:
     try:
         with admin.connect() as conn:
             rows = conn.execute(
-                text("SELECT rolname FROM pg_roles WHERE rolname LIKE :p ORDER BY rolname"), {"p": ROLE_PREFIX + "%"}
+                text("SELECT rolname FROM pg_roles WHERE starts_with(rolname, :p) ORDER BY rolname"), {"p": ROLE_PREFIX}
             )
             return [row[0] for row in rows]
     finally:

@@ -214,8 +214,8 @@ def listed_databases() -> list[str]:
     try:
         with engine.connect() as conn:
             rows = conn.execute(
-                text("SELECT datname FROM pg_database WHERE datname LIKE :p ORDER BY datname"),
-                {"p": NAME_PREFIX + "%"},
+                text("SELECT datname FROM pg_database WHERE starts_with(datname, :p) ORDER BY datname"),
+                {"p": NAME_PREFIX},
             )
             return [row[0] for row in rows]
     finally:
