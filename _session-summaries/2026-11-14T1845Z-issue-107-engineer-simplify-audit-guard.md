@@ -13,6 +13,8 @@ The Engineer (cloud session, branch `claude/zen-ritchie-oks73l` from `13b8362`) 
 
 Every kept rule was removed one at a time in a scratch copy (`.scratch/mutate107.py`); each removal fails at least one named test, listed in the `Engineer:` comment on #107, except the `Session` `do_orm_execute` hook: every Session route also reaches the `Engine` listener, so no test fails without it. Three #11/#99 rules (REPLACE prefix, on-conflict-do-update, `DropIndex` by the columns' table) had no test of their own until #107 added one, because the id rule or the index-name rule caught every existing case first.
 
+After QA (comment 6882824631): `_PARAMETER_KEY` lacked `re.DOTALL`, so an execute key containing a newline crashed the guard with `TypeError`; fixed in `f5e4298`, with a test (`test_the_guard_function_reads_the_values_bound_for_id_in_every_parameter_row`) that fails without it. Test file now 892 lines, guard 334.
+
 **What I learned:** in SQLAlchemy 2.1 `values(id=None)` stores a `BindParameter`, not `Null`, so a plain None and a caller's `bindparam` differ only by `BindParameter._is_crud`.
 
 ## Reflection
