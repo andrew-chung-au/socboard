@@ -46,7 +46,7 @@ locals {
   instance_profile_name = "socboard-instance"
 
   # The only open ports, each way. Opening another port means editing this list; tests/ fail on it.
-  ingress_ports = [80, 443]
+  ingress_ports = [22, 80, 443]
   # Grooming decision: package installs, image pulls and the Systems Manager agent use HTTPS
   # (80 for some package mirrors). VERIFY: at the first apply that all three work with this.
   egress_ports = [80, 443]
