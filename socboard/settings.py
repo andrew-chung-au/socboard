@@ -39,7 +39,7 @@ SETTINGS = (
         deployed=True,
         make_run=True,
         rule="at least 32 characters, not counting leading and trailing spaces; "
-        "in deployed mode also not one repeated character",
+        "in deployed mode also not one repeated character, whitespace ignored",
     ),
     *(
         Setting(variable, secret=True, deployed=False, make_run=True, rule="at least 12 characters; read by make seed only")
@@ -51,7 +51,8 @@ SETTINGS = (
         deployed=True,
         make_run=True,
         rule="at least 16 characters (without it ingest is closed); in deployed mode required, "
-        "at least 16 characters not counting leading and trailing spaces, and not one repeated character",
+        "at least 16 characters, no leading or trailing whitespace, and not one repeated character "
+        "(whitespace ignored)",
     ),
     Setting(
         database.ENV_NAME,
@@ -72,10 +73,12 @@ SETTINGS = (
     ),
 )
 
-SECRET_REPEATED_MESSAGE = f"{SECRET_ENV_NAME} must not be one repeated character in deployed mode."
+SECRET_REPEATED_MESSAGE = (
+    f"{SECRET_ENV_NAME} must not be one repeated character, whitespace ignored, in deployed mode."
+)
 KEY_MESSAGE = (
-    f"{ingest.KEY_ENV_NAME} must be set to at least {ingest.MIN_KEY_LENGTH} characters, not counting "
-    "leading and trailing spaces, and not one repeated character, in deployed mode."
+    f"{ingest.KEY_ENV_NAME} must be set to at least {ingest.MIN_KEY_LENGTH} characters, with no leading "
+    "or trailing whitespace and not one repeated character, in deployed mode."
 )
 DATABASE_MESSAGE = f"{database.ENV_NAME} must be set to a database URL in deployed mode."
 
@@ -85,16 +88,28 @@ def is_deployed(environ: Mapping[str, str]) -> bool:
 
 
 def _one_repeated_character(value: str) -> bool:
-    return len(set(value.strip())) <= 1
+    return len(set("".join(value.split()))) <= 1
+
+
+def _key_unusable(key: str) -> bool:
+    # HTTP strips header whitespace, so a key with edge whitespace could never match.
+    return key != key.strip() or len(key) < ingest.MIN_KEY_LENGTH or _one_repeated_character(key)
+
+
+# (refuses the value, message) for each setting marked `deployed`; tests/test_settings.py checks
+# the keys match the list. The secret's length was already checked by `resolve_token_secret`.
+DEPLOYED_CHECKS = {
+    SECRET_ENV_NAME: (_one_repeated_character, SECRET_REPEATED_MESSAGE),
+    ingest.KEY_ENV_NAME: (_key_unusable, KEY_MESSAGE),
+    database.ENV_NAME: (lambda url: not url.strip(), DATABASE_MESSAGE),
+}
 
 
 def check_deployed(environ: Mapping[str, str]) -> None:
     """Raise `ConfigError` for the first unusable setting. Call after `resolve_token_secret`,
     which already refuses a missing, short or blank secret in every mode."""
-    if _one_repeated_character(environ.get(SECRET_ENV_NAME, "")):
-        raise ConfigError(SECRET_REPEATED_MESSAGE)
-    key = environ.get(ingest.KEY_ENV_NAME, "")
-    if len(key.strip()) < ingest.MIN_KEY_LENGTH or _one_repeated_character(key):
-        raise ConfigError(KEY_MESSAGE)
-    if not environ.get(database.ENV_NAME, "").strip():
-        raise ConfigError(DATABASE_MESSAGE)
+    for setting in SETTINGS:
+        if setting.deployed:
+            unusable, message = DEPLOYED_CHECKS[setting.name]
+            if unusable(environ.get(setting.name, "")):
+                raise ConfigError(message)

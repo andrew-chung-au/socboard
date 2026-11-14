@@ -57,6 +57,19 @@ def test_secret_and_deployed_flags():
     assert {name for name, s in by_name.items() if s.secret} == {SECRET, KEY, DB, *(v for *_, v in USERS)}
 
 
+def test_every_deployed_setting_has_exactly_one_check():
+    assert set(settings.DEPLOYED_CHECKS) == {s.name for s in settings.SETTINGS if s.deployed}
+
+
+def test_the_readme_table_columns_match_the_list():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for setting in settings.SETTINGS:
+        row = next(line for line in readme.splitlines() if line.startswith(f"| `{setting.name}` |"))
+        cells = [cell.strip() for cell in row.split("|")[2:4]]
+        assert cells[0] == ("yes" if setting.secret else "no"), setting.name
+        assert cells[1].split()[0] == ("yes" if setting.deployed else "no"), setting.name
+
+
 def test_the_preflight_takes_its_required_names_from_the_list():
     spec = importlib.util.spec_from_file_location("run_preflight", ROOT / "scripts" / "run_preflight.py")
     preflight = importlib.util.module_from_spec(spec)
@@ -133,6 +146,13 @@ def test_a_complete_deployed_environment_builds_the_app(tmp_path):
     assert app.state.ingest_api_key == GOOD_KEY
 
 
+def test_deployed_mode_accepts_inner_spaces_in_a_varied_key_and_secret(tmp_path):
+    key = "Qz7 key with inner spaces"
+    secret = "a secret with inner spaces, 0123456789"
+    app = create_app(deployed_environ(tmp_path, **{KEY: key, SECRET: secret}))
+    assert app.state.ingest_api_key == key and app.state.token_secret == secret
+
+
 REFUSED = [
     pytest.param(SECRET, None, id="secret missing"),
     pytest.param(SECRET, "", id="secret empty"),
@@ -145,6 +165,13 @@ REFUSED = [
     pytest.param(KEY, " " * 16, id="key 16 spaces"),
     pytest.param(KEY, "k" * 16, id="key 16 of one character"),
     pytest.param(KEY, "   Qz7-key-13ch   ", id="key short without its spaces"),
+    pytest.param(KEY, GOOD_KEY + " ", id="key with a trailing space"),
+    pytest.param(KEY, " " + GOOD_KEY, id="key with a leading space"),
+    pytest.param(KEY, GOOD_KEY + "\t", id="key with a trailing tab"),
+    pytest.param(KEY, "k " * 9, id="key one character with spaces between"),
+    pytest.param(KEY, "k " * 8 + "k", id="key one character with spaces between, no edge space"),
+    pytest.param(SECRET, "s " * 17, id="secret one character with spaces between"),
+    pytest.param(SECRET, "s\t" * 16 + "s", id="secret one character with tabs between"),
     pytest.param(DB, None, id="database URL missing"),
     pytest.param(DB, "", id="database URL empty"),
     pytest.param(DB, "   ", id="database URL blank"),
