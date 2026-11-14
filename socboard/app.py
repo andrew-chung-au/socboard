@@ -47,7 +47,7 @@ def create_health_router() -> APIRouter:
     """The health route: no authentication, no database, no input (so no 422)."""
     router = APIRouter(prefix=API_PREFIX, tags=["health"])
 
-    @router.get("/health", response_model=HealthResponse)
+    @router.get("/health", response_model=HealthResponse, operation_id="getHealth")
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
 
