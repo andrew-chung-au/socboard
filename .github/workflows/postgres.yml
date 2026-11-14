@@ -95,3 +95,37 @@ jobs:
           SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_ci:ci-throwaway-not-a-secret@127.0.0.3:1/no_such_db_9x4w
           EXPECT_REASON: refused
         run: bash scripts/postgres_no_leak.sh socboard_ci ci-throwaway-not-a-secret no_such_db_9x4w 127.0.0.3 :1/
+
+  tests:
+    # The Python tests on Postgres (#192). The tests make and drop their own databases on the
+    # service; the job sets only the server URL, so the tests (not this job) supply their own
+    # database URL, token secret and seed passwords.
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16.15
+        env:
+          POSTGRES_DB: socboard_ci
+          POSTGRES_USER: socboard_ci
+          POSTGRES_PASSWORD: ci-throwaway-not-a-secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U socboard_ci -d socboard_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SOCBOARD_TEST_POSTGRES_URL: postgresql+psycopg://socboard_ci:ci-throwaway-not-a-secret@127.0.0.1:5432/socboard_ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+
+      - run: uv sync --locked
+
+      - name: Check Python version
+        run: uv run --locked python scripts/check_python_version.py
+
+      - name: The Python tests on Postgres
+        run: uv run --locked pytest -rs
