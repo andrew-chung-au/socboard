@@ -236,7 +236,7 @@ migration-name-ok = $(and $(filter 1,$(words $(1))),$(if $(call kit-other-strip,
 migrate: ## Apply all database migrations to SOCBOARD_DATABASE_URL (default: socboard.db in the repository root)
 	uv run --locked python -m socboard.migrate
 
-seed: ## Load the synthetic asset inventory into SOCBOARD_DATABASE_URL (run make migrate first; a second run changes nothing)
+seed: ## Load the synthetic assets and the users analyst-a, analyst-b and lead into SOCBOARD_DATABASE_URL (run make migrate first; needs SOCBOARD_SEED_PASSWORD_ANALYST_A, SOCBOARD_SEED_PASSWORD_ANALYST_B and SOCBOARD_SEED_PASSWORD_LEAD on every run; a second run changes nothing)
 	uv run --locked python -m socboard.seed
 
 migration-new: ## Create a migration file from the model changes: make migration-new NAME=<letters, digits, _ and ->

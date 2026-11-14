@@ -28,11 +28,12 @@ SALT_BYTES = 16
 HASH_BYTES = 32
 
 # Bounds for parameters read back from a stored string: a damaged or hostile value must not make
-# a verify allocate gigabytes or run for minutes. The current constants sit inside them.
-_MAX_N = 2**20
-_MAX_R = 16
-_MAX_P = 16
-_MAX_MEMORY = 128 * _MAX_N * _MAX_R
+# a verify allocate gigabytes or run for minutes. The current constants sit inside them, with room
+# for twice the work and memory (256 MiB).
+_MAX_N = 2**18
+_MAX_R = 8
+_MAX_P = 2
+_MAX_MEMORY = 2**28
 
 _PARAMS = re.compile(r"n=([1-9][0-9]{0,9}),r=([1-9][0-9]{0,2}),p=([1-9][0-9]{0,2})")
 _B64URL = re.compile(r"[A-Za-z0-9_-]+")

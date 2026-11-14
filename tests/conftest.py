@@ -66,7 +66,10 @@ def real_app(app_database):
 
 @pytest.fixture
 def app(app_database):
-    """The real app plus test-only routes (the business routes do not exist yet)."""
+    """The real app plus the test-only routes of `backend_support.py`.
+
+    Those are `/items`, `/boom` and `/raise-*`.
+    """
     from backend_support import create_test_router
 
     from socboard.app import create_app
@@ -96,3 +99,11 @@ def crash_client(app):
     from fastapi.testclient import TestClient
 
     return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def real_crash_client(real_app):
+    """Like `crash_client`, over the real app only: no test-only routes."""
+    from fastapi.testclient import TestClient
+
+    return TestClient(real_app, raise_server_exceptions=False)

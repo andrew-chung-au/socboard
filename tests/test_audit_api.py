@@ -71,6 +71,7 @@ def journey(app_database, monkeypatch):
     from socboard.app import create_app
 
     monkeypatch.setenv("SOCBOARD_INGEST_API_KEY", INGEST_KEY)
+    # The app must be built after the ingest key is set, so no shared crash fixture.
     client = TestClient(create_app(), raise_server_exceptions=False)
 
     login = client.post(
