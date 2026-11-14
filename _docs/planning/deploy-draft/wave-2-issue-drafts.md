@@ -182,6 +182,7 @@ A `Dockerfile` builds the image from the repository, CI builds it on every pull 
 - [ ] A `.dockerignore` keeps `.git`, `.scratch/`, `node_modules`, env files, `socboard.db`, `tests/` and the planning docs out of the build context.
 - [ ] CI builds the image on every pull request and push, and fails on a build error. The step lists the image's files and fails if it finds an env file, a database file, `.git`, a demo credential or a hostile test string (the same patterns `make frontend-build` checks), a test file, or a secret pattern from `_docs/agent-kit/scripts/secret-patterns.txt`. A case that must be refused: a deliberately added env file in the build context makes that check fail (shown once on a throwaway branch, by the human).
 - [ ] The built image starts with no `dist` problem: `GET /` returns the entry page and `GET /api/health` returns 200 (checked in CI by running the container, once D2 and #142 are merged).
+- [ ] The image's Python major and minor version equals the contents of `.python-version` (added by #100): a CI step runs the image's interpreter and compares, and fails on a mismatch. A case that must be refused: a base image tag of another minor version makes the step fail.
 - [ ] The image carries no cloud credential and no seeded password; the start command refuses to start in deployed mode without the settings from #141 (a CI step runs the container without them and expects exit 2).
 - [ ] The human runs the build once locally and reports the result in a task file (`_human-tasks/`), because the sandbox cannot.
 - [ ] `make verify` is unchanged and passes.
@@ -222,6 +223,7 @@ A `terraform/` folder holds the state bucket's definition and the steps to move 
 - [ ] `.gitignore` covers state files, plan files, `.terraform/` and real variable files; an example variable file is tracked and holds names and placeholder values only. A case that must be refused: committing a real variable file or a state file is blocked by `.gitignore` (shown with `git check-ignore` on both paths).
 - [ ] The migration steps (create with local state, then configure the backend and move state) are written in `terraform/README.md` as numbered steps for the human, each with the expected output; they are marked as not yet run.
 - [ ] No access key, secret, account number or password appears in any file (the kit's secret scan reports none).
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret. A case that must be refused: a throwaway `output` that prints a variable named like a secret makes the check (a search of the folder in the review, until a CI check exists) fail.
 - [ ] The new folder and its `AGENTS.md` Layout line are approved by the human (protected).
 
 ## Out of scope
@@ -257,6 +259,7 @@ Terraform defines the OIDC provider and three roles (plan, apply, deploy) with t
 - [ ] The apply role covers only the CI-applied server part (D17b): it may attach the one instance role (and the snapshot role, if one exists) to the instance and has an explicit deny on every other IAM write. A case that must be refused: a plan or test shows the apply role cannot create or modify any IAM role or policy, including its own.
 - [ ] The deploy role may only run one custom Systems Manager document (fixed script, one parameter, the image digest, validated by a pattern) on instances tagged `project=socboard`, and read that command's result; it cannot run a generic shell document and cannot read any secret. A refused case: the policy names no generic run-command document.
 - [ ] The plan role is denied the value of the application secret.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret.
 - [ ] No access key exists for any role, user or workflow; the Terraform creates none, and the secret scan on the folder reports nothing.
 - [ ] A non-`main` branch cannot assume the apply or deploy role: the Environments' deployment-branch rule (D19) is checked by the human, and a failed assume-role attempt from a throwaway branch is recorded in D19's task file.
 - [ ] The whole file set is human-applied only (the decision record's amendment): the apply role cannot change any of it.
@@ -297,6 +300,7 @@ Terraform defines the instance role and profile, any role the snapshot schedule 
 - [ ] The instance role allows Systems Manager's agent operations and reading exactly one named secret (by ARN); it allows nothing else. A refused case: the policy grants no wildcard resource on secrets and no other service.
 - [ ] If the snapshot schedule needs an execution role, it is defined here with only that purpose (`VERIFY:`); the instance and volume in D17b reference it.
 - [ ] Budget notifications at three thresholds (half, 80 percent and the full limit of a monthly amount the human sets) go to an address the human sets in the variable file, not in the repository. `VERIFY:` the budget's region and API behaviour.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret.
 - [ ] Every resource is tagged `project=socboard`; the trust policy of each role names only the service that assumes it.
 - [ ] The README states the cost: a later change to the instance's permissions is a manual apply by the human.
 - [ ] `terraform fmt -check` and `validate` pass; the secret scan reports nothing.
@@ -333,6 +337,7 @@ Terraform defines the instance, Elastic IP, security group, encrypted data volum
 - [ ] An encrypted data volume, attached to the instance, holds the Postgres data and the env file; a daily snapshot schedule with a stated retention covers it.
 - [ ] The root volume is encrypted.
 - [ ] Every resource is tagged `project=socboard`.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret.
 - [ ] The apply role (D16) can create these resources and attach the one instance role, and nothing in this folder creates IAM resources (a search of the folder finds none).
 - [ ] `terraform fmt -check` and `validate` pass; the secret scan reports nothing.
 
@@ -366,6 +371,7 @@ The instance boots into a host that has Docker, Compose and Caddy, the data volu
 - [ ] The bootstrap installs Docker, the Compose plugin and Caddy, and mounts the encrypted volume at the data directory D11's Compose file takes as its Postgres path. The mount survives a reboot and does not block boot if the volume is missing. `VERIFY:` device naming on this instance type (use a stable identifier, not a guessed device name).
 - [ ] Caddy proxies to the app on the host's loopback only, and its certificate and account data live on the data volume. The hostname is derived from the Elastic IP through a public wildcard-DNS service (the decision of 2026-11-12). The certificate authority's staging endpoint is a variable for testing. `VERIFY:` the service's name format and the contact address rule.
 - [ ] Containers restart after a reboot; container logs are rotated with a stated size limit; unused images are pruned on a schedule.
+- [ ] The never-hold rule for Terraform state and its outputs (decision record of #139, section F): no `output` block exposes a secret value, any output that could hold one is marked sensitive, and no variable declares a secret; the user data and the Caddy file contain no secret.
 - [ ] The bootstrap writes no secret, and does not deliver the Compose file (D20 delivers it at the deployed commit).
 - [ ] The bootstrap is idempotent on a re-run (a second boot changes nothing) (`VERIFY:` by the human's first apply).
 - [ ] `terraform fmt -check` and `validate` pass; the secret scan reports nothing.
@@ -431,7 +437,7 @@ Pull requests that change `terraform/` show a read-only plan, produced with the 
 ## Acceptance criteria
 - [ ] A job runs `plan` with the plan role (OIDC, pull-request subject) and posts or uploads the plan output; it has no apply step and the role cannot apply.
 - [ ] Fork pull requests get no role (the job is skipped or fails closed). A refused case: a fork run shows no token and does not attempt the role.
-- [ ] The plan output hides sensitive values (`VERIFY:` how), and the plan role cannot read the application secret.
+- [ ] The plan output hides sensitive values (`VERIFY:` how), and the plan role cannot read the application secret. This plan is the place a reviewer reads Terraform outputs for the never-hold rule of the decision record of #139 (section F): an output holding a secret value, or one that is not marked sensitive, is a refusal reason.
 - [ ] State locking works under the read-only role, or the job runs with locking off and says why (`VERIFY:` against the first plan).
 - [ ] A change with no effect shows "no changes".
 
