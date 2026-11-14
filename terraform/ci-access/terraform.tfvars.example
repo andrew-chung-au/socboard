@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and set your own values. Placeholders only: none of these works as written.
+# The two ids are public numbers, not secrets. Read them with:
+#   gh api repos/<owner>/<repo> --jq '.owner.id, .id'
+repo_owner_id     = "REPLACE-WITH-OWNER-ID-DIGITS"
+repo_id           = "REPLACE-WITH-REPOSITORY-ID-DIGITS"
+state_bucket_name = "REPLACE-WITH-YOUR-STATE-BUCKET"
+
+# Keep this line commented out when GitHub is not yet registered in your AWS account (this part then
+# registers it). When it is registered, uncomment the line and set that ARN; registering twice fails.
+# reuse_oidc_provider_arn = "arn:aws:iam::REPLACE-ACCOUNT-NUMBER:oidc-provider/token.actions.githubusercontent.com"
