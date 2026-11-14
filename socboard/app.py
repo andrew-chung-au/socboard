@@ -16,6 +16,9 @@ Settings (#13), read when the app is built:
   it is not required: without it `POST /api/alerts` is closed (401) and one warning is logged.
 - `SOCBOARD_STATIC_DIR`: the built frontend (#140), default `frontend/dist`; see `socboard.spa`.
   A missing folder is not an error: the app then serves the API only.
+- `SOCBOARD_MODE`: exactly `deployed` turns deployed mode on (#141). Then a missing or unusable
+  ingest key or database URL, or a token secret of one repeated character, raises `ConfigError`
+  instead (`socboard.settings`, which lists every runtime setting).
 """
 
 import os
@@ -26,7 +29,7 @@ from typing import Literal
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 
-from socboard import __version__, database, spa
+from socboard import __version__, database, settings, spa
 from socboard.auth import add_login_route, create_users_router, resolve_token_secret
 from socboard.cases import create_cases_router
 from socboard.errors import ApiError, register_error_handlers
@@ -59,6 +62,8 @@ def create_health_router() -> APIRouter:
 def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     source = os.environ if environ is None else environ
     token_secret = resolve_token_secret(source)
+    if settings.is_deployed(source):
+        settings.check_deployed(source)
     ingest_api_key = resolve_ingest_key(source)
     database_state = DatabaseState(database.resolve_url(source))
 
