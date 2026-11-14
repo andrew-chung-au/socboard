@@ -11,11 +11,21 @@
 
 ## Reflection
 
-Not asked yet.
+### Engineer
+
+unknown (role not asked)
+
+### QA (both launches)
+
+unknown (role not asked)
+
+### Orchestrator (Session B)
+
+Delivery went through two Engineer-side CI cycles and four QA/Reviewer launches with no QA FAIL. The Reviewer's findings (a test for a lone `--`, a test of the `__main__` wiring, a README line stated as fact about a Dockerfile that did not exist yet) were not applied before the merge and go to a follow-up issue.
 
 ## Launch usage
 
-none
+Engineer 1, QA 1, QA 2 (fresh) and Reviewer 1, launched by the orchestrator; figures not copied from the completion notices: unknown.
 
 ## Files created or modified
 

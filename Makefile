@@ -243,3 +243,31 @@ migration-new: ## Create a migration file from the model changes: make migration
 	$(if $(findstring $$,$(value NAME)),$(error Usage: make migration-new NAME=<words> - NAME must not contain $$))
 	$(if $(call migration-name-ok,$(value NAME)),,$(error Usage: make migration-new NAME=<words> - one word of letters, digits, _ and - only))
 	uv run --locked python -m socboard.migrate new "$$NAME"
+
+# --- Full stack (issue #22) --------------------------------------------------
+
+run: ## Start the whole local stack in the background: migrate, seed, backend, frontend on the real API (needs SOCBOARD_TOKEN_SECRET, SOCBOARD_SEED_PASSWORD_ANALYST_A, SOCBOARD_SEED_PASSWORD_ANALYST_B, SOCBOARD_SEED_PASSWORD_LEAD and SOCBOARD_INGEST_API_KEY; starts nothing if one fails)
+	@.venv/bin/python scripts/run_preflight.py
+	@for f in .scratch/backend.pid .scratch/frontend.pid; do if [ -f "$$f" ] && kill -0 "$$(cat "$$f")" 2>/dev/null; then echo "run: the stack is already running ($$f names live process $$(cat "$$f")); run make stop first"; exit 1; fi; done
+	@SOCBOARD_HOST=127.0.0.1 SOCBOARD_PORT=5173 .venv/bin/python scripts/backend_probe.py port > /dev/null || { echo "run: port 5173 on 127.0.0.1 (the frontend) is already in use; nothing started"; exit 1; }
+	@.venv/bin/python scripts/backend_probe.py port
+	@$(MAKE) --no-print-directory migrate
+	@$(MAKE) --no-print-directory seed
+	@$(MAKE) --no-print-directory backend-run
+	@if ! VITE_USE_MOCK=false $(MAKE) --no-print-directory frontend-start; then \
+		echo "run: the frontend did not start; stopping the backend this run started"; $(MAKE) --no-print-directory backend-stop; exit 1; \
+	fi; \
+	pid=$$(cat .scratch/frontend.pid); end=$$(( $$(date +%s) + 30 )); \
+	until SOCBOARD_HOST=127.0.0.1 SOCBOARD_PORT=5173 .venv/bin/python scripts/backend_probe.py health; do \
+		if ! kill -0 "$$pid" 2>/dev/null || grep -q '^State:[[:space:]]*Z' "/proc/$$pid/status" 2>/dev/null || [ "$$(date +%s)" -ge "$$end" ]; then \
+			echo "run: the frontend did not answer /api/health on 127.0.0.1:5173 within 30 s (it exited, or its proxy to 127.0.0.1:8000 found no backend); last lines of .scratch/frontend.log:"; tail -n 20 .scratch/frontend.log; \
+			$(MAKE) --no-print-directory frontend-stop; $(MAKE) --no-print-directory backend-stop; exit 1; \
+		fi; \
+		sleep 1; \
+	done
+	@echo "run: backend  http://127.0.0.1:$${SOCBOARD_PORT:-8000}/ (log: .scratch/backend.log)"
+	@echo "run: frontend http://127.0.0.1:5173/ (mock off; its /api proxy goes to 127.0.0.1:8000; log: .scratch/frontend.log)"
+	@echo "run: make stop stops both"
+
+stop: ## Stop the stack that make run started (frontend, then backend); refuses a process the stack did not start
+	@$(MAKE) --no-print-directory frontend-stop; f=$$?; $(MAKE) --no-print-directory backend-stop || exit 1; exit $$f
