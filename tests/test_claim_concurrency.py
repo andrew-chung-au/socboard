@@ -101,7 +101,12 @@ def race(real_app, url, case_id, calls):
 
     threads = [threading.Thread(target=attempt, args=(i, call)) for i, call in enumerate(calls)]
     blocker = database.create_db_engine(url)
-    watcher = database.create_db_engine(url) if is_postgres() else None
+    # Autocommit, so each poll is its own transaction: inside one transaction Postgres keeps returning
+    # the snapshot of pg_stat_activity it took at the first read, and the count would never move
+    # (seen in CI on f8e7cd4: the count froze at 4 of 8, and at 0 of 2).
+    watcher = (
+        database.create_db_engine(url).execution_options(isolation_level="AUTOCOMMIT") if is_postgres() else None
+    )
     try:
         with blocker.connect() as conn:
             conn.execute(update(Case).where(Case.id == case_id).values(status=Case.status))
