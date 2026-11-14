@@ -25,9 +25,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from socboard import scoring
+from socboard import ratelimit, scoring
 from socboard.audit import append_audit
-from socboard.auth import require_api_key
+from socboard.auth import ConfigError, limit_ingest_rate, require_api_key
 from socboard.domain import ACTION_INGESTED, STATUS_NEW
 from socboard.errors import ApiError
 from socboard.ids import to_public_id
@@ -56,6 +56,15 @@ def resolve_ingest_key(environ: Mapping[str, str] | None = None) -> str | None:
     return key
 
 
+def resolve_ingest_limiter(environ: Mapping[str, str] | None = None) -> ratelimit.IngestLimiter:
+    """The ingest limiter from the environment, or `ConfigError` naming the variable."""
+    source = os.environ if environ is None else environ
+    try:
+        return ratelimit.IngestLimiter(ratelimit.resolve_ingest_limits(source))
+    except ratelimit.LimitConfigError as error:
+        raise ConfigError(str(error)) from None
+
+
 def add_ingest_route(api_router: APIRouter) -> None:
     """`POST /alerts` on `api_router` (the router from `create_api_router`, which documents the
     contract's 422)."""
@@ -64,10 +73,10 @@ def add_ingest_route(api_router: APIRouter) -> None:
         "/alerts",
         status_code=201,
         response_model=CaseSummary,
-        responses={401: {"model": ApiError}},
+        responses={401: {"model": ApiError}, 429: {"model": ApiError}},
         tags=["ingest"],
         operation_id="ingestAlert",
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(require_api_key), Depends(limit_ingest_rate)],
     )
     def ingest_alert(
         body: IngestRequest, session: Annotated[Session, Depends(get_session)]
