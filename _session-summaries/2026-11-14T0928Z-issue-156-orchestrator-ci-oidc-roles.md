@@ -39,7 +39,7 @@ None this session beyond starting the work. Open for the human: approve the deci
 ## Commands to validate
 
 - **Verify:** `make verify`: Python tests could not run here (uv could not write its cache: read-only file system), whitespace passed, no test files changed. Not a result about this change (no Python touched); CI is the evidence.
-- `terraform fmt -check` and `validate`: NOT RUN. Terraform and the provider could not be downloaded (403 and no package access). The `terraform check` workflow is the first run; hand-aligned for `fmt`.
+- `terraform fmt -check` and `validate`: not run locally (Terraform and the provider could not be downloaded: 403 and no package access). They have run only in CI: the `terraform check` workflow ran `fmt -check -recursive` and `validate` on 51aa301 and passed (run 43593591460). `plan` and apply have not run.
 - Refused-case searches, run by `grep` over `terraform/ci-access`: no `aws_secretsmanager_secret_version`, no secret-reading `data` block (the only `data` block is `aws_caller_identity`), no access key or user, no AWS-owned document named in an allow, three outputs that are role ARNs. The kit's secret scan reported nothing on every file.
 - The apply role cannot create or modify IAM: shown by reading the policy (explicit deny on 17 write verbs and on passing any other role). No plan or test could run; the human's plan (README step 5) is where it is read.
 

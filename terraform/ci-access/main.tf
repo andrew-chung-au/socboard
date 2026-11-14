@@ -1,8 +1,9 @@
 # What CI may do in AWS (issue #156, Deploy item D16): one GitHub OIDC provider and three roles
 # (plan, apply, deploy). Applied only by the human (Deploy decision record, decision 10), so CI
-# cannot widen its own permissions. Nothing here was run: Terraform and AWS were not available when
-# this was written, so every argument name and provider behaviour below is unchecked until the first
-# `terraform init`, `validate` and apply (Deploy item D19). VERIFY: each one against the pinned provider.
+# cannot widen its own permissions. Terraform and AWS were not available when this was written:
+# `fmt` and `validate` have run only in CI (the `terraform check` workflow); `plan` and apply have
+# not run, so real provider behaviour against AWS below is unchecked until the first apply (Deploy
+# item D19). VERIFY: each one against the pinned provider.
 #
 # The provider lock file `.terraform.lock.hcl` is not in this folder yet: it cannot be made
 # without `terraform init`. The human creates it at the first `init` and commits it (README).
