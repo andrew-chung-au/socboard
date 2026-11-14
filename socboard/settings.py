@@ -14,7 +14,7 @@ names the variable, never its value.
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from socboard import database, ingest, spa
+from socboard import database, ingest, ratelimit, spa
 from socboard.auth import SECRET_ENV_NAME, ConfigError
 from socboard.seed import USERS
 
@@ -60,6 +60,41 @@ SETTINGS = (
         deployed=True,
         make_run=False,
         rule="a valid database URL (default: socboard.db in the repository root); required in deployed mode",
+    ),
+    Setting(
+        ratelimit.MAX_FAILURES_VAR,
+        secret=False,
+        deployed=False,
+        make_run=False,
+        rule=f"a whole number of 1 or more (default {ratelimit.DEFAULT_MAX_FAILURES})",
+    ),
+    Setting(
+        ratelimit.CLIENT_MAX_FAILURES_VAR,
+        secret=False,
+        deployed=False,
+        make_run=False,
+        rule=f"a whole number of 1 or more (default {ratelimit.DEFAULT_CLIENT_MAX_FAILURES})",
+    ),
+    Setting(
+        ratelimit.WINDOW_SECONDS_VAR,
+        secret=False,
+        deployed=False,
+        make_run=False,
+        rule=f"a whole number of 1 or more (default {ratelimit.DEFAULT_WINDOW_SECONDS})",
+    ),
+    Setting(
+        ratelimit.MAX_TRACKED_VAR,
+        secret=False,
+        deployed=False,
+        make_run=False,
+        rule=f"a whole number of 1 or more (default {ratelimit.DEFAULT_MAX_TRACKED})",
+    ),
+    Setting(
+        ratelimit.TRUSTED_PROXIES_VAR,
+        secret=False,
+        deployed=False,
+        make_run=False,
+        rule="a comma-separated list of IP addresses (default none)",
     ),
     Setting("SOCBOARD_HOST", secret=False, deployed=False, make_run=False, rule="127.0.0.1, localhost or ::1 (default 127.0.0.1)"),
     Setting("SOCBOARD_PORT", secret=False, deployed=False, make_run=False, rule="a whole number from 1 to 65535 (default 8000)"),

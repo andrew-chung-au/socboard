@@ -28,6 +28,7 @@ logger = logging.getLogger("socboard.errors")
 UNAUTHORIZED = "unauthorized"
 INVALID_API_KEY = "invalid_api_key"
 INVALID_CREDENTIALS = "invalid_credentials"
+RATE_LIMITED = "rate_limited"
 FORBIDDEN = "forbidden"
 NOT_FOUND = "not_found"
 CASE_CLOSED = "case_closed"
