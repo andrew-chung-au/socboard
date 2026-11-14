@@ -69,7 +69,12 @@ make test      # run the pytest suite, then the frontend tests
 make verify    # run tests, whitespace and weakened-test checks
 ```
 
-The web application is not built yet, so there is no `make run` target.
+Quick start, the whole local stack with one command:
+
+1. `make install` (once, on a fresh checkout).
+2. Set five environment variables in your shell: `SOCBOARD_TOKEN_SECRET`, `SOCBOARD_SEED_PASSWORD_ANALYST_A`, `SOCBOARD_SEED_PASSWORD_ANALYST_B`, `SOCBOARD_SEED_PASSWORD_LEAD` and `SOCBOARD_INGEST_API_KEY`. What each must hold is in the list below and in the ingest paragraph. The seed passwords are the sign-in passwords of `analyst-a`, `analyst-b` and `lead`; a user that already exists keeps its old password.
+3. `make run`: checks the five variables first and starts nothing if one is missing or too short, then migrates and seeds the database, starts the backend on http://127.0.0.1:8000/ and the frontend, on the real API (mock off), on http://127.0.0.1:5173/. Leave `SOCBOARD_PORT` unset here: the frontend sends `/api` to port 8000.
+4. `make stop` stops both.
 
 Sign-in needs four environment variables, set once (names only here; never commit values):
 
