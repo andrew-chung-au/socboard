@@ -59,6 +59,14 @@ def test_make_smoke_refuses_a_bad_url_before_running_anything(url, tmp_path):
     assert "step 1" not in done.stdout
 
 
+@pytest.mark.parametrize("url", ["-h", "--help", "-x"])
+def test_make_smoke_treats_a_url_that_starts_with_a_dash_as_a_url_not_an_option(url):
+    done = make_smoke(f"URL={url}", "HEALTH_ONLY=1")
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert "refused" in done.stderr
+    assert "usage:" not in done.stdout.lower()
+
+
 def test_make_smoke_refuses_a_missing_url():
     done = make_smoke()
     assert done.returncode != 0

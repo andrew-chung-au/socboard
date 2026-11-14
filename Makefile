@@ -257,7 +257,7 @@ smoke: ## Check a running app (issue #191): make smoke URL=<url> [HEALTH_ONLY=1]
 	$(if $(findstring $$,$(value URL)),$(error Usage: make smoke URL=<url> [HEALTH_ONLY=1] - URL must not contain $$))
 	$(if $(call smoke-url-ok,$(value URL)),,$(error Usage: make smoke URL=<url> [HEALTH_ONLY=1] - URL is one word of letters, digits and : / . - _ [ ] only))
 	$(if $(value HEALTH_ONLY),$(if $(subst x1x,,x$(value HEALTH_ONLY)x),$(error Usage: make smoke URL=<url> [HEALTH_ONLY=1] - HEALTH_ONLY is empty or 1)))
-	uv run --locked python -m socboard.smoke $(if $(value HEALTH_ONLY),--health-only )"$$URL"
+	uv run --locked python -m socboard.smoke $(if $(value HEALTH_ONLY),--health-only )-- "$$URL"
 
 # --- Full stack (issue #22) --------------------------------------------------
 
