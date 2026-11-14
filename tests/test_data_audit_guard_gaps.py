@@ -865,18 +865,18 @@ def test_a_name_beside_a_dollar_identifier_is_still_refused(sql):
 
 # --- #107: QA's Low items ------------------------------------------------------------------------
 
-KEY_ALIAS = Table("audit_entries", MetaData(), Column("id", Integer, key="xid"), Column("detail", String))
 
-
-def test_an_id_under_a_column_key_alias_is_refused():
-    rows = [{"xid": None, "detail": "a"}, {"xid": None, "detail": "b"}]
-    assert refused_statement(insert(KEY_ALIAS).values(xid=BIG))
-    assert refused_statement(insert(KEY_ALIAS).values([rows[0], {"xid": BIG, "detail": "b"}]))
-    assert refused_statement(insert(KEY_ALIAS), {"xid": BIG})
-    assert refused_statement(insert(KEY_ALIAS).values(rows), {"xid_m1": BIG})
-    assert not refused_statement(insert(KEY_ALIAS).values(xid=None))
-    assert not refused_statement(insert(KEY_ALIAS).values(rows))
-    assert not refused_statement(insert(KEY_ALIAS), {"xid": None})
+@pytest.mark.parametrize("key", ["xid", "x_m1", "id_x_m0", "rowid_m12"])  # an alias may itself end in _m<n>
+def test_an_id_under_a_column_key_alias_is_refused(key):
+    alias = Table("audit_entries", MetaData(), Column("id", Integer, key=key), Column("detail", String))
+    rows = [{key: None, "detail": "a"}, {key: None, "detail": "b"}]
+    assert refused_statement(insert(alias).values({key: BIG}))
+    assert refused_statement(insert(alias).values([rows[0], {key: BIG, "detail": "b"}]))
+    assert refused_statement(insert(alias), {key: BIG})
+    assert refused_statement(insert(alias).values(rows), {f"{key}_m1": BIG})
+    assert not refused_statement(insert(alias).values({key: None}))
+    assert not refused_statement(insert(alias).values(rows))
+    assert not refused_statement(insert(alias), {key: None})
 
 
 def test_a_mistyped_execute_key_raises_sqlalchemys_error_not_the_audit_refusal(seeded):

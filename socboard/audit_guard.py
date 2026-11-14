@@ -200,7 +200,8 @@ def supplies_audit_id(statement, parameters=None) -> bool:
     multi-row `values([...])`), an `id` that is not None or NULL, so any SQL expression and any
     `bindparam` whatever its value; and in any execute-parameter dict, a key `id` or `id_m<n>`
     (row n of a multi-row `values`; any case) with a value other than None. A column whose key is
-    not its name (`Column("id", key="xid")`) is `id` under its key too.
+    not its name (`Column("id", key="xid")`) is `id` under its key too, in `values()` and as an
+    execute key, both the key itself (`xid`, also a key ending in `_m<n>`) and `xid_m<n>`.
     """
     table = getattr(statement, "table", None)
     if not isinstance(statement, Insert) or not _names_audit_table(table):
@@ -210,7 +211,8 @@ def supplies_audit_id(statement, parameters=None) -> bool:
         return True
     for mapping in _parameter_mappings(parameters):
         for key, value in mapping.items():
-            names = {_PARAMETER_KEY.fullmatch(key.lower())[1]} if isinstance(key, str) else _key_names(key)
+            # the raw key too: a key alias can itself end in `_m<n>`
+            names = {key.lower(), _PARAMETER_KEY.fullmatch(key.lower())[1]} if isinstance(key, str) else _key_names(key)
             if names & ids and value is not None:
                 return True
     rows = _values_rows(statement)
