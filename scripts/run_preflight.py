@@ -21,9 +21,9 @@ from socboard.auth import SECRET_ENV_NAME, ConfigError, resolve_token_secret  # 
 from socboard.database import DatabaseUrlError, resolve_url  # noqa: E402
 from socboard.seed import USERS, read_seed_passwords  # noqa: E402
 from socboard.server import BindError, resolve_bind  # noqa: E402
+from socboard.settings import SETTINGS  # noqa: E402
 
-SEED_VARIABLES = tuple(variable for _, _, _, variable in USERS)
-REQUIRED = (SECRET_ENV_NAME, *SEED_VARIABLES, ingest.KEY_ENV_NAME)
+REQUIRED = tuple(setting.name for setting in SETTINGS if setting.make_run)
 INGEST_MESSAGE = (
     f"{ingest.KEY_ENV_NAME} must be set to at least {ingest.MIN_KEY_LENGTH} characters "
     "(make run needs ingest open)"

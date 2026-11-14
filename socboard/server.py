@@ -6,6 +6,8 @@ any other host is refused before anything is imported or started. The one comman
 passes it, and no environment variable can switch it on (#142). The app also needs
 SOCBOARD_TOKEN_SECRET (#13): without a usable one, or with an invalid SOCBOARD_DATABASE_URL, the
 server prints a message naming the variable (never its value) and exits 2, as for a bad host.
+In deployed mode (`SOCBOARD_MODE=deployed`, #141) the same happens for a missing or unusable
+ingest key or database URL; see `socboard.settings`.
 """
 
 import argparse
