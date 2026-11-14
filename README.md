@@ -137,6 +137,16 @@ Resetting a user's password: `make seed` never changes an existing user, so a ne
 
 Build arguments, not runtime variables: `VITE_API_BASE_URL`, `VITE_FEATURE_REASSIGN`, `VITE_POLL_INTERVAL_MS` and `VITE_USE_MOCK` are fixed when the frontend is built (`make frontend-build`), so changing them later needs a rebuild.
 
+### Container image
+
+The `Dockerfile` builds one image that serves the API and the built frontend from one origin. It is built by CI on every push and pull request (`.github/workflows/image.yml`), which also checks what is in it; the agent's sandbox has no Docker.
+
+- **Build:** `docker build --tag socboard-image .` from the repository root. Two optional build arguments, `VITE_FEATURE_REASSIGN` and `VITE_POLL_INTERVAL_MS`, are passed with `--build-arg`. `VITE_API_BASE_URL` stays unset, so the client calls `/api` on the same origin. `VITE_USE_MOCK` is not a build argument: the `Dockerfile` sets it to `false` with `ENV`, so an image cannot be built with the mock on.
+- **Start:** `python -m socboard.server --allow-non-loopback-host`, in exec form, with `SOCBOARD_HOST` set to `0.0.0.0` in the image (the flag, not the variable, is what lets the server bind it). The app listens on port 8000 as user 10001, not root. The image also holds `python -m socboard.migrate` and `python -m socboard.seed`, the one-shot commands to run in the container before the first start.
+- **One worker:** the start command has no `--workers` and the image sets no `WEB_CONCURRENCY`, because the login and ingest limits live in the process and assume one worker.
+- **Forwarded addresses:** the image leaves `FORWARDED_ALLOW_IPS` at uvicorn's default (`127.0.0.1`) and does not set `SOCBOARD_TRUSTED_PROXIES`, because it cannot know the proxy's address. Whoever runs the container behind a reverse proxy at another address lists that proxy's address in `SOCBOARD_TRUSTED_PROXIES` (see "Login attempt limits"). If `FORWARDED_ALLOW_IPS` is set at run time, it lists only the proxy's address, never `*`: with `*` uvicorn believes any caller's header, and a forged one would choose its bucket.
+- **Settings:** none is baked in. Deployed mode (`SOCBOARD_MODE` set to `deployed`) needs the token secret, the ingest key and the database URL at run time, and the seed needs the three seed passwords; the image holds no secret, no seeded password and no demo data. A SQLite database URL must point into a folder the container's user can write.
+
 ## Currently Out of Scope
 
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
