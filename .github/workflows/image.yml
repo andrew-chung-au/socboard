@@ -1,0 +1,73 @@
+# Builds the container image on every push and pull request, and checks what is in it (#190).
+# No secret is used: the values the test container needs are generated inside the step.
+name: socboard image
+
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build --tag socboard-image:ci .
+
+      - name: The image's Python is the one .python-version names
+        run: |
+          expected="$(tr -d '[:space:]' < .python-version)"
+          actual="$(docker run --rm --entrypoint python socboard-image:ci -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+          echo "expected $expected, the image has $actual"
+          test "$expected" = "$actual"
+
+      - name: Export the image's app files and check them
+        run: |
+          id="$(docker create socboard-image:ci)"
+          mkdir -p .scratch/image-files
+          docker export "$id" | tar -x -C .scratch/image-files app
+          docker rm "$id" > /dev/null
+          python3 scripts/check_image_files.py .scratch/image-files
+
+      - name: Deployed mode without its settings refuses to start
+        run: |
+          set +e
+          docker run --rm --env SOCBOARD_MODE=deployed socboard-image:ci
+          status=$?
+          echo "exit code $status"
+          test "$status" -eq 2
+
+      - name: Run it with throwaway settings, migrate, seed, then answer the health route and the entry page
+        run: |
+          token_secret="$(openssl rand -hex 32)"
+          ingest_key="$(openssl rand -hex 16)"
+          seed_password="$(openssl rand -hex 16)"
+          echo "::add-mask::$token_secret"
+          echo "::add-mask::$ingest_key"
+          echo "::add-mask::$seed_password"
+          docker run --detach --name app --publish 127.0.0.1:8000:8000 \
+            --env SOCBOARD_MODE=deployed \
+            --env SOCBOARD_TOKEN_SECRET="$token_secret" \
+            --env SOCBOARD_INGEST_API_KEY="$ingest_key" \
+            --env SOCBOARD_DATABASE_URL=sqlite:////tmp/ci.db \
+            socboard-image:ci
+          docker exec app python -m socboard.migrate
+          docker exec \
+            --env SOCBOARD_SEED_PASSWORD_ANALYST_A="$seed_password" \
+            --env SOCBOARD_SEED_PASSWORD_ANALYST_B="$seed_password" \
+            --env SOCBOARD_SEED_PASSWORD_LEAD="$seed_password" \
+            app python -m socboard.seed
+          for attempt in $(seq 1 30); do
+            curl --silent --fail http://127.0.0.1:8000/api/health > /dev/null && break
+            sleep 1
+          done
+          curl --silent --fail http://127.0.0.1:8000/api/health
+          curl --silent --fail http://127.0.0.1:8000/ | grep --ignore-case --quiet "<html"
+
+      - name: The container's log, if anything failed
+        if: failure()
+        run: docker logs app || true
