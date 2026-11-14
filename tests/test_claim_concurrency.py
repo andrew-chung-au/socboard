@@ -70,6 +70,17 @@ def _blocked_requests(conn):
     ).scalar_one()
 
 
+def _activity(conn):
+    """Every other session on this database: state, wait event and the start of its query."""
+    rows = conn.execute(
+        text(
+            "SELECT state, wait_event_type, wait_event, left(query, 60) FROM pg_stat_activity "
+            "WHERE datname = current_database() AND pid <> pg_backend_pid() ORDER BY pid"
+        )
+    ).all()
+    return [tuple(row) for row in rows]
+
+
 def race(real_app, url, case_id, calls):
     """Run every call in `calls` (a function of a TestClient) at once behind the case's row lock.
 
@@ -106,7 +117,11 @@ def race(real_app, url, case_id, calls):
                     while blocked < len(calls) and time.monotonic() < deadline:
                         time.sleep(0.02)
                         blocked = _blocked_requests(watch)
-                assert blocked == len(calls), f"case {case_id}: only {blocked} of {len(calls)} requests were blocked"
+                    activity = [] if blocked == len(calls) else _activity(watch)
+                assert blocked == len(calls), (
+                    f"case {case_id}: only {blocked} of {len(calls)} requests were blocked; "
+                    f"sessions on this database: {activity}"
+                )
             conn.rollback()
         for thread in threads:
             thread.join(timeout=JOIN_TIMEOUT)
