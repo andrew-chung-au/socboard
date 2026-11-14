@@ -11,8 +11,6 @@ Work ran in one Kiro Web session as Engineer; no PM, QA or Reviewer launch happe
 
 **What I learned:** the GitHub API (`repos/<owner>/<repo>/actions/oidc/customization/sub`) reports this repository uses the immutable subject, `repo:<owner>@<owner id>/<repo>@<repo id>`. That settles most of the "numeric id" `VERIFY:`: the ids are in the subject, so no customised claim is needed. It was read from the API, not from a real token.
 
-Direction taken from the human's earlier project (`vuln-triage`, read through the API, notes not kept): the method only (OIDC provider, audience and subject conditions, an SSM-based deploy role, tag condition on instances). Every file, name and wording here is SOCBoard's own, and the design differs: three roles, a pull-request subject, an IAM deny, a custom document and a state-prefix limit. The overlap check (a script comparing runs of five words against that project's Terraform files and README) first found 56 shared runs. I renamed the variables, replaced the create-or-reuse switch with one nullable variable, and rewrote one comment and several descriptions. It now finds 15, all fixed by outside parties: the provider URL and the names of its two arguments (`url`, `client_id_list`), GitHub's published subject format (`repo:<owner>@<owner id>/<repo>@<repo id>`), and the owner login used as a default. The script and the downloaded copies were deleted.
-
 ## Reflection
 
 unknown (role not asked)
@@ -36,7 +34,7 @@ None this session beyond starting the work. Open for the human: approve the deci
 
 - The issue says the plan role is "read-only, including the state bucket". The native S3 lock needs a write, so the plan job must run with `-lock=false` (D18b). Recorded in the decision record and README.
 - The issue says "one custom document (fixed script, one parameter validated by a pattern)". That document is created by the CI-applied server part (D17b or D17c), not here; the roles only name it `socboard-deploy`. D17b's backend key must start with `server/` and its document must use that name.
-- The AWS account may already hold a GitHub OIDC provider (AWS allows one per URL, and an earlier project of the human's used the same account). README step 1 has the human check first; if one exists, `reuse_oidc_provider_arn` names it and none is created. A second create would fail.
+- The AWS account may already hold a GitHub OIDC provider (AWS allows one per URL). README step 1 has the human check first; if one exists, `reuse_oidc_provider_arn` names it and none is created. A second create would fail.
 
 ## Commands to validate
 
