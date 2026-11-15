@@ -1,0 +1,21 @@
+--- a/.github/workflows/compose.yml
++++ b/.github/workflows/compose.yml
+@@ -64,0 +65,18 @@
++      - name: Mask every generated value in the log
++        run: |
++          while IFS='=' read -r name value; do
++            if [ -n "$value" ]; then echo "::add-mask::$value"; fi
++          done < compose.secrets
++
++      - name: Fetch the built image's own schema out of the app container
++        run: |
++          docker compose exec -T app python -c "import json; from socboard.app import create_app; print(json.dumps(create_app().openapi()))" > "$RUNNER_TEMP/schema.json"
++          test -s "$RUNNER_TEMP/schema.json"
++
++      - name: Integration tests against the stack (journeys, forwarded-address rule, schema)
++        run: |
++          set -a
++          . ./compose.secrets
++          set +a
++          SOCBOARD_BASE_URL=http://127.0.0.1:8080 STACK_APP_URL=http://127.0.0.1:8000 STACK_SCHEMA_FILE="$RUNNER_TEMP/schema.json" make test-stack
++

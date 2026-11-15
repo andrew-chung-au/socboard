@@ -11,6 +11,7 @@ the two test users of `backend_support.py`, built once per run.
 
 import db_target
 import pytest
+import stack_support
 
 MARKER_LINE = (
     "sqlite_only(reason): the test needs SQLite (a database file, SQLite triggers or pragmas); it is "
@@ -24,9 +25,16 @@ POSTGRES_MARKER_LINE = (
 )
 
 
+STACK_MARKER_LINE = (
+    "stack_only(reason): the test needs a live Compose stack (SOCBOARD_BASE_URL set, `make test-stack`); it is "
+    "deselected when the variable is unset (#229)"
+)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", MARKER_LINE)
     config.addinivalue_line("markers", POSTGRES_MARKER_LINE)
+    config.addinivalue_line("markers", STACK_MARKER_LINE)
     try:
         selected = db_target.server_url() is not None
     except ValueError as error:
@@ -86,13 +94,28 @@ def pytest_collection_modifyitems(config, items):
         f"sqlite_only: {len(sqlite_marked)} marked, {len(sqlite_marked) if postgres else 0} deselected on Postgres; "
         f"postgres_only: {len(postgres_marked)} marked, {0 if postgres else len(postgres_marked)} deselected on SQLite"
     )
+    stack_marked = _marked(items, "stack_only")
+    try:
+        live = stack_support.is_live()
+    except stack_support.StackSettingError as error:
+        raise pytest.UsageError(str(error)) from None
+    if stack_marked and not live:
+        stack_ids = {id(item) for item in stack_marked}
+        items[:] = [item for item in items if id(item) not in stack_ids]
+        config.hook.pytest_deselected(items=stack_marked)
+    config._stack_only_line = (
+        f"stack_only: {len(stack_marked)} marked, {0 if live else len(stack_marked)} deselected "
+        f"({'live stack' if live else 'SOCBOARD_BASE_URL is not set'})"
+    )
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line(config._sqlite_only_line)
+        reporter.write_line(config._stack_only_line)
 
 
 def pytest_terminal_summary(terminalreporter, config):
     terminalreporter.write_line(getattr(config, "_sqlite_only_line", "sqlite_only: not counted"))
+    terminalreporter.write_line(getattr(config, "_stack_only_line", "stack_only: not counted"))
     if not db_target.is_postgres():
         return
     dropped = db_target.drop_databases(final=True)
