@@ -1,0 +1,37 @@
+--- a/.github/workflows/compose.yml
++++ b/.github/workflows/compose.yml
+@@ -82,0 +83,34 @@
++      - uses: actions/setup-node@v4
++        with:
++          node-version: "24.22.0"
++
++      - uses: oven-sh/setup-bun@v2
++        with:
++          bun-version: "1.4.2"
++
++      - name: Install the browser test's packages and Chromium
++        run: |
++          make e2e-install
++          cd e2e && bunx playwright install --with-deps chromium
++
++      - name: Browser test against the stack (two analysts and a lead)
++        run: |
++          set -a
++          . ./compose.secrets
++          set +a
++          SOCBOARD_BASE_URL=http://127.0.0.1:8080 make e2e
++
++      - name: Remove every secret from the failure artifacts
++        id: redact
++        if: failure()
++        run: python3 e2e/redact_traces.py e2e/test-results compose.secrets
++
++      - name: Keep the screenshot and trace of a failed browser test for 7 days
++        if: ${{ failure() && steps.redact.outcome == 'success' }}
++        uses: actions/upload-artifact@v4
++        with:
++          name: e2e-test-results
++          path: e2e/test-results
++          retention-days: 7
++          if-no-files-found: ignore
++

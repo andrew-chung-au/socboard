@@ -171,6 +171,16 @@ The `Dockerfile` builds one image that serves the API and the built frontend fro
 - **Not counted as skipped:** the tests that need a stack are marked `stack_only`; without the address they are deselected and the run header says `stack_only: N marked, N deselected`.
 - **Behind the proxy:** the tests assert the bucket behaviour, not the client address the app sees. The app sees the address the proxy saw for the caller, which on a Docker host is the network's gateway, not the caller's own address (`VERIFY:` in CI; not stable, so no test pins it). `VERIFY:` that Caddy replaces a forged `X-Forwarded-For` with the caller's address, as the comment in `compose/Caddyfile` says; if CI shows otherwise, the forged-address tests fail and that is a finding.
 
+### Browser test
+
+`make e2e` drives the built site in a real browser against a running Compose stack (`make compose-up`), with two Analysts and a Lead. It lives in `e2e/` (Playwright, pinned in `e2e/package.json` and `e2e/bun.lock`, installed apart from the frontend's packages) and never runs in `make test` or `make verify`. The stack address is the same variable as the stack tests use (defined in `e2e/lib/stack.ts`; plain `http` on the loopback only); `make e2e` exits 2 naming it when it is unset, and fails naming `make e2e-install` when the packages are missing. It does not start the stack.
+
+- **Once:** `make e2e-install` for the packages, then `cd e2e && bunx playwright install chromium` for the browser.
+- **What a run needs:** the ingest key and the three seed passwords in the environment under the names in the table above (load them from `compose.secrets` into your shell yourself and never print them).
+- **The journey:** three alerts are ingested through the API (the API is the intake), `analyst-a` sees them in the queue most severe first, claims and starts one, `analyst-b` (whose page was opened before the claim) claims the same case and gets the server's refusal (409) while the owner stays `analyst-a`, closing without a reason is not possible, `analyst-a` closes it with a reason, and the Lead reads its audit trail: the ingest, the claim, the start and the close, in that order. A hostile alert (a script tag and an image tag in the text) shows as text and runs nothing, and a wrong password shows the sign-in error and signs nobody in.
+- **Requests one run makes:** 4 ingest requests (of the key's 60 a minute; the first one waits up to a minute if the integration tests just used the allowance up) and 5 sign-ins, of which 1 fails (1 of the 20 failures a client address may have in five minutes). Cases are found by a unique marker in the alert text, never by counts, and the cases of a run stay (the audit trail is append-only), so a second run works.
+- **A failure:** CI keeps the screenshot and the trace for 7 days (artifact `e2e-test-results`). A trace records what the test typed and what the page sent, so CI first runs `e2e/redact_traces.py`, which replaces every value of the run's secrets file, every bearer token and the token of the login answer, and fails the step if one is left; nothing is uploaded when it fails.
+
 ## Currently Out of Scope
 
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
