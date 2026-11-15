@@ -19,7 +19,9 @@ export function SeverityBadge({ severity, className }: { severity: Severity; cla
         className,
       )}
     >
-      <span aria-hidden className="text-[9px]">{s.mark}</span>
+      <span aria-hidden className="text-[9px]">
+        {s.mark}
+      </span>
       {severity}
     </span>
   );
@@ -33,7 +35,9 @@ export function StatusBadge({ status }: { status: Status }) {
         ? "border-warning/50 bg-warning-bg text-warning"
         : "border-border bg-muted text-muted-foreground";
   return (
-    <span className={cn("inline-flex rounded-sm border px-1.5 py-0.5 text-[11px] font-medium", cls)}>
+    <span
+      className={cn("inline-flex rounded-sm border px-1.5 py-0.5 text-[11px] font-medium", cls)}
+    >
       {status}
     </span>
   );

@@ -29,7 +29,8 @@ const HTTP = "services/http.ts";
 function findSrc(): string {
   const candidates = [resolve(process.cwd(), "src"), resolve(process.cwd(), "frontend", "src")];
   const found = candidates.find((dir) => existsSync(join(dir, MOCK)));
-  if (!found) throw new Error(`guardrails: frontend/src not found; looked in ${candidates.join(", ")}`);
+  if (!found)
+    throw new Error(`guardrails: frontend/src not found; looked in ${candidates.join(", ")}`);
   return found;
 }
 
@@ -49,7 +50,8 @@ interface Rule {
   allowedIn?: string; // the one file where the pattern may appear
 }
 
-const MARKDOWN_PACKAGES = "markdown|marked|linkify|remark|rehype|showdown|micromark|snarkdown|mdast";
+const MARKDOWN_PACKAGES =
+  "markdown|marked|linkify|remark|rehype|showdown|micromark|snarkdown|mdast";
 
 const HTML_PACKAGES = "html-react-parser|html-to-react|react-html-parser|dompurify";
 
@@ -60,7 +62,11 @@ const importOf = (inner: string) =>
 const RULES: Rule[] = [
   { name: "dangerouslySetInnerHTML", pattern: /dangerouslySetInnerHTML/ },
   { name: "innerHTML", pattern: /innerHTML/ },
-  { name: "HTML sink", pattern: /insertAdjacentHTML|outerHTML|document\s*\.\s*write|createContextualFragment|setHTMLUnsafe|parseHTMLUnsafe/ },
+  {
+    name: "HTML sink",
+    pattern:
+      /insertAdjacentHTML|outerHTML|document\s*\.\s*write|createContextualFragment|setHTMLUnsafe|parseHTMLUnsafe/,
+  },
   { name: "HTML-parsing package import", pattern: importOf(`(?:${HTML_PACKAGES})`) },
   { name: "XMLHttpRequest or sendBeacon", pattern: /XMLHttpRequest|sendBeacon/ },
   {
@@ -84,12 +90,17 @@ const RULES: Rule[] = [
 // An import specifier that reaches into src/test/: `@/test`, `@/test/...` or a relative path with a `test` segment.
 function importsFromTestFolder(text: string): boolean {
   const specifiers = text.matchAll(/(?:from\s*|import\s*\(?\s*|require\(\s*)["']([^"']*)["']/g);
-  return [...specifiers].some(([, spec]) => /^@\/test(?:\/|$)/.test(spec) || (spec.startsWith(".") && spec.split("/").includes("test")));
+  return [...specifiers].some(
+    ([, spec]) =>
+      /^@\/test(?:\/|$)/.test(spec) || (spec.startsWith(".") && spec.split("/").includes("test")),
+  );
 }
 
 /** Files outside src/test/ must not import from it. */
 function findTestImports(files: SourceFile[]): string[] {
-  return files.filter((f) => importsFromTestFolder(f.text)).map((f) => `${f.path}: import from src/test`);
+  return files
+    .filter((f) => importsFromTestFolder(f.text))
+    .map((f) => `${f.path}: import from src/test`);
 }
 
 /** Paths relative to src/ (e.g. "test/helper.tsx"); only `*.test.ts(x)` and `setup.ts` may sit directly in src/test/. */
@@ -169,7 +180,7 @@ describe("source guardrails", () => {
     const component = (text: string): SourceFile[] => [{ path: "components/soc/Evil.tsx", text }];
 
     it("dangerouslySetInnerHTML added to a component", () => {
-      const files = component('<div dangerouslySetInnerHTML={{ __html: note.text }} />');
+      const files = component("<div dangerouslySetInnerHTML={{ __html: note.text }} />");
 
       // CI run 42967972731 (round 2): this test also expected "components/soc/Evil.tsx: innerHTML"
       // (the removed line was `expect(found).toContain("components/soc/Evil.tsx: innerHTML")`).
@@ -201,7 +212,11 @@ describe("source guardrails", () => {
       ["WebSocket", 'new WebSocket("ws://x");', "WebSocket or EventSource"],
       ["EventSource", 'new EventSource("/stream");', "WebSocket or EventSource"],
       ["fetch outside http.ts", 'await fetch("/api/queue");', "fetch( outside http.ts"],
-      [".sort(", "cases.sort((a, b) => a.id.localeCompare(b.id));", ".sort( or .toSorted( outside mockService.ts"],
+      [
+        ".sort(",
+        "cases.sort((a, b) => a.id.localeCompare(b.id));",
+        ".sort( or .toSorted( outside mockService.ts",
+      ],
       [".toSorted(", "const s = cases.toSorted();", ".sort( or .toSorted( outside mockService.ts"],
       ["<script", 'const s = "<script>alert(1)</script>";', "<script"],
     ])("%s", (_label, text, rule) => {
@@ -221,30 +236,60 @@ describe("source guardrails", () => {
       ['window["fetch"]', 'window["fetch"]("/x")', FETCH_RULE],
       ["window.fetch alias (input 2)", 'const g = window.fetch; g("/api/queue")', FETCH_RULE],
       ["window?.fetch alias", "const g = window?.fetch;", FETCH_RULE],
-      ["globalThis.fetch","const g = globalThis.fetch;", FETCH_RULE],
+      ["globalThis.fetch", "const g = globalThis.fetch;", FETCH_RULE],
       ["self.fetch", "const g = self.fetch;", FETCH_RULE],
       ["insertAdjacentHTML (input 3)", 'el.insertAdjacentHTML("beforeend", t)', "HTML sink"],
       ["outerHTML (input 3)", "el.outerHTML = t", "HTML sink"],
-      ["input 3, both lines", 'el.insertAdjacentHTML("beforeend", t);\nel.outerHTML = t;', "HTML sink"],
+      [
+        "input 3, both lines",
+        'el.insertAdjacentHTML("beforeend", t);\nel.outerHTML = t;',
+        "HTML sink",
+      ],
       ["document.write", "document.write(t);", "HTML sink"],
       ["document . write", "document . write(t);", "HTML sink"],
       ["createContextualFragment", "range.createContextualFragment(t);", "HTML sink"],
       ["setHTMLUnsafe", "el.setHTMLUnsafe(t);", "HTML sink"],
       ["parseHTMLUnsafe", "const d = Document.parseHTMLUnsafe(t);", "HTML sink"],
-      ["new XMLHttpRequest() (input 4)", "const x = new XMLHttpRequest();", "XMLHttpRequest or sendBeacon"],
-      ['navigator.sendBeacon (input 4)', 'navigator.sendBeacon("/x");', "XMLHttpRequest or sendBeacon"],
-      ["html-react-parser import (input 8)", 'import parse from "html-react-parser";', "HTML-parsing package import"],
-      ["html-to-react import", 'import { Parser } from "html-to-react";', "HTML-parsing package import"],
-      ["react-html-parser import", 'import ReactHtmlParser from "react-html-parser";', "HTML-parsing package import"],
+      [
+        "new XMLHttpRequest() (input 4)",
+        "const x = new XMLHttpRequest();",
+        "XMLHttpRequest or sendBeacon",
+      ],
+      [
+        "navigator.sendBeacon (input 4)",
+        'navigator.sendBeacon("/x");',
+        "XMLHttpRequest or sendBeacon",
+      ],
+      [
+        "html-react-parser import (input 8)",
+        'import parse from "html-react-parser";',
+        "HTML-parsing package import",
+      ],
+      [
+        "html-to-react import",
+        'import { Parser } from "html-to-react";',
+        "HTML-parsing package import",
+      ],
+      [
+        "react-html-parser import",
+        'import ReactHtmlParser from "react-html-parser";',
+        "HTML-parsing package import",
+      ],
       ["dompurify import", 'import DOMPurify from "dompurify";', "HTML-parsing package import"],
-      ["dompurify dynamic import", 'const p = await import("dompurify");', "HTML-parsing package import"],
+      [
+        "dompurify dynamic import",
+        'const p = await import("dompurify");',
+        "HTML-parsing package import",
+      ],
       ["dompurify require", 'const p = require("dompurify");', "HTML-parsing package import"],
     ])("%s", (_label, text, rule) => {
       expect(findViolations(component(text))).toEqual([`components/soc/Evil.tsx: ${rule}`]);
     });
 
     it("XMLHttpRequest and sendBeacon even in http.ts", () => {
-      const files: SourceFile[] = [{ path: HTTP, text: "new XMLHttpRequest(); navigator.sendBeacon(u);" }];
+      const files: SourceFile[] = [
+        { path: HTTP, text: "new XMLHttpRequest(); navigator.sendBeacon(u);" },
+      ];
 
       expect(findViolations(files)).toEqual([`${HTTP}: XMLHttpRequest or sendBeacon`]);
     });
@@ -254,12 +299,19 @@ describe("source guardrails", () => {
     });
 
     it("an import from @/test or a relative test folder", () => {
-      const imports = ['import { h } from "@/test/helper";', 'import { h } from "../../test/helper";'];
+      const imports = [
+        'import { h } from "@/test/helper";',
+        'import { h } from "../../test/helper";',
+      ];
 
       for (const text of imports) {
-        expect(findTestImports(component(text))).toEqual(["components/soc/Evil.tsx: import from src/test"]);
+        expect(findTestImports(component(text))).toEqual([
+          "components/soc/Evil.tsx: import from src/test",
+        ]);
       }
-      expect(findTestImports(component('import "@/test";'))).toEqual(["components/soc/Evil.tsx: import from src/test"]);
+      expect(findTestImports(component('import "@/test";'))).toEqual([
+        "components/soc/Evil.tsx: import from src/test",
+      ]);
       expect(findTestImports(component('import { h } from "../test/x";'))).toEqual([
         "components/soc/Evil.tsx: import from src/test",
       ]);
@@ -268,11 +320,15 @@ describe("source guardrails", () => {
     });
 
     it("a file in src/test/ that is not a test file or setup.ts", () => {
-      expect(findStrayTestFiles(["test/helper.tsx"])).toEqual(["test/helper.tsx: not a test file or setup.ts"]);
+      expect(findStrayTestFiles(["test/helper.tsx"])).toEqual([
+        "test/helper.tsx: not a test file or setup.ts",
+      ]);
       expect(findStrayTestFiles(["test/fixtures/data.ts"])).toEqual([
         "test/fixtures/data.ts: not a test file or setup.ts",
       ]);
-      expect(findStrayTestFiles(["test/a.test.ts", "test/b.test.tsx", "test/setup.ts"])).toEqual([]);
+      expect(findStrayTestFiles(["test/a.test.ts", "test/b.test.tsx", "test/setup.ts"])).toEqual(
+        [],
+      );
     });
 
     it("a <script text in the mock that is not the fixture", () => {

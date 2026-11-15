@@ -50,7 +50,9 @@ function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="absolute right-3 top-3"><ThemeToggle /></div>
+      <div className="absolute right-3 top-3">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-sm">
         <div className="mb-6 flex items-center gap-2 font-mono text-lg font-semibold">
           <ShieldAlert className="h-5 w-5 text-primary" /> SOCBoard
@@ -64,14 +66,30 @@ function LoginPage() {
           )}
           <div className="space-y-1.5">
             <Label htmlFor="u">Username</Label>
-            <Input id="u" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+            <Input
+              id="u"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="p">Password</Label>
-            <Input id="p" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <Input
+              id="p"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
           </div>
           {error && (
-            <p role="alert" className="rounded-sm border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-sm text-destructive">
+            <p
+              role="alert"
+              className="rounded-sm border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-sm text-destructive"
+            >
               {error}
             </p>
           )}
@@ -81,7 +99,9 @@ function LoginPage() {
         </form>
         {import.meta.env.VITE_USE_MOCK !== "false" && (
           <div className="mt-4 rounded-md border border-dashed p-3 text-xs">
-            <div className="mb-1.5 font-medium text-muted-foreground">Mock mode — test accounts</div>
+            <div className="mb-1.5 font-medium text-muted-foreground">
+              Mock mode — test accounts
+            </div>
             <ul className="space-y-1 font-mono">
               {MOCK_CREDENTIALS.map((c) => (
                 <li key={c.username}>
