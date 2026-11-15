@@ -42,6 +42,25 @@ override_resource {
   }
 }
 
+# Known at plan, so the rendered user data (which names both) can be read below (issue #233).
+# `instance` is null unless the configuration sets it, as with `key_name` above.
+override_resource {
+  target          = aws_eip.server
+  override_during = plan
+  values = {
+    public_ip = "203.0.113.10"
+    instance  = null
+  }
+}
+
+override_resource {
+  target          = aws_ebs_volume.data
+  override_during = plan
+  values = {
+    id = "vol-0123456789abcdef0"
+  }
+}
+
 run "defaults" {
   command = plan
 
@@ -121,6 +140,93 @@ run "defaults" {
     condition     = aws_instance.server.iam_instance_profile == "socboard-instance"
     error_message = "The instance profile must be socboard-instance."
   }
+
+  # The bootstrap (issue #233). Changed user data replaces the instance, so it runs.
+  assert {
+    condition     = aws_instance.server.user_data_replace_on_change == true
+    error_message = "user_data_replace_on_change must be true (cloud-init never re-runs user data on the same instance)."
+  }
+
+  # The hostname is built from the Elastic IP, and Caddy serves it to the app's loopback port only.
+  assert {
+    condition     = output.hostname == "203-0-113-10.sslip.io" && strcontains(aws_instance.server.user_data, "\n203-0-113-10.sslip.io {\n\treverse_proxy 127.0.0.1:8000\n}")
+    error_message = "Caddy must serve the hostname derived from the Elastic IP and proxy only to 127.0.0.1:8000."
+  }
+
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "\tadmin off\n") && strcontains(aws_instance.server.user_data, "\tacme_ca https://acme-v02.api.letsencrypt.org/directory\n")
+    error_message = "Caddy's admin endpoint must be off and the default certificate authority production."
+  }
+
+  # The volume: found by its id, mounted by UUID with nofail at STACK_PGDATA_DIR, owned by uid 999,
+  # and formatted only when blkid finds no signature; Caddy's data lives on it.
+  assert {
+    condition = alltrue([for s in [
+      "DATA_DEV='/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0'",
+      "DATA_DIR='/srv/socboard-data'",
+      "\"UUID=$uuid $DATA_DIR ext4 defaults,nofail,",
+      "chown 999:999 \"$DATA_DIR\"",
+      "if [ \"$rc\" -eq 2 ]; then",
+      "root /srv/socboard-data/caddy\n",
+      "RequiresMountsFor=/srv/socboard-data\n",
+    ] : strcontains(aws_instance.server.user_data, s)])
+    error_message = "The bootstrap must mount the data volume by id and UUID with nofail at /srv/socboard-data, owned by 999, format only an empty one, and keep Caddy's data on it."
+  }
+
+  # Log rotation and the prune that only removes unused images.
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "\"max-size\": \"10m\", \"max-file\": \"3\"") && strcontains(aws_instance.server.user_data, "docker image prune --all --force --filter until=168h")
+    error_message = "The bootstrap must rotate Docker's logs (10m, 3 files) and prune only unused images."
+  }
+
+  # Never held: no secret in the user data. These are the patterns of the kit's secret scan
+  # (_docs/agent-kit/scripts/secret-patterns.txt) that can match a value; the file sits outside this
+  # folder, so tf-check's copy cannot read it. And no Secrets Manager call.
+  assert {
+    condition = alltrue([for p in [
+      "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+      "ghp_[A-Za-z0-9]{36}",
+      "github_pat_[A-Za-z0-9_]{22,}",
+      "AKIA[0-9A-Z]{16}",
+      "xox[baprs]-[A-Za-z0-9-]{10,}",
+      "sk-[A-Za-z0-9]{20,}",
+      "gh[osur]_[A-Za-z0-9]{36}",
+      "([Aa]uthorization|AUTHORIZATION): ([Bb]earer|BEARER|[Bb]asic|BASIC) [A-Za-z0-9._~+/=-]{16,}",
+      "eyJ[A-Za-z0-9_-]{7,}\\.eyJ[A-Za-z0-9_-]{7,}\\.[A-Za-z0-9_-]{10,}",
+      "hooks\\.slack\\.com/services/",
+      "(?i)aws_secret_access_key",
+    ] : !can(regex(p, aws_instance.server.user_data))]) && !strcontains(lower(aws_instance.server.user_data), "secretsmanager")
+    error_message = "The user data must hold no secret and make no Secrets Manager call."
+  }
+
+  # The address is associated separately (the user data names it), and the instance still has it.
+  assert {
+    condition     = aws_eip.server.instance == null
+    error_message = "The Elastic IP must be associated through aws_eip_association, not its instance argument."
+  }
+}
+
+run "staging_certificate_authority" {
+  command = plan
+
+  variables {
+    acme_ca = "https://acme-staging-v02.api.letsencrypt.org/directory"
+  }
+
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "\tacme_ca https://acme-staging-v02.api.letsencrypt.org/directory\n")
+    error_message = "acme_ca must reach Caddy's file."
+  }
+}
+
+run "refuses_another_certificate_authority" {
+  command = plan
+
+  variables {
+    acme_ca = "https://acme.example.com/directory"
+  }
+
+  expect_failures = [var.acme_ca]
 }
 
 run "refuses_a_large_instance_type" {

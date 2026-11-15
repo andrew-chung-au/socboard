@@ -14,7 +14,10 @@
 # `project = "socboard"` in its own create call (instance, data volume, security group, Elastic IP);
 # the root volume stays untagged (#162 snapshots every volume with that tag); no IAM data source,
 # no remote state and no Parameter Store lookup (all refused to the CI roles); no IAM, DLM, budget,
-# KMS or Systems Manager resource. Never held here: no secret value, no user data.
+# KMS or Systems Manager resource. Never held here: no secret value, in the user data or anywhere.
+#
+# The bootstrap (issue #233, D17c) is the user data: bootstrap.sh.tftpl, rendered below. It installs
+# Docker, the Compose plugin and Caddy, mounts the data volume and writes Caddy's file.
 
 terraform {
   # One mention of the version besides terraform/.terraform-version (the single source): the same lower bound as terraform/state.
@@ -50,6 +53,13 @@ locals {
   # Grooming decision: package installs, image pulls and the Systems Manager agent use HTTPS
   # (80 for some package mirrors). VERIFY: at the first apply that all three work with this.
   egress_ports = [80, 443]
+
+  # STACK_PGDATA_DIR on the server: where the bootstrap mounts the data volume (README).
+  data_dir = "/srv/socboard-data"
+
+  # Deploy decision 6: the public hostname is the Elastic IP through a wildcard-DNS service, as
+  # 203-0-113-10.sslip.io. VERIFY: sslip.io answers this dashed form with the address.
+  hostname = "${replace(aws_eip.server.public_ip, ".", "-")}.sslip.io"
 }
 
 # Newest Ubuntu 24.04 LTS x86_64 image from Canonical, read with ec2:DescribeImages (allowed to the
@@ -107,14 +117,26 @@ resource "aws_vpc_security_group_egress_rule" "web" {
   cidr_ipv4         = "0.0.0.0/0"
 }
 
-# No key pair and no user data (D17c adds the bootstrap). User data is readable by the CI plan role
-# (ec2:Describe*), so it must never hold a secret.
+# No key pair. User data is readable by the CI plan role (ec2:Describe*), so it must never hold a
+# secret; the bootstrap holds none.
 resource "aws_instance" "server" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   subnet_id              = data.aws_subnet.default.id
   vpc_security_group_ids = [aws_security_group.server.id]
   iam_instance_profile   = local.instance_profile_name
+
+  user_data = templatefile("${path.module}/bootstrap.sh.tftpl", {
+    data_dir = local.data_dir
+    # The volume's NVMe serial is its id without the dash. VERIFY: the link name on noble.
+    data_device = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(aws_ebs_volume.data.id, "-", "")}"
+    hostname    = local.hostname
+    acme_ca     = var.acme_ca
+  })
+  # cloud-init runs user data once per instance, so changed user data on the same instance would
+  # never run. Replacing the instance runs it; the data volume and the Elastic IP are separate
+  # resources and survive, and Caddy's certificate is on the volume (README, "The bootstrap").
+  user_data_replace_on_change = true
 
   # T3 defaults to unlimited credits, which bill extra; standard caps the cost.
   credit_specification {
@@ -146,12 +168,18 @@ resource "aws_instance" "server" {
   }
 }
 
-# Keeps the address (and D17c's hostname) when the instance is replaced: only the association moves.
+# Keeps the address (and the hostname) when the instance is replaced: only the association moves.
+# The association is its own resource because the user data names the address: an `instance`
+# argument here would make the address depend on the instance and the instance on the address.
 resource "aws_eip" "server" {
-  domain   = "vpc"
-  instance = aws_instance.server.id
+  domain = "vpc"
 
   tags = local.tags
+}
+
+resource "aws_eip_association" "server" {
+  allocation_id = aws_eip.server.id
+  instance_id   = aws_instance.server.id
 }
 
 # The database's disk. Encrypted with the AWS-managed EBS key (no customer key: #156 grants no KMS
@@ -171,7 +199,8 @@ resource "aws_ebs_volume" "data" {
 }
 
 # The instance is stopped before a detach, so Postgres is shut down before its disk leaves.
-# VERIFY: `stop_instance_before_detaching`; on a Nitro instance the device shows as NVMe (D17c mounts it).
+# VERIFY: `stop_instance_before_detaching`; on a Nitro instance the device shows as NVMe, so the
+# bootstrap finds it by its volume id and mounts it by file-system UUID.
 resource "aws_volume_attachment" "data" {
   device_name                    = "/dev/sdf"
   volume_id                      = aws_ebs_volume.data.id

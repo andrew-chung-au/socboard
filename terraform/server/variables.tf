@@ -34,6 +34,18 @@ variable "root_volume_gib" {
   }
 }
 
+variable "acme_ca" {
+  description = "The certificate authority's ACME directory Caddy gets its certificate from: Let's Encrypt production (default) or, for testing under the rate limits, its staging endpoint. Changing it replaces the instance (user data)."
+  type        = string
+  default     = "https://acme-v02.api.letsencrypt.org/directory"
+
+  # VERIFY: both directory addresses at D19b.
+  validation {
+    condition     = contains(["https://acme-v02.api.letsencrypt.org/directory", "https://acme-staging-v02.api.letsencrypt.org/directory"], var.acme_ca)
+    error_message = "acme_ca must be the Let's Encrypt production or staging directory address."
+  }
+}
+
 variable "availability_zone" {
   description = "Availability zone of the instance and its data volume, in us-east-1. Changing it replaces the data volume, which prevent_destroy refuses."
   type        = string
