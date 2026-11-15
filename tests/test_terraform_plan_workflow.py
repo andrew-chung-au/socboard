@@ -19,7 +19,7 @@ PLAN = "terraform-plan.yml"
 FAIL_MESSAGE = "terraform plan failed; reproduce it locally with the server plan step in terraform/README.md"
 FAIL_LINE = f'fail() {{ echo "{FAIL_MESSAGE}"; exit 1; }}'
 PINNED = re.compile(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}")
-TERRAFORM_WORD = re.compile(r"(?<![\w/.$-])terraform(?![\w/.-])")
+TERRAFORM_WORD = re.compile(r"(?<![\w.$-])terraform(?![\w/.-])")
 CHDIR = "terraform -chdir=terraform/server "
 PLAN_FILE = '"$RUNNER_TEMP/server.tfplan"'
 ALLOWED_TERRAFORM_LINES = {
@@ -313,6 +313,12 @@ BROKEN = {
     "role in the summary": add_step({"run": 'echo "${{ secrets.AWS_PLAN_ROLE_ARN }}" >> "$GITHUB_STEP_SUMMARY"'}),
     "plan uploaded": add_step({"uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "with": {"path": "plan"}}),
     "show printed by another step": add_step({"run": 'terraform -chdir=terraform/server show "$RUNNER_TEMP/server.tfplan"'}),
+    "show printed through env": add_step({"run": 'env terraform -chdir=terraform/server show "$RUNNER_TEMP/server.tfplan"'}),
+    "show by absolute path in another step": add_step(
+        {"run": '/usr/bin/terraform -chdir=terraform/server show -json "$RUNNER_TEMP/server.tfplan"'}
+    ),
+    "show by absolute path": edit_run("terraform -chdir=terraform/server show -json", "/usr/bin/terraform -chdir=terraform/server show -json"),
+    "plan by absolute path": edit_run("terraform -chdir=terraform/server plan", "/usr/local/bin/terraform -chdir=terraform/server plan"),
     "action by tag": set_key(["jobs", "plan", "steps", 4, "uses"], "aws-actions/configure-aws-credentials@v6"),
     "no cleanup": lambda doc: doc["jobs"]["plan"]["steps"].pop(),
 }
@@ -323,3 +329,45 @@ def test_a_broken_plan_workflow_is_refused(case):
     doc = copy.deepcopy(load_plan())
     BROKEN[case](doc)
     assert plan_problems(doc), case
+
+
+@pytest.mark.parametrize("case", ["show by absolute path", "plan by absolute path", "show by absolute path in another step", "show printed through env"])
+def test_a_terraform_path_or_env_prefix_is_seen_as_the_command(case):
+    doc = copy.deepcopy(load_plan())
+    BROKEN[case](doc)
+    assert any("runs terraform in a shape that may print" in p for p in plan_problems(doc)), case
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "terraform plan",
+        "  terraform -chdir=terraform/server show",
+        "env terraform plan",
+        "/usr/bin/terraform plan",
+        "/usr/local/bin/terraform -chdir=terraform/server show -json",
+        "./terraform plan",
+        "x && terraform plan",
+        "(terraform plan)",
+    ],
+)
+def test_terraform_word_matches_the_command(text):
+    assert TERRAFORM_WORD.search(text), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "-chdir=terraform/server",
+        "cat terraform/server/main.tf",
+        "terraform/.terraform-version",
+        "tr -d x < .terraform-version",
+        "$terraform plan",
+        "my-terraform plan",
+        "terraformer plan",
+        "terraform.tfstate",
+        "echo no command here",
+    ],
+)
+def test_terraform_word_ignores_names_and_folders(text):
+    assert not TERRAFORM_WORD.search(text), text
