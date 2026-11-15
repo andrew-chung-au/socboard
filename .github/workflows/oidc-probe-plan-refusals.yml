@@ -1,0 +1,30 @@
+name: oidc-probe-plan-refusals
+on: pull_request
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try one write and one secret read with the plan role
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          # Prints only the AWS error code from "An error occurred (<code>) ...", never the message.
+          code() { grep -o -E '\([A-Za-z.]+\)' | head -n 1 | tr -d '()'; }
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "::add-mask::$TOKEN"
+          if ! CREDS=$(aws sts assume-role-with-web-identity --role-arn "$ROLE_ARN" --role-session-name probe-plan-refusals --web-identity-token "$TOKEN" --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text 2>&1); then
+            C=$(code <<< "$CREDS"); echo "assume: ${C:-OTHER}"; exit 1
+          fi
+          read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<< "$CREDS"
+          echo "::add-mask::$AWS_ACCESS_KEY_ID"
+          echo "::add-mask::$AWS_SECRET_ACCESS_KEY"
+          echo "::add-mask::$AWS_SESSION_TOKEN"
+          export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+          echo "assume: assumed"
+          INSTANCE_ID=$(aws ec2 describe-instances --filters Name=tag:project,Values=socboard Name=instance-state-name,Values=running --query 'Reservations[0].Instances[0].InstanceId' --output text 2>/dev/null || true)
+          CT=$(aws ec2 create-tags --dry-run --resources "$INSTANCE_ID" --tags Key=probe,Value=refused 2>&1 | code); echo "create-tags (dry run): ${CT:-OTHER}"
+          GS=$(aws secretsmanager get-secret-value --secret-id socboard/app --query Name --output text 2>&1 | code); echo "get-secret-value: ${GS:-OTHER}"
