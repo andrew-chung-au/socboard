@@ -46,6 +46,9 @@ TOKEN = "imdsTokenCanary0001"
 # decision record). The replacements are built in Box.copy_lines.
 REAL_ASSIGNMENTS = ["RUN_DIR='/run/socboard-deploy'", "OPT_DIR='/opt/socboard'", "WAIT=90", "POLL=3"]
 
+# The fifth line the copy replaces (see Box.copy_lines): the fixed search path of the re-executed run.
+REAL_CLEAN_PATH = "CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'"
+
 SECRET_VALUES = {
     "SOCBOARD_TOKEN_SECRET": "canaryTokenSecret.0123456789abcdefABCDEF",
     "SOCBOARD_INGEST_API_KEY": "canaryIngestKey+0123456789",
@@ -155,6 +158,7 @@ def kind(line):
 
 
 STUB_HEAD = r"""#!@BASH@
+. "@KNOBS@"
 S="$STUB_STATE"
 nl=$'\n'
 a="$*"
@@ -305,12 +309,14 @@ class Box:
         self.run_dir = base / "run" / "socboard-deploy"
         self.opt = base / "opt" / "socboard"
         self.calls = base / "calls.log"
+        self.knobs = base / "knobs.sh"
+        self.test_path = f"{self.bin}:{self.tools}"
         self.secret_file = base / "secret.json"
         for folder in (self.bin, self.tools, self.state, self.base / "py" / "boto3", self.base / "run", self.base / "opt"):
             folder.mkdir(parents=True)
         (self.base / "py" / "boto3" / "__init__.py").write_text(FAKE_BOTO3, encoding="utf-8")
         # The stubs call their own helpers by absolute path, so the script's PATH stays small.
-        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "REQUIRED": " ".join(compose_variables()), "WRITTEN": " ".join([*SECRET_VALUES, "STACK_PGDATA_DIR"])}
+        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "KNOBS": str(base / "knobs.sh"), "REQUIRED": " ".join(compose_variables()), "WRITTEN": " ".join([*SECRET_VALUES, "STACK_PGDATA_DIR"])}
         for name, body in (("docker", DOCKER), ("curl", CURL), ("systemctl", SYSTEMCTL), ("apt-get", APT), ("python3", PYTHON3), ("flock", FLOCK)):
             self.stub(name, body)
         # The only real programs the script may run (everything else is a builtin or a stub).
@@ -327,6 +333,9 @@ class Box:
             REAL_ASSIGNMENTS[1]: f"OPT_DIR={shlex.quote(str(self.opt))}",
             REAL_ASSIGNMENTS[2]: "WAIT=1",
             REAL_ASSIGNMENTS[3]: "POLL=0.05",
+            # The fifth line: the fixed search path of the re-executed run becomes the stub folders (the real
+            # path would hide every stub). The test-only seam is this value alone; the check and the re-exec are real.
+            REAL_CLEAN_PATH: f"CLEAN_PATH={shlex.quote(self.test_path)}",
         }
         lines = SCRIPT.read_text(encoding="utf-8").split("\n")
         for old in replacements:
@@ -370,15 +379,19 @@ class Box:
 
     def run(self, *args, digest=DIGEST, env=None, use_default_arg=True):
         argv = list(args) if args else ([digest] if use_default_arg else [])
-        environment = {
-            "PATH": f"{self.bin}:{self.tools}",
+        # The script starts itself again under an empty environment, so nothing but the test's PATH reaches the
+        # stubs from the outer environment. The stubs' own settings (STUB_*) travel in a file they read first.
+        knobs = {
             "STUB_STATE": str(self.state),
             "STUB_CALLS": str(self.calls),
             "STUB_TOKEN": TOKEN,
             "STUB_SECRET_FILE": str(self.secret_file),
             "STUB_PYPATH": str(self.base / "py"),
         }
-        environment.update(env or {})
+        environment = {"PATH": self.test_path}
+        for name, value in (env or {}).items():
+            (knobs if name.startswith("STUB_") else environment)[name] = value
+        self.knobs.write_text("".join(f"export {n}={shlex.quote(v)}\n" for n, v in knobs.items()), encoding="utf-8")
         proc = subprocess.run([real("bash"), str(self.script), *argv], env=environment, capture_output=True, text=True, timeout=60)
         return Result(self, proc)
 
@@ -470,8 +483,9 @@ def test_the_test_copy_differs_from_the_real_script_in_the_four_assignments_only
     copy_lines = box.script.read_text(encoding="utf-8").splitlines()
     assert len(copy_lines) == len(real_lines)
     changed = [(a, b) for a, b in zip(real_lines, copy_lines) if a != b]
-    assert [a for a, _ in changed] == REAL_ASSIGNMENTS
-    assert [b for _, b in changed] == [f"RUN_DIR={shlex.quote(str(box.run_dir))}", f"OPT_DIR={shlex.quote(str(box.opt))}", "WAIT=1", "POLL=0.05"]
+    # The four assignments, plus (fix round 1) the fixed search path of the re-executed run, which comes first in the file.
+    assert [a for a, _ in changed] == [REAL_CLEAN_PATH, *REAL_ASSIGNMENTS]
+    assert [b for _, b in changed] == [f"CLEAN_PATH={shlex.quote(box.test_path)}", f"RUN_DIR={shlex.quote(str(box.run_dir))}", f"OPT_DIR={shlex.quote(str(box.opt))}", "WAIT=1", "POLL=0.05"]
     assert "SOCBOARD_DEPLOY_" not in box.script.read_text(encoding="utf-8")
 
 
@@ -1221,3 +1235,111 @@ def test_the_task_file_has_no_inline_secret_no_real_address_and_every_result_row
     table = text.split("| Step | Pass or fail | Output or note |")[1].split("## Risk")[0]
     rows = [line for line in table.splitlines() if line.startswith("|") and not line.startswith("|---")]
     assert len(rows) >= 10 and all(line.split("|")[2].strip() == "NOT CHECKED" for line in rows), rows
+
+
+# --- the clean start (#281, fix round 1): the script starts itself again under an empty environment ------------
+# The copy re-executes for real (only its search path is the stubs'); the real block is also run alone below.
+
+CLEAN_BLOCK_START = "CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'"
+CLEAN_BLOCK_END = "case $- in *x*) exit 1 ;; esac"
+
+
+def clean_block():
+    lines = SCRIPT_TEXT.splitlines()
+    return lines[lines.index(CLEAN_BLOCK_START) : lines.index(CLEAN_BLOCK_END) + 1]
+
+
+def test_the_clean_start_is_the_first_command_and_the_region_is_explicit():
+    code = [line for line in SCRIPT_TEXT.splitlines() if line.strip() and not line.startswith("#")]
+    assert code[0] == "CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'" and code[1] == "set +x"
+    assert SCRIPT_TEXT.count("exec /usr/bin/env -i ") == 1 and SCRIPT_TEXT.count('"$0" "$@"') == 1
+    assert SCRIPT_TEXT.index(CLEAN_BLOCK_END) < SCRIPT_TEXT.index("DIGEST_PARAM='{{ digest }}'") < SCRIPT_TEXT.index("set -u")
+    assert 'region_name="us-east-1"' in SCRIPT_TEXT
+
+
+def test_a_start_up_file_named_by_the_environment_is_read_only_by_the_outer_shell(box):
+    hook = box.base / "start-up-file.sh"
+    marker = box.base / "start-up-marker"
+    hook.write_text(f'echo "$SHLVL" >> {shlex.quote(str(marker))}\n', encoding="utf-8")
+    r = box.run(env={"BASH_ENV": str(hook)})
+    assert_only(r, 0, DEPLOYED)
+    # Bash reads the file once, in the outer shell before the script's first line (no script can prevent that); the
+    # re-executed run (`--norc`, and no such variable) never does, nor does any program it starts.
+    assert marker.read_text(encoding="utf-8").splitlines() == ["1"]
+    assert_safe(r)
+
+
+@pytest.mark.parametrize("extra", [{}, {"BASH_XTRACEFD": "2", "PS4": "+${LINENO}:${BASH_COMMAND}: "}])
+@pytest.mark.parametrize("guard", [False, True])
+def test_tracing_set_in_the_environment_shows_no_secret_and_no_later_command(box, extra, guard):
+    env = {"SHELLOPTS": "xtrace", **extra}
+    if guard:
+        env["CLEAN_START"] = "1"
+    r = box.run(env=env)
+    assert r.code == 0 and DEPLOYED in r.lines()
+    # The outer shell traces only the block before the re-execution; nothing after it is traced.
+    for canary in [*SECRET_VALUES.values(), *OTHER_CANARIES]:
+        assert canary not in r.out
+    assert "docker" not in r.out and "python3" not in r.out and "S[" not in r.out
+    assert_safe(r)
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("IFS", "a/ \t\n"),
+        ("GLOBIGNORE", "*"),
+        ("CDPATH", "/"),
+        ("S", "x"),
+        ("ENV", "/nonexistent"),
+        ("SHELLOPTS", "allexport"),
+        ("BASHOPTS", "nullglob"),
+        ("LC_ALL", "C.UTF-8"),
+        ("AWS_DEFAULT_REGION", "eu-west-1"),
+        ("AWS_REGION", "eu-west-1"),
+        ("HOME", "/nonexistent-home"),
+    ],
+)
+def test_an_exported_variable_has_no_effect_on_the_run(box, name, value):
+    r = box.run(env={name: value})
+    assert_only(r, 0, DEPLOYED)
+    assert r.kinds().count("secret-read") == 1
+    assert_safe(r)
+
+
+def test_a_planted_program_on_the_starting_path_never_runs(box):
+    plant = box.base / "plant"
+    plant.mkdir()
+    marker = box.base / "plant-ran"
+    for name in ("docker", "curl", "python3", "flock", "env", "mkdir"):
+        (plant / name).write_text(f"#!{real('bash')}\necho {name} >> {shlex.quote(str(marker))}\nexit 0\n", encoding="utf-8")
+        (plant / name).chmod(0o755)
+    for guard in (False, True):
+        r = Box(box.base / f"g{guard}").run(env={"PATH": f"{plant}:{box.test_path}", **({"CLEAN_START": "1"} if guard else {})})
+        assert not marker.exists(), marker.read_text(encoding="utf-8")
+        assert r.code != 0 or DEPLOYED in r.lines()
+
+
+def test_the_marker_cannot_skip_the_restart_while_another_variable_is_present(box):
+    # With the marker and the stubs' path present, one more variable still starts the script again: tracing, which
+    # would otherwise cover the whole run, ends at the restart.
+    r = box.run(env={"CLEAN_START": "1", "SHELLOPTS": "xtrace"})
+    assert r.code == 0 and "docker" not in r.out and SECRET_VALUES["STACK_PG_APP_PASSWORD"] not in r.out
+    r = Box(box.base / "second").run(env={"CLEAN_START": "1", **EXPORTED})
+    assert_only(r, 0, DEPLOYED)
+    assert_no_exported_value(r)
+
+
+def test_the_real_block_alone_restarts_under_an_empty_environment(tmp_path):
+    probe = tmp_path / "probe.sh"
+    probe.write_text("#!/bin/bash\n" + "\n".join(clean_block()) + '\nprintf "ARGS:%s\\n" "$*"\nprintf "FLAGS:%s\\n" "$-"\ncompgen -e\ncompgen -A function\n', encoding="utf-8")
+    hook = tmp_path / "hook.sh"
+    hook.write_text('echo "OUTER-HOOK"\n', encoding="utf-8")
+    dirty = {"PATH": "/nonexistent", "IFS": "x", "GLOBIGNORE": "*", "CDPATH": "/", "S": "1", "BASH_ENV": str(hook), "SHELLOPTS": "allexport", "CLEAN_START": "1"}
+    proc = subprocess.run(["/bin/bash", "--norc", str(probe), "sha256:abc"], env=dirty, capture_output=True, text=True, timeout=30)
+    assert proc.stderr == ""  # (the exit code is the last `compgen`'s: 1 for no function, as wanted)
+    lines = proc.stdout.splitlines()
+    assert lines.count("OUTER-HOOK") == 1  # the outer shell only
+    assert "ARGS:sha256:abc" in lines and not [line for line in lines if line.startswith("FLAGS:") and "x" in line]
+    names = set(lines[lines.index([line for line in lines if line.startswith("FLAGS:")][0]) + 1 :])
+    assert names <= {"CLEAN_START", "PATH", "PWD", "SHLVL", "_"}, names

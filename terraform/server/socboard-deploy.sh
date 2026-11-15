@@ -19,6 +19,28 @@
 # those four lines replaced), and the names written into the variable file are unset at the start.
 # Decision record: _docs/decisions/*-deploy-script-ambient-inputs.md.
 #
+# The first thing the script does is start itself again once under an empty environment (the block
+# below), so a variable of the starting shell (a start-up file name, shell options, a field splitter, a
+# program search path) never reaches the run. The new run gets a fixed search path and a marker, nothing
+# else. It needs no region variable (the secret read names its region) and no home folder.
+# The marker is honoured only when the environment is exactly that clean one; any other variable, an
+# exported function, or a search path that is not the fixed one starts the script again. One limit: a
+# start-up file named by such a variable in the shell that starts this script is read by that shell before
+# the first line, which no script can prevent; the new run never reads it. The same holds for an exported
+# function that replaces a command this block uses.
+# The digest travels as the first argument of the new run.
+CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+set +x
+clean=1
+[ "${CLEAN_START-}" = 1 ] && [ "$PATH" = "$CLEAN_PATH" ] || clean=0
+while IFS= read -r name; do
+  case $name in CLEAN_START | PATH | PWD | SHLVL | _) ;; *) clean=0 ;; esac
+done < <(compgen -e)
+[ -z "$(compgen -A function)" ] || clean=0
+[ "$clean" = 1 ] || exec /usr/bin/env -i PATH="$CLEAN_PATH" CLEAN_START=1 /bin/bash --norc --noprofile "$0" "$@" || exit 1
+unset clean name
+case $- in *x*) exit 1 ;; esac
+
 # The document replaces the one parameter reference on the next line before the script runs; run any
 # other way, the script takes the digest as its first argument. Keep that the only such reference.
 DIGEST_PARAM='{{ digest }}'
