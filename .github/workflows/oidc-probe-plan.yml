@@ -1,0 +1,20 @@
+name: oidc-probe-plan
+on: pull_request
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try to assume the plan role
+        env:
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "::add-mask::$TOKEN"
+          if OUT=$(aws sts assume-role-with-web-identity --role-arn "$ROLE_ARN" --role-session-name probe-plan --web-identity-token "$TOKEN" --query 'AssumedRoleUser.Arn' --output text 2>&1); then
+            echo "assumed ${OUT#*assumed-role/}"
+          else
+            C=$(grep -o -E '\([A-Za-z.]+\)' <<< "$OUT" | head -n 1 | tr -d '()'); echo "refused: ${C:-OTHER}"; exit 1
+          fi
