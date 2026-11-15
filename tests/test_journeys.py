@@ -4,13 +4,20 @@ Every test runs the real app (`create_app()`) through `TestClient` on a database
 migrations and the real seed (`analyst-a`, `analyst-b`, `lead` with the synthetic passwords of
 `data_support.py`), and every login goes through `POST /api/login`. Refusal statuses are read from
 `openapi.yaml` at test time. All values are synthetic.
+
+With `SOCBOARD_BASE_URL` set (`make test-stack`, #229) the same tests send HTTP requests to a live
+Compose stack instead, with the key and the seed passwords read from the environment. Two
+assertions that assume an empty database are then limited to the cases the test made, and the
+ingest helper waits once for a rate limit's `Retry-After`. In process every assertion is as strict as before.
 """
 
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
 import pytest
+import stack_support as stack
 from backend_support import load_contract
 from data_support import SEED_PASSWORDS
 from db_target import copy_of, new_template_url
@@ -22,12 +29,19 @@ from socboard.app import create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN_SECRET = "test-only-journey-secret-0123456789abcdef"
-INGEST_KEY = "test-only-journey-ingest-key-0123"
-PASSWORDS = {
-    "analyst-a": SEED_PASSWORDS["SOCBOARD_SEED_PASSWORD_ANALYST_A"],
-    "analyst-b": SEED_PASSWORDS["SOCBOARD_SEED_PASSWORD_ANALYST_B"],
-    "lead": SEED_PASSWORDS["SOCBOARD_SEED_PASSWORD_LEAD"],
+SEED_VARIABLES = {
+    "analyst-a": "SOCBOARD_SEED_PASSWORD_ANALYST_A",
+    "analyst-b": "SOCBOARD_SEED_PASSWORD_ANALYST_B",
+    "lead": "SOCBOARD_SEED_PASSWORD_LEAD",
 }
+LIVE = stack.is_live()
+if LIVE:
+    # A missing or empty variable stops the run naming it, never its value.
+    INGEST_KEY = stack.required("SOCBOARD_INGEST_API_KEY")
+    PASSWORDS = {username: stack.required(variable) for username, variable in SEED_VARIABLES.items()}
+else:
+    INGEST_KEY = "test-only-journey-ingest-key-0123"
+    PASSWORDS = {username: SEED_PASSWORDS[variable] for username, variable in SEED_VARIABLES.items()}
 
 # The three hostile strings of case C-1006 in frontend/src/services/mockService.ts (#8).
 HOSTILE_TITLE = "<script>alert('xss')</script> in alert title"
@@ -45,7 +59,13 @@ def seeded_template(tmp_path_factory):
 
 
 @pytest.fixture
-def client(seeded_template, tmp_path):
+def client(request):
+    if LIVE:
+        with stack.live_client() as live:
+            yield live
+        return
+    seeded_template = request.getfixturevalue("seeded_template")
+    tmp_path = request.getfixturevalue("tmp_path")
     url = copy_of(seeded_template, tmp_path, "journey.db")
     app = create_app(
         {
@@ -65,18 +85,27 @@ def login(client, username):
 
 
 def ingest(client, alert_type, asset, timestamp, title="Synthetic alert", description="Synthetic."):
-    return client.post(
-        "/api/alerts",
-        headers={"X-API-Key": INGEST_KEY},
-        json={
-            "source": "siem-test",
-            "type": alert_type,
-            "asset": asset,
-            "timestamp": timestamp,
-            "title": title,
-            "description": description,
-        },
-    )
+    def send():
+        return client.post(
+            "/api/alerts",
+            headers={"X-API-Key": INGEST_KEY},
+            json={
+                "source": "siem-test",
+                "type": alert_type,
+                "asset": asset,
+                "timestamp": timestamp,
+                "title": title,
+                "description": description,
+            },
+        )
+
+    response = send()
+    if LIVE and response.status_code == 429:
+        # One full run ingests about 45 alerts against a default of 60 a minute for the key: wait
+        # once for the window, and let a second 429 fail the test.
+        time.sleep(min(int(response.headers.get("Retry-After", "60")), stack.RETRY_AFTER_LIMIT))
+        response = send()
+    return response
 
 
 def when(text):
@@ -114,7 +143,10 @@ def test_journey_one_ingest_to_queue(client):
     assert response.status_code == 200
     queue = response.json()
     low, high_late, critical, high_early = created
-    assert queue["cases"] == [critical, high_early, high_late, low]
+    made = {case["id"] for case in created}
+    # Live: other cases may be in the queue, so look at the four this test made, in the contract's order.
+    cases = [case for case in queue["cases"] if case["id"] in made] if LIVE else queue["cases"]
+    assert cases == [critical, high_early, high_late, low]
     served = when(queue["servedAt"])
     assert all(when(case["ingestedAt"]) < served for case in queue["cases"])
 
@@ -123,11 +155,15 @@ def test_journey_one_ingest_to_queue(client):
 
 
 def test_journey_two_triage_to_audit(client):
+    created = []
     for alert_type, asset, timestamp, _ in JOURNEY_ONE:
-        assert ingest(client, alert_type, asset, timestamp).status_code == 201
+        response = ingest(client, alert_type, asset, timestamp)
+        assert response.status_code == 201
+        created.append(response.json())
     analyst = login(client, "analyst-a")
-    critical = client.get("/api/queue", headers=analyst).json()["cases"][0]
-    assert critical["severity"] == "Critical"
+    critical = next(case for case in created if case["severity"] == "Critical")
+    if not LIVE:  # other cases may outrank it on a stack that has been used
+        assert client.get("/api/queue", headers=analyst).json()["cases"][0] == critical
     case_id = critical["id"]
 
     assert client.post(f"/api/cases/{case_id}/claim", headers=analyst).status_code == 200
@@ -146,7 +182,10 @@ def test_journey_two_triage_to_audit(client):
     lead = login(client, "lead")
     closed = client.get("/api/cases", params={"status": "Closed"}, headers=lead)
     assert closed.status_code == 200
-    assert [(c["id"], c["closingReason"]) for c in closed.json()] == [(case_id, "true_positive")]
+    rows = [(c["id"], c["closingReason"]) for c in closed.json()]
+    if LIVE:  # other tests close cases too
+        rows = [row for row in rows if row[0] == case_id]
+    assert rows == [(case_id, "true_positive")]
     detail = client.get(f"/api/cases/{case_id}", headers=lead).json()
     assert detail["owner"]["username"] == "analyst-a"
     assert [n["text"] for n in detail["notes"]] == ["Isolated dc-01."]

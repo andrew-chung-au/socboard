@@ -1,0 +1,4 @@
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -26,0 +27 @@
++- **Test (live stack):** `make test-stack` runs the journeys (`tests/test_journeys.py`) and the stack tests (`tests/test_stack.py`) over HTTP against the Compose stack at `SOCBOARD_BASE_URL` (plain `http` on the loopback only; unset or empty exits 2 naming the variable and runs no test). It also needs `SOCBOARD_INGEST_API_KEY` and the three seed passwords in the environment, and `STACK_APP_URL` and `STACK_SCHEMA_FILE` for the stack tests; a missing one fails naming it. A run adds cases and uses up the ingest key's allowance for a minute. Never run in the agent's sandbox (no Docker); CI's Compose job runs it.
