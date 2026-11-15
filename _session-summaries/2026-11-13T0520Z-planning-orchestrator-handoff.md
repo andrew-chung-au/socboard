@@ -52,7 +52,6 @@ These are safe in parallel because they share no files with `socboard/` routes o
 - **QA:** a QA comment's first line starts `QA: PASS` or `QA: FAIL`.
 - **Tools:** use `gh api`, never `gh issue` or `gh pr`.
 - **Human approval:** ask the human before any protected-file change, label change or closure the process does not already allow.
-- **Earlier course projects** may be referenced, never copied.
 - **Blind second QA launches:**
   - search only `socboard/**` and `tests/**`, and read the issue body through a body-only extract (`delivery-pace.md` item 6);
   - a fresh subagent counts as a new session;
