@@ -10,10 +10,10 @@ Spec §5: the audit trail is append-only. On Postgres it now is, for any role th
 - `tests/pg_roles.py` (new): an owner and an application role per test, random names, passwords never sent to the server (a SCRAM verifier is), dropped afterwards.
 - `tests/test_data_audit_triggers_postgres.py` (new, 64 tests, `postgres_only`): every SQLite route with a Postgres form, ON CONFLICT DO UPDATE and DO NOTHING, MERGE, TRUNCATE forms, append_audit and the guard as the application role, the application role's refusals, replica mode, the app through `create_app()` as the application role.
 - `tests/conftest.py`: the `postgres_only` marker and a count of test roles left on the server.
-- `.github/workflows/postgres.yml` (protected): unchanged on the branch. The full new file, whose "no trigger" step checks the four triggers enabled always, is `_human-tasks/2026-11-14T2100Z-193-postgres-triggers.yml` for the human to apply. My earlier direct edits (`b4814ad`, `69d2d5a`) were reverted in `ff1857a`, because the human had not approved the exact diff.
+- `.github/workflows/postgres.yml` (protected): the "no trigger" step now checks the four triggers enabled always. The human committed it (`50f39f5`) from the task copy I delivered (`_human-tasks/2026-11-14T2100Z-193-postgres-triggers.yml`, removed by the human in `31e044a`). My earlier direct edits (`b4814ad`, `69d2d5a`) were reverted in `ff1857a`, because the human had not approved the exact diff.
 - README, one added line in the data-model record, decision record `_docs/decisions/2026-11-14T1946Z-postgres-audit-triggers.md` (proposed) and its index row.
 
-Branch `issue-193-postgres-audit-triggers`, draft PR #211. Claim: https://github.com/andrew-chung-au/socboard/issues/193#issuecomment-6882917452. CI on `bc6763f`, all success: `socboard postgres` push run 43637160176 (tests job: 1858 passed, 378 deselected, 0 databases and 0 roles left), `socboard verify` pull_request run 43637164128 (2172 passed, 64 deselected).
+Branch `issue-193-postgres-audit-triggers`, draft PR #211. Claim: https://github.com/andrew-chung-au/socboard/issues/193#issuecomment-6882917452. CI on `bc6763f`, all success: `socboard postgres` push run 43637160176 (tests job: 1858 passed, 378 deselected, 0 databases and 0 roles left), `socboard verify` pull_request run 43637164128 (2172 passed, 64 deselected). CI on `31e044a`, after the human's workflow commit, all success: `socboard postgres` push run 43656746108 (its trigger step prints the four triggers, each `A`), `socboard verify` push 43656746095 and pull_request 43656749623.
 
 QA record (Heavy):
 - QA 1 at `69d2d5a`: FAIL, one Medium (a failed CREATE ROLE would echo the test role's password): https://github.com/andrew-chung-au/socboard/issues/193#issuecomment-6883669116. Fixed (SCRAM verifier).
@@ -42,14 +42,14 @@ unknown (role not asked)
 
 ## Launch usage
 
-QA: 3 launches (QA 1 FAIL, re-check PASS, second QA FAIL on the approved workflow edit). Active time and tool uses: unknown.
+QA: 4 launches (QA 1 FAIL; re-check PASS; second QA FAIL on the workflow edit made without approval; re-check of the revert PASS: https://github.com/andrew-chung-au/socboard/issues/193#issuecomment-6886459818). Active time and tool uses: unknown.
 
 ## Files created or modified
 
 - `socboard/migrations/versions/0002_postgres_audit_triggers.py` (new)
 - `tests/pg_roles.py` (new), `tests/test_data_audit_triggers_postgres.py` (new)
 - `tests/conftest.py`, `tests/db_target.py`, `tests/test_data_migration_dialects.py`, `tests/test_data_migrations.py`
-- `_human-tasks/2026-11-14T2100Z-193-postgres-triggers.yml` (new: the full workflow for the human); `.github/workflows/postgres.yml` edited and then reverted, so unchanged
+- `.github/workflows/postgres.yml` (protected): my edits reverted; the human's commit `50f39f5` from the task copy `_human-tasks/2026-11-14T2100Z-193-postgres-triggers.yml` (added by me, removed by the human)
 - `README.md`, `_docs/decisions/2026-11-12T0834Z-data-model.md` (one added line), `_docs/decisions/2026-11-14T1946Z-postgres-audit-triggers.md` (new), `_docs/index.md` (one row)
 - `_session-summaries/2026-11-14T2037Z-issue-193-orchestrator-postgres-audit-triggers.md` (this file)
 
