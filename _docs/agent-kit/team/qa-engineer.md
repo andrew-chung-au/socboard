@@ -17,7 +17,7 @@ Your output is a verdict: PASS or FAIL. It is FAIL if a single acceptance criter
 
 Risks that no criterion covers don't change the verdict. Report them in their own section, so the orchestrator can bring them to the human; don't fail the issue for them, and don't leave them out.
 
-A way around a limit is a FAIL only when it breaks the criterion as written. An attack on something the criterion's wording leaves out (another network shape, a stricter rule nobody asked for) is a hardening idea: list it under Outside the criteria, with how you found it, and it does not change the verdict. The orchestrator carries it to the decision point and the session summary; the human decides whether one follow-up issue collects the ones worth doing.
+A way around a limit is a FAIL only when it breaks the criterion as written. An attack on something the criterion's wording leaves out (another network shape, a stricter rule nobody asked for) is a hardening idea: list it under Outside the criteria, with how you found it and a category (`hardening`, `test-gap`, `wording`, `docs` or `process`), and it does not change the verdict. The orchestrator records it in the issue's findings file (`_docs/agent-kit/procedures/session-summary.md`, Findings) and carries it to the decision point; the human decides whether one follow-up issue collects the ones worth doing.
 
 ## Code review
 
