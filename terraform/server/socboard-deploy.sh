@@ -37,11 +37,15 @@ DATA_DIR='/srv/socboard-data'
 # The stack network's gateway as the app sees Caddy's requests (README, "The forwarded address").
 # VERIFY: Compose pins this gateway; the check below fails the run if the network has another.
 PROXY_ADDR='10.231.77.1'
-STACK_NETWORK='socboard_stack'
-# VERIFY: the name Compose gives the app container (project `socboard`, service `app`, number 1).
-APP='socboard-app-1'
-CAND='socboard-deploy-candidate'
-CAND_PORT='127.0.0.1:8001:8000'
+# The Compose project name (`name:` in compose.yaml) and the app's loopback ports: one place each.
+PROJECT='socboard'
+APP_PORT='8000'
+CAND_HOST_PORT='8001'
+STACK_NETWORK="${PROJECT}_stack"
+# VERIFY: the name Compose gives the app container (project, service `app`, number 1).
+APP="$PROJECT-app-1"
+CAND="$PROJECT-deploy-candidate"
+CAND_PORT="127.0.0.1:$CAND_HOST_PORT:$APP_PORT"
 RUN_DIR=${SOCBOARD_DEPLOY_RUN_DIR:-/run/socboard-deploy}
 OPT_DIR=${SOCBOARD_DEPLOY_OPT_DIR:-/opt/socboard}
 WAIT=${SOCBOARD_DEPLOY_WAIT:-90}
@@ -146,7 +150,7 @@ check_release() {
   # Passed by name only: the values travel in the environment of docker, not in its arguments.
   SOCBOARD_SEED_PASSWORD_LEAD=${S[SOCBOARD_SEED_PASSWORD_LEAD]} SOCBOARD_INGEST_API_KEY=${S[SOCBOARD_INGEST_API_KEY]} \
     docker run --rm --pull never --network host -e SOCBOARD_SEED_PASSWORD_LEAD -e SOCBOARD_INGEST_API_KEY \
-    "$IMAGE" python -m socboard.smoke http://127.0.0.1:8000 >/dev/null 2>&1 || return 1
+    "$IMAGE" python -m socboard.smoke "http://127.0.0.1:$APP_PORT" >/dev/null 2>&1 || return 1
   systemctl is-active --quiet caddy || return 1
   host=$(public_hostname) || return 1
   start=$SECONDS
