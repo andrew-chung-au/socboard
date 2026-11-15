@@ -42,3 +42,6 @@ terraform
 **/__pycache__
 .pytest_cache
 .ruff_cache
+
+# The browser test is not part of the image (#234).
+e2e

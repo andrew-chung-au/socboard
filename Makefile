@@ -69,6 +69,17 @@ test-one: ## Run one test file: make test-one FILE=path
 	@test -n "$$FILE" || { echo "Usage: make test-one FILE=path/to/test_file"; exit 1; }
 	uv run --locked pytest "$$FILE"
 
+# e2e is also the name of the folder, so make would call the target up to date without this line.
+.PHONY: e2e
+
+e2e-install: ## Install the browser test's packages from e2e/bun.lock (Playwright, pinned); fails if the lockfile would change. The browser itself: cd e2e && bunx playwright install chromium
+	cd e2e && bun install --frozen-lockfile
+
+e2e: ## Drive the built site in a browser against the running Compose stack at SOCBOARD_BASE_URL (loopback http only; make compose-up first; make e2e-install and Chromium once); adds cases and uses a few of the key's 60 requests a minute
+	@test -n "$$SOCBOARD_BASE_URL" || { echo "e2e: set SOCBOARD_BASE_URL to the stack's http address on the loopback (make compose-up publishes http://127.0.0.1:8080); the stack must be up"; exit 2; }
+	@test -x e2e/node_modules/.bin/playwright || { echo "e2e: e2e/node_modules/.bin/playwright is missing; run make e2e-install first"; exit 1; }
+	cd e2e && bun run test
+
 test-stack: ## Run the journeys and the stack tests against the live Compose stack at SOCBOARD_BASE_URL (loopback http only; start it with make compose-up; adds cases and uses up the ingest key's allowance for a minute)
 	@test -n "$$SOCBOARD_BASE_URL" || { echo "test-stack: set SOCBOARD_BASE_URL to the stack's http address on the loopback (make compose-up publishes http://127.0.0.1:8080)"; exit 2; }
 	uv run --locked pytest tests/test_journeys.py tests/test_stack.py
