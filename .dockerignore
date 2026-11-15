@@ -1,0 +1,41 @@
+# What stays out of the image's build context (#190). The Dockerfile copies named paths only.
+# tests/test_dockerfile.py checks that every entry is present.
+.git
+**/.git
+.scratch
+node_modules
+**/node_modules
+frontend/node_modules
+frontend/dist
+
+# Env files by name and by extension, except the example one.
+.env
+.env.*
+*.env
+**/.env
+**/.env.*
+**/*.env
+!.env.example
+!**/.env.example
+
+# Databases and their journal files.
+*.db
+**/*.db
+*.db-journal
+*.db-wal
+*.db-shm
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+
+tests
+_docs
+_session-summaries
+_human-tasks
+terraform
+.github
+
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache

@@ -97,3 +97,59 @@ def test_postgres_upgrade_keeps_every_table_constraint_and_index():
         "ix_audit_entries_case_id",
     ):
         assert name in sql, name
+
+
+# --- #193 (D6a): 0001's SQLite output is pinned, and 0002 adds the Postgres triggers only ----------
+
+MIGRATION_0002 = migrate.SCRIPT_LOCATION / "versions" / "0002_postgres_audit_triggers.py"
+POSTGRES_TRIGGER_NAMES = TRIGGER_NAMES + ("audit_entries_no_truncate",)
+# sha256 and length of 0001's offline SQLite rendering, taken at ea57232 before #193 (issue #193).
+PINNED_0001_SQLITE = {
+    "upgrade": ("45f217107dacebc4a6ad0b0e25070f814e03b33aa32b3c9ce4a47a9d6e2b31f9", 3828),
+    "downgrade": ("4461d0707d1185f58b2404ff3220bb11ede5805ece04e56868335024b7cfc22b", 311),
+}
+
+
+def load_0002():
+    spec = importlib.util.spec_from_file_location("migration_0002_under_test", MIGRATION_0002)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def rendered_0002(dialect_name: str, step: str) -> str:
+    buffer = io.StringIO()
+    context = MigrationContext.configure(dialect_name=dialect_name, opts={"as_sql": True, "output_buffer": buffer})
+    with Operations.context(context):
+        getattr(load_0002(), step)()
+    return buffer.getvalue()
+
+
+def test_the_sqlite_output_of_0001_is_unchanged():
+    import hashlib
+
+    for step, (digest, length) in PINNED_0001_SQLITE.items():
+        sql = rendered_sql("sqlite", step)
+        assert (hashlib.sha256(sql.encode()).hexdigest(), len(sql)) == (digest, length), step
+
+
+def test_0002_emits_nothing_on_sqlite():
+    assert rendered_0002("sqlite", "upgrade") == ""
+    assert rendered_0002("sqlite", "downgrade") == ""
+
+
+def test_0002_creates_the_four_postgres_triggers_enabled_always():
+    sql = rendered_0002("postgresql", "upgrade")
+    for name in POSTGRES_TRIGGER_NAMES:
+        assert f"CREATE TRIGGER {name} " in sql, name
+        assert f"ENABLE ALWAYS TRIGGER {name}" in sql, name
+    assert "FOR EACH STATEMENT" in sql  # the truncate trigger
+    assert "RAISE(ABORT" not in sql.upper() and "AUTOINCREMENT" not in sql.upper()
+    assert "public.audit_entries" in sql
+
+
+def test_0002_downgrade_drops_the_four_triggers_and_their_functions():
+    sql = rendered_0002("postgresql", "downgrade")
+    for name in POSTGRES_TRIGGER_NAMES:
+        assert f"DROP TRIGGER {name} ON public.audit_entries" in sql, name
+    assert sql.count("DROP FUNCTION public.audit_entries_refuse_") == 4

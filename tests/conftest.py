@@ -18,8 +18,15 @@ MARKER_LINE = (
 )
 
 
+POSTGRES_MARKER_LINE = (
+    "postgres_only(reason): the test needs a Postgres server (its triggers, roles or catalogue); it is "
+    "deselected when SOCBOARD_TEST_POSTGRES_URL is not set (#193)"
+)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", MARKER_LINE)
+    config.addinivalue_line("markers", POSTGRES_MARKER_LINE)
     try:
         selected = db_target.server_url() is not None
     except ValueError as error:
@@ -28,7 +35,10 @@ def pytest_configure(config):
         # Stop the run here, before any test, when the server cannot be reached. The error text is the
         # application's fixed connection text, which holds no part of the URL.
         try:
+            import pg_roles
+
             config._postgres_databases_before = len(db_target.listed_databases())
+            config._postgres_roles_before = len(pg_roles.listed_roles())
         except Exception as error:
             raise pytest.UsageError(f"cannot reach the Postgres server named by {db_target.ENV_NAME}: {error}") from None
 
@@ -45,23 +55,36 @@ def _reason(marker) -> str:
     return reason if isinstance(reason, str) else ""
 
 
-def pytest_collection_modifyitems(config, items):
-    """Check every `sqlite_only` marker has a one-line reason; deselect the marked tests on Postgres."""
+def _marked(items, name):
+    """The items that carry marker `name`; a marker without a one-line reason stops the run."""
     marked = []
     for item in items:
-        for marker in item.iter_markers("sqlite_only"):
+        for marker in item.iter_markers(name):
             reason = _reason(marker)
             if not reason.strip() or "\n" in reason.strip():
-                raise pytest.UsageError(f"{item.nodeid}: sqlite_only needs a one-line reason")
+                raise pytest.UsageError(f"{item.nodeid}: {name} needs a one-line reason")
             marked.append(item)
             break
+    return marked
+
+
+def pytest_collection_modifyitems(config, items):
+    """Check every database marker has a one-line reason; deselect the tests the run's database cannot run.
+
+    `sqlite_only` tests are deselected on Postgres, `postgres_only` tests on SQLite. Deselected, never
+    skipped (the verify gate refuses added skips), and the counts are printed.
+    """
+    sqlite_marked = _marked(items, "sqlite_only")
+    postgres_marked = _marked(items, "postgres_only")
     postgres = db_target.is_postgres()
-    if postgres and marked:
-        marked_ids = {id(item) for item in marked}
-        items[:] = [item for item in items if id(item) not in marked_ids]
-        config.hook.pytest_deselected(items=marked)
+    drop = sqlite_marked if postgres else postgres_marked
+    if drop:
+        drop_ids = {id(item) for item in drop}
+        items[:] = [item for item in items if id(item) not in drop_ids]
+        config.hook.pytest_deselected(items=drop)
     config._sqlite_only_line = (
-        f"sqlite_only: {len(marked)} marked, {len(marked) if postgres else 0} deselected on Postgres"
+        f"sqlite_only: {len(sqlite_marked)} marked, {len(sqlite_marked) if postgres else 0} deselected on Postgres; "
+        f"postgres_only: {len(postgres_marked)} marked, {0 if postgres else len(postgres_marked)} deselected on SQLite"
     )
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
@@ -80,6 +103,13 @@ def pytest_terminal_summary(terminalreporter, config):
     )
     if after > before:
         terminalreporter.write_line("postgres test databases LEFT BEHIND by this run", red=True)
+    import pg_roles
+
+    roles_after = len(pg_roles.listed_roles())
+    roles_before = getattr(config, "_postgres_roles_before", 0)
+    terminalreporter.write_line(f"postgres test roles: {roles_before} before the run, {roles_after} left on the server")
+    if roles_after > roles_before:
+        terminalreporter.write_line("postgres test roles LEFT BEHIND by this run", red=True)
 
 
 @pytest.fixture(autouse=True)
