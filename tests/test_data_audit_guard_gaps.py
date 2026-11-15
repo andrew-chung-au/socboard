@@ -47,7 +47,7 @@ from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import DropIndex
 from sqlalchemy.sql.dml import Insert
-from sqlalchemy.sql.lambdas import StatementLambdaElement
+from sqlalchemy.sql.lambdas import NullLambdaStatement, StatementLambdaElement
 from test_data_audit_triggers import _lambda_delete, _lambda_replace, _lambda_update, _lambda_upsert, guards_disabled
 
 from socboard import audit_guard, migrate
@@ -1101,6 +1101,67 @@ def test_every_other_rule_refuses_a_lambda_before_the_database_does(seeded, name
     assert_append_audit_works(seeded)
 
 
+SPOILED_REFUSALS = {
+    "id_7": lambda s: _lambda_id_7(s).spoil(),
+    "id_big": lambda s: _lambda_id_big(s).spoil(),
+    "id_captured": lambda s: _lambda_id_captured(s, BIG).spoil(),
+    "sqlite_sequence": lambda s: _lambda_sequence_write().spoil(),
+    "update": lambda s: _lambda_update().spoil(),
+    "delete": lambda s: _lambda_delete().spoil(),
+}
+
+
+@pytest.mark.parametrize("sink", [_conn, _session])
+@pytest.mark.parametrize("name", SPOILED_REFUSALS)
+@SQLITE_GUARD
+def test_a_spoiled_lambda_is_refused_like_its_statement(seeded, name, sink):
+    """`.spoil()` returns a `NullLambdaStatement`, which is not a `StatementLambdaElement` (QA F1)."""
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError, match=IMMUTABLE_MESSAGE):
+        sink(seeded["engine"], SPOILED_REFUSALS[name](seeded))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+@pytest.mark.parametrize("sink", [_conn, _session])
+@SQLITE_NULL_ID
+def test_a_spoiled_lambda_insert_without_an_id_still_succeeds(seeded, sink):
+    engine = seeded["engine"]
+    before_rows, before_seq, _ = snapshot(engine)
+    if sink is _session:
+        with Session(engine) as session:
+            session.execute(_lambda_no_id(seeded).spoil())
+            session.commit()
+    else:
+        with engine.begin() as conn:
+            conn.execute(_lambda_no_id(seeded).spoil())
+    rows, seq, _ = snapshot(engine)
+    assert rows == [*before_rows, (before_seq + 1, "new")]
+    assert seq == before_seq + 1
+
+
+def test_the_guard_function_refuses_a_spoiled_lambda_like_its_statement():
+    assert refused_statement(_lambda_id_7({"case_id": 1, "user_id": 1}).spoil())
+    assert refused_statement(_lambda_update().spoil())
+    assert not refused_statement(lambda_stmt(lambda: select(AUDIT)).spoil())
+    assert not refused_statement(_lambda_no_id({"case_id": 1, "user_id": 1}).spoil())
+
+
+def test_a_spoiled_lambda_that_cannot_be_read_is_refused(monkeypatch):
+    def fail(self):
+        raise AttributeError("_resolved")
+
+    spoiled = lambda_stmt(lambda: select(AUDIT)).spoil()
+    monkeypatch.setattr(NullLambdaStatement, "_resolved", property(fail), raising=False)  # set per instance
+    monkeypatch.setattr(NullLambdaStatement, "__getattr__", lambda self, key: fail(self))
+    assert refused_statement(spoiled)
+
+
+def test_none_is_not_an_unreadable_lambda():
+    """`None` is no statement and no rule matches it, as before #214; only an unreadable lambda is refused."""
+    assert not refused_statement(None)
+
+
 def _break_resolved(monkeypatch, how):
     """Make `_resolved` missing (`how="missing"`) or failing on read (`how="raises"`) on the class."""
 
@@ -1124,4 +1185,7 @@ def test_canary_sqlalchemy_still_exposes_resolved_on_a_lambda_statement():
     """If an upgrade renames `_resolved`, this fails by name (the guard would refuse every lambda)."""
     resolved = lambda_stmt(lambda: insert(AUDIT))._resolved
     assert isinstance(resolved, Insert)
+    spoiled = lambda_stmt(lambda: insert(AUDIT)).spoil()
+    assert isinstance(spoiled, NullLambdaStatement)
+    assert isinstance(spoiled._resolved, Insert)  # `.spoil()` keeps its statement in `_resolved` too
     assert not refused_statement(lambda_stmt(lambda: insert(AUDIT).values(case_id=1, actor_id=1, action="a")))

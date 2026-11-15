@@ -36,7 +36,8 @@ layer:
   next audit id). None of these is lifted by `allow_schema_changes()`. A SELECT from
   `sqlite_sequence` passes.
 - a `lambda_stmt` (#214): `refused_statement` first replaces it by the statement it builds (the
-  private `_resolved`, in a bounded loop) and applies every rule above to that statement, so a
+  private `_resolved`, in a bounded loop; a `LambdaElement` or the `NullLambdaStatement` that
+  `.spoil()` returns) and applies every rule above to that statement, so a
   lambda is refused or allowed exactly as its statement; a lambda it cannot read is refused (no
   lambda-specific rule list). Cost: a `lambda_stmt` that captures a `None` id from a variable is
   refused like a caller's `bindparam` for `id`, because SQLAlchemy reuses the cached lambda when
@@ -80,7 +81,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.schema import DDL, DropIndex, ExecutableDDLElement, Table  # noqa: E402
 from sqlalchemy.sql.dml import Delete, Insert, Update  # noqa: E402
 from sqlalchemy.sql.elements import BindParameter, Null  # noqa: E402
-from sqlalchemy.sql.lambdas import StatementLambdaElement  # noqa: E402
+from sqlalchemy.sql.lambdas import LambdaElement, NullLambdaStatement  # noqa: E402
 from sqlalchemy.sql.selectable import AliasedReturnsRows  # noqa: E402
 
 AUDIT_TABLE = "audit_entries"
@@ -327,24 +328,30 @@ def ddl_targets_audit_table(statement) -> bool:
     return isinstance(statement, DDL) and bool(_WORD.search(ddl_text(statement)))
 
 
+_UNREADABLE = object()  # `_unwrap_lambda` result for a lambda it cannot read (None is a valid statement)
+
+
 def _unwrap_lambda(statement):
-    """The statement a `lambda_stmt` builds (#214), or None when it cannot be read.
+    """The statement a `lambda_stmt` builds (#214), or `_UNREADABLE` when it cannot be read.
 
     SQLAlchemy has no public accessor for it; `_resolved` is private, so a missing or failing
-    attribute, or a lambda that never resolves, gives None and the caller refuses (fail closed).
-    A canary test fails by name if SQLAlchemy stops exposing `_resolved`, because every lambda
-    would then be refused. A closure-captured `None` id (`lambda: insert(T).values(id=eid)`) is
-    a `bindparam` to SQLAlchemy (its cache reuses the lambda when `eid` changes), so it is
-    refused like any caller's `bindparam` for `id` (`_is_null`); a literal `id=None` is not.
+    attribute, or a lambda that never resolves, gives `_UNREADABLE` and the caller refuses (fail
+    closed). Covered: `LambdaElement` (so `StatementLambdaElement`, `LinkedLambdaElement` of a
+    `+=` and `DeferredLambdaElement`) and `NullLambdaStatement`, which `.spoil()` returns and which
+    is not a `LambdaElement`; both keep the built statement in `_resolved`. A canary test fails by
+    name if SQLAlchemy stops exposing `_resolved` on either, because every lambda would then be
+    refused. A closure-captured `None` id (`lambda: insert(T).values(id=eid)`) is a `bindparam`
+    to SQLAlchemy (its cache reuses the lambda when `eid` changes), so it is refused like any
+    caller's `bindparam` for `id` (`_is_null`); a literal `id=None` is not.
     """
     for _ in range(100):  # a bound, so a lambda that yields a lambda cannot loop forever
-        if not isinstance(statement, StatementLambdaElement):
+        if not isinstance(statement, (LambdaElement, NullLambdaStatement)):
             return statement
         try:
             statement = statement._resolved
         except Exception:  # any failure to read it: refuse
-            return None
-    return None
+            return _UNREADABLE
+    return _UNREADABLE
 
 
 def refused_statement(statement, parameters=None) -> bool:
@@ -355,7 +362,7 @@ def refused_statement(statement, parameters=None) -> bool:
     statement it builds before any rule runs, and one that cannot be read is refused (#214).
     """
     statement = _unwrap_lambda(statement)
-    if statement is None:
+    if statement is _UNREADABLE:
         return True
     if targets_audit_table(statement) or overwrites_audit_entry(statement):
         return True
