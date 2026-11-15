@@ -5,6 +5,7 @@ small copy that breaks it, and one test that the real file passes. Every value h
 """
 
 import copy
+import importlib.util
 import re
 from pathlib import Path
 
@@ -84,8 +85,8 @@ def problems(doc, text):
         found.append("app overrides the image's start command")
     if services["app"]["environment"].get("SOCBOARD_MODE") != "deployed":
         found.append("app is not in deployed mode")
-    if len({services[n]["image"] for n in ("migrate", "seed", "app")}) != 1:
-        found.append("migrate, seed and app use different images")
+    if len({services[n]["image"] for n in ("db-init", "migrate", "seed", "app")}) != 1:
+        found.append("db-init, migrate, seed and app use different images")
     owner, app_role = "socboard_owner:", "socboard_app:"
     if owner not in services["migrate"]["environment"]["SOCBOARD_DATABASE_URL"]:
         found.append("migrate does not connect as the owner role")
@@ -179,14 +180,72 @@ def test_an_untrusted_proxy_address_is_refused():
     assert any("proxy's address" in p for p in broken(change))
 
 
-def test_db_init_has_no_password_on_a_command_line_and_makes_both_roles_without_superuser():
-    script = (ROOT / "compose" / "db-init.sh").read_text(encoding="utf-8")
-    for line in script.splitlines():
-        if line.lstrip().startswith("psql"):
-            assert "PASSWORD" not in line.upper() and "-v " not in line.replace("-v ON_ERROR_STOP=1", "")
-    assert script.count("NOSUPERUSER") >= 4
-    assert "ALTER ROLE socboard_app" in script and "ALTER ROLE socboard_owner" in script
-    assert "ALTER DEFAULT PRIVILEGES FOR ROLE socboard_owner" in script
+def test_a_different_image_for_db_init_is_refused():
+    assert any("different images" in p for p in broken(lambda doc, text: doc["services"]["db-init"].update(image="postgres:16.15")))
+
+
+# --- compose/db_init.py -------------------------------------------------------------------------
+
+OWNER_PASSWORD, APP_PASSWORD = "OwnerSecretForTest1", "AppSecretForTest2"
+
+
+def load_db_init():
+    spec = importlib.util.spec_from_file_location("db_init", ROOT / "compose" / "db_init.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeConnection:
+    """Records each statement as text; `roles_exist` is what the existence checks answer."""
+
+    def __init__(self, roles_exist):
+        self.statements = []
+        self.roles_exist = roles_exist
+        self.pgconn = self
+
+    def encrypt_password(self, password, user, algorithm):
+        assert algorithm == b"scram-sha-256"
+        return b"SCRAM-SHA-256$4096:c2FsdA==$" + user + b"-verifier"
+
+    def execute(self, query, params=None):
+        self.statements.append(query if isinstance(query, str) else query.as_string(None))
+        self.last = params
+        return self
+
+    def fetchone(self):
+        return (1,) if self.roles_exist else None
+
+
+@pytest.mark.parametrize("roles_exist", [False, True])
+def test_db_init_sends_verifiers_never_a_password_and_makes_no_superuser(roles_exist):
+    db_init = load_db_init()
+    environ = {"STACK_PG_OWNER_PASSWORD": OWNER_PASSWORD, "STACK_PG_APP_PASSWORD": APP_PASSWORD}
+    conn = FakeConnection(roles_exist)
+    db_init.set_up_roles(conn, environ)
+    db_init.grant(conn)
+    sent = "\n".join(conn.statements)
+    assert OWNER_PASSWORD not in sent and APP_PASSWORD not in sent
+    verb = "ALTER" if roles_exist else "CREATE"
+    assert f'{verb} ROLE "socboard_owner" LOGIN NOSUPERUSER PASSWORD \'SCRAM-SHA-256$4096:c2FsdA==$socboard_owner-verifier\'' in sent
+    assert f'{verb} ROLE "socboard_app" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD' in sent
+    assert "SUPERUSER" not in sent.replace("NOSUPERUSER", "")
+    assert 'ALTER DEFAULT PRIVILEGES FOR ROLE "socboard_owner"' in sent
+    assert ("CREATE DATABASE" in sent) is (not roles_exist)
+
+
+def test_db_init_names_the_usual_cause_when_it_cannot_log_in_and_prints_no_driver_text(monkeypatch, capsys):
+    import psycopg
+
+    db_init = load_db_init()
+
+    def refuse(*args, **kwargs):
+        raise psycopg.OperationalError('password authentication failed for user "postgres" at host "db"')
+
+    monkeypatch.setattr(db_init.psycopg, "connect", refuse)
+    assert db_init.main({"STACK_PG_SUPERUSER_PASSWORD": "x"}) == 1
+    shown = capsys.readouterr()
+    assert "secrets file was deleted" in shown.err and "password authentication" not in shown.out + shown.err
 
 
 def test_the_proxy_is_plain_http_to_the_app():
@@ -199,4 +258,3 @@ def test_the_database_image_is_the_tag_the_postgres_job_uses():
     workflow = (ROOT / ".github" / "workflows" / "postgres.yml").read_text(encoding="utf-8")
     tag = re.search(r"image: (postgres:16\.\d+)", workflow).group(1)
     assert doc["services"]["db"]["image"].startswith(tag + "@sha256:")
-    assert doc["services"]["db-init"]["image"] == doc["services"]["db"]["image"]

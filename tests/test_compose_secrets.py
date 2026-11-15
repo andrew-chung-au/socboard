@@ -118,3 +118,17 @@ def test_a_database_password_that_is_not_url_safe_is_refused_without_printing_it
 def test_the_file_name_is_git_ignored():
     done = subprocess.run(["git", "check-ignore", "-q", "compose.secrets"], cwd=ROOT, check=False)
     assert done.returncode == 0
+
+
+def test_a_whitespace_only_value_counts_as_empty(tmp_path, capsys):
+    path = tmp_path / "compose.secrets"
+    assert compose_secrets.main({"STACK_PG_APP_PASSWORD": "   "}, path) == 2
+    assert "STACK_PG_APP_PASSWORD" in capsys.readouterr().err
+    assert not path.exists()
+
+
+def test_with_every_name_in_the_environment_an_empty_private_file_is_still_made(tmp_path):
+    path = tmp_path / "compose.secrets"
+    environ = {name: "Abcdef0123456789Abcdef0123456789" for name in compose_secrets.NAMES}
+    assert compose_secrets.main(environ, path) == 0
+    assert path.read_bytes() == b"" and stat.S_IMODE(path.stat().st_mode) == 0o600

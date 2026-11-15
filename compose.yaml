@@ -38,16 +38,15 @@ services:
     networks: [stack]
 
   db-init:
-    image: postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
-    command: ["sh", "/db-init.sh"]
+    # The app's image: its driver turns each role's password into a SCRAM verifier before it is sent.
+    image: *image
+    command: ["python", "/db_init.py"]
     environment:
-      PGHOST: db
-      PGUSER: postgres
-      PGPASSWORD: ${STACK_PG_SUPERUSER_PASSWORD:?STACK_PG_SUPERUSER_PASSWORD is required}
+      STACK_PG_SUPERUSER_PASSWORD: ${STACK_PG_SUPERUSER_PASSWORD:?STACK_PG_SUPERUSER_PASSWORD is required}
       STACK_PG_OWNER_PASSWORD: ${STACK_PG_OWNER_PASSWORD:?STACK_PG_OWNER_PASSWORD is required}
       STACK_PG_APP_PASSWORD: ${STACK_PG_APP_PASSWORD:?STACK_PG_APP_PASSWORD is required}
     volumes:
-      - ./compose/db-init.sh:/db-init.sh:ro
+      - ./compose/db_init.py:/db_init.py:ro
     depends_on:
       db:
         condition: service_healthy

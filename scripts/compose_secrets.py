@@ -54,7 +54,7 @@ def main(environ: Mapping[str, str] | None = None, path: Path = SECRETS_FILE) ->
         value = environ[name] if name in environ else from_file.get(name)
         if value is None:
             missing.append(name)
-        elif not value:
+        elif not value.strip():
             problems.append(f"{name} is set to an empty value; set it or remove it")
         elif name in DATABASE_PASSWORDS and not URL_SAFE.fullmatch(value):
             problems.append(f"{name} must be letters and digits only (it goes into a database URL)")
@@ -64,6 +64,8 @@ def main(environ: Mapping[str, str] | None = None, path: Path = SECRETS_FILE) ->
         print("compose secrets: nothing was written", file=sys.stderr)
         return 2
     if not missing:
+        if not path.exists():  # every name is in the environment; Compose still reads the file
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         print("compose secrets: every name is already set")
         return 0
     lines = "".join(f"{name}={secrets.token_hex(24)}\n" for name in missing)
