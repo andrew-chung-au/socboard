@@ -25,10 +25,12 @@ override_data {
 # `key_name` and the group's inline rule sets are computed, so a plan leaves them unknown when the
 # configuration does not set them. These overrides make them null and empty at plan time; a value the
 # configuration sets still wins over an override, so adding `key_name` or an inline rule fails below.
+# The instance's and the Elastic IP's ids are fixed too, so the association can be compared (#256).
 override_resource {
   target          = aws_instance.server
   override_during = plan
   values = {
+    id       = "i-0123456789abcdef0"
     key_name = null
   }
 }
@@ -48,6 +50,7 @@ override_resource {
   target          = aws_eip.server
   override_during = plan
   values = {
+    id        = "eipalloc-0123456789abcdef0"
     public_ip = "203.0.113.10"
     instance  = null
   }
@@ -158,19 +161,59 @@ run "defaults" {
     error_message = "Caddy's admin endpoint must be off and the default certificate authority production."
   }
 
-  # The volume: found by its id, mounted by UUID with nofail at STACK_PGDATA_DIR, owned by uid 999,
-  # and formatted only when blkid finds no signature; Caddy's data lives on it.
+  # The volume: found by its id, mounted by UUID with nofail and the 30-second device wait at
+  # /srv/socboard-data, and formatted only when blkid finds no signature.
   assert {
     condition = alltrue([for s in [
       "DATA_DEV='/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0'",
       "DATA_DIR='/srv/socboard-data'",
-      "\"UUID=$uuid $DATA_DIR ext4 defaults,nofail,",
-      "chown 999:999 \"$DATA_DIR\"",
+      "\"UUID=$uuid $DATA_DIR ext4 defaults,nofail,x-systemd.device-timeout=30s 0 2\"",
       "if [ \"$rc\" -eq 2 ]; then",
-      "root /srv/socboard-data/caddy\n",
-      "RequiresMountsFor=/srv/socboard-data\n",
     ] : strcontains(aws_instance.server.user_data, s)])
-    error_message = "The bootstrap must mount the data volume by id and UUID with nofail at /srv/socboard-data, owned by 999, format only an empty one, and keep Caddy's data on it."
+    error_message = "The bootstrap must mount the data volume by id and UUID with nofail at /srv/socboard-data and format only an empty one."
+  }
+
+  # The layout on the volume (#256): the mount root root:root 0755 on every run, Postgres's directory
+  # (STACK_PGDATA_DIR on the server) 999 and 0700 on its top level, Caddy's folder owned by the caddy
+  # user recursively with 0700, and the caddy uid never 999.
+  assert {
+    condition = alltrue([for s in [
+      "PG_DIR='/srv/socboard-data/postgres'\n",
+      "CADDY_DIR='/srv/socboard-data/caddy'\n",
+      "\nown \"$DATA_DIR\" 0:0 755\n",
+      "\nown \"$PG_DIR\" 999:999 700\n",
+      "\nown \"$CADDY_DIR\" \"$caddy_uid:$caddy_gid\" 700\n",
+      "\n  chown -R \"$caddy_uid:$caddy_gid\" \"$CADDY_DIR\"\n",
+      "if [ \"$caddy_uid\" = 999 ]; then",
+    ] : strcontains(aws_instance.server.user_data, s)])
+    error_message = "The bootstrap must set the mount root to root:root 0755, postgres/ to 999 0700 and caddy/ to the caddy user (recursively) 0700."
+  }
+
+  # Caddy's storage is its folder on the volume, beside the Postgres directory and not under it, so no
+  # container mount reaches Caddy's keys (F-233-5).
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "\t\troot /srv/socboard-data/caddy\n") && !startswith(regex("CADDY_DIR='([^']*)'", aws_instance.server.user_data)[0], "${regex("PG_DIR='([^']*)'", aws_instance.server.user_data)[0]}/") && !strcontains(aws_instance.server.user_data, "/srv/socboard-data/postgres/caddy")
+    error_message = "Caddy's storage root must be /srv/socboard-data/caddy, outside the Postgres directory."
+  }
+
+  # Docker and Caddy each wait for the data mount and do not start without it (F-233-4).
+  assert {
+    condition = alltrue([for f in ["docker", "caddy"] :
+    strcontains(aws_instance.server.user_data, "write /etc/systemd/system/${f}.service.d/socboard.conf 0644 <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/socboard-data\nEOF\n")])
+    error_message = "Docker and Caddy must each have a drop-in with RequiresMountsFor=/srv/socboard-data."
+  }
+
+  # Only the pinned Caddy key: exactly one primary key with this fingerprint (F-233-6).
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "CADDY_KEY_FPR='65760C51EDEA2017CEA2CA15155B6D79CA56EA34'") && strcontains(aws_instance.server.user_data, "if [ \"$found\" = \"$CADDY_KEY_FPR\" ]; then return 0; fi") && strcontains(aws_instance.server.user_data, "if ! caddy_key_ok \"$CADDY_KEYRING.new\"; then")
+    error_message = "The Caddy keyring must be accepted only with exactly one primary key of the pinned fingerprint."
+  }
+
+  # No hidden write failure (F-233-7): files are written only through `write`, which stops on a failed
+  # put; nothing swallows a failure with `|| true`, and put's one caller is write.
+  assert {
+    condition     = !strcontains(aws_instance.server.user_data, "|| true") && length(regexall("(?m)^\\s*(if !? *)?put ", aws_instance.server.user_data)) == 1 && strcontains(aws_instance.server.user_data, "\n  put \"$@\" || rc=$?\n") && strcontains(aws_instance.server.user_data, "    *)\n      say \"could not write $1; stopping\"\n      exit 1\n")
+    error_message = "Every file write must go through write, which stops the script on a failed write."
   }
 
   # Log rotation and the prune that only removes unused images.
@@ -181,10 +224,13 @@ run "defaults" {
 
   # Never held: no secret in the user data. These are the patterns of the kit's secret scan
   # (_docs/agent-kit/scripts/secret-patterns.txt) that can match a value; the file sits outside this
-  # folder, so tf-check's copy cannot read it. And no Secrets Manager call.
+  # folder, so tf-check's copy cannot read it. This copy must follow that file: a pattern added there
+  # is added here. And no Secrets Manager call.
   assert {
     condition = alltrue([for p in [
       "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+      "-----BEGIN PGP PRIVATE KEY BLOC[K]-----", # [K]: the same regex, but this line does not match itself
+      "(^|[^A-Za-z0-9])sk-(proj|ant)-[A-Za-z0-9_-]{20,}",
       "ghp_[A-Za-z0-9]{36}",
       "github_pat_[A-Za-z0-9_]{22,}",
       "AKIA[0-9A-Z]{16}",
@@ -203,6 +249,11 @@ run "defaults" {
   assert {
     condition     = aws_eip.server.instance == null
     error_message = "The Elastic IP must be associated through aws_eip_association, not its instance argument."
+  }
+
+  assert {
+    condition     = aws_eip_association.server.allocation_id == aws_eip.server.id && aws_eip_association.server.instance_id == aws_instance.server.id
+    error_message = "aws_eip_association.server must associate aws_eip.server with aws_instance.server."
   }
 }
 

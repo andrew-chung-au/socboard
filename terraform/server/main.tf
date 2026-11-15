@@ -54,8 +54,12 @@ locals {
   # (80 for some package mirrors). VERIFY: at the first apply that all three work with this.
   egress_ports = [80, 443]
 
-  # STACK_PGDATA_DIR on the server: where the bootstrap mounts the data volume (README).
+  # Where the bootstrap mounts the data volume; its `postgres` child is the server's Postgres data
+  # directory and its `caddy` child Caddy's storage (README, "The bootstrap").
   data_dir = "/srv/socboard-data"
+
+  # The app's port on the host's loopback, the one address Caddy proxies to (compose.yaml publishes it).
+  app_upstream = "127.0.0.1:8000"
 
   # Deploy decision 6: the public hostname is the Elastic IP through a wildcard-DNS service, as
   # 203-0-113-10.sslip.io. VERIFY: sslip.io answers this dashed form with the address.
@@ -127,7 +131,8 @@ resource "aws_instance" "server" {
   iam_instance_profile   = local.instance_profile_name
 
   user_data = templatefile("${path.module}/bootstrap.sh.tftpl", {
-    data_dir = local.data_dir
+    data_dir     = local.data_dir
+    app_upstream = local.app_upstream
     # The volume's NVMe serial is its id without the dash. VERIFY: the link name on noble.
     data_device = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(aws_ebs_volume.data.id, "-", "")}"
     hostname    = local.hostname
