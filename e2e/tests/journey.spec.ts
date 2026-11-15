@@ -32,6 +32,7 @@ async function signIn(page: Page, user: User): Promise<void> {
 }
 
 const EARLY = "2026-11-12T09:00:00Z";
+const MIDDLE = "2026-11-12T10:00:00Z";
 const LATE = "2026-11-12T10:30:00Z";
 
 test("two analysts and a lead: queue order, claim, a refused second claim, close with a reason, the audit trail", async ({
@@ -45,12 +46,14 @@ test("two analysts and a lead: queue order, claim, a refused second claim, close
   const titles = { critical: `${marker} alpha`, highOld: `${marker} bravo`, highNew: `${marker} charlie` };
 
   await test.step("ingest three alerts through the API, in an order that is not the queue order", async () => {
-    // Ingested newer high, critical, older high: neither the ingest order nor the title order is the
-    // queue order (critical, older high, newer high), so the test fails unless the server really sorts
-    // by severity, then alert timestamp, then id.
+    // The queue order is critical, older high, newer high. The ingest order is newer high, critical,
+    // older high, and the alert times are older high 09:00, critical 10:00, newer high 10:30. So the
+    // order by id (newer high, critical, older high), by time alone (older high, critical, newer high),
+    // by severity then id (critical, newer high, older high) and by title all differ from it: the test
+    // fails unless the server sorts by severity, then alert time.
     const created = [
       await ingest(base, { type: "unusual_network_traffic", asset: "web-prod-01", timestamp: LATE, title: titles.highNew, description: "Synthetic." }),
-      await ingest(base, { type: "malware_detection", asset: "dc-01", timestamp: EARLY, title: titles.critical, description: "Synthetic." }),
+      await ingest(base, { type: "malware_detection", asset: "dc-01", timestamp: MIDDLE, title: titles.critical, description: "Synthetic." }),
       await ingest(base, { type: "failed_login", asset: "dc-01", timestamp: EARLY, title: titles.highOld, description: "Synthetic." }),
     ];
     expect(created.map((c) => c.severity)).toEqual(["High", "Critical", "High"]);
