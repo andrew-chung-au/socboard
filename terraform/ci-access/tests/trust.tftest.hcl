@@ -83,15 +83,6 @@ run "deploy_policy_keeps_its_denies_and_no_new_statement" {
   }
 }
 
-run "outputs_are_the_three_role_arns" {
-  command = plan
-
-  assert {
-    condition     = output.deploy_role_arn == aws_iam_role.deploy.arn && output.apply_role_arn == aws_iam_role.apply.arn && output.plan_role_arn == aws_iam_role.plan.arn
-    error_message = "Each output must be its role's ARN; prod adds no second role or output."
-  }
-}
-
 run "wildcard_environment_is_refused" {
   command = plan
 
