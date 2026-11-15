@@ -113,6 +113,8 @@ test("two analysts and a lead: queue order, claim, a refused second claim, close
     await dialog.getByRole("radio", { name: "True positive" }).click();
     await dialog.getByRole("button", { name: "Close case", exact: true }).click();
     await expect(pageA.getByText("This case is closed and read-only.")).toBeVisible();
+    // The dialog's own "True positive" label goes away with the dialog; then only the reason badge is left.
+    await expect(dialog).toBeHidden();
     await expect(pageA.getByText("True positive", { exact: true })).toBeVisible();
   });
 
