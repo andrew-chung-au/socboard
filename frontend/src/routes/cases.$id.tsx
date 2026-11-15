@@ -5,7 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/soc/AppShell";
 import { Criticality, ReasonBadge, SeverityBadge, StatusBadge } from "@/components/soc/badges";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -63,7 +63,13 @@ function CasePage() {
   const isLead = me?.role === "lead";
   // The audit trail is Lead-only (the backend answers an Analyst with 403), so it is not requested.
   const auditQ = useQuery({ queryKey: ["audit", id], queryFn: () => api.getAudit(id), enabled: isLead, retry: false });
-  const usersQ = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers(), enabled: isLead, retry: false });
+  // The user list feeds only the Reassign control, so it is asked for only when that can show (#131).
+  const usersQ = useQuery({
+    queryKey: ["users"],
+    queryFn: () => api.listUsers(),
+    enabled: isLead && config.featureReassign,
+    retry: false,
+  });
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
@@ -108,6 +114,30 @@ function CasePage() {
   const canChangeStatus = (isOwner || isLead) && !closed;
   const canReassign = config.featureReassign && isLead && !!c.owner && !closed;
   const busy = run.isPending;
+  // Every action is shown; one the case or the role does not allow is disabled, with the reason.
+  // What is allowed is the same as before (canClaim, canChangeStatus, the status); the server still
+  // refuses what it refuses (#131).
+  const claimReason = closed
+    ? "Already closed"
+    : isOwner
+      ? "You own this case"
+      : c.owner
+        ? `Claimed by ${c.owner.displayName}`
+        : null;
+  const startReason = closed
+    ? "Already closed"
+    : c.status !== "New"
+      ? "Already investigating"
+      : !canChangeStatus
+        ? "Owner or Lead only"
+        : null;
+  const closeReason = closed
+    ? "Already closed"
+    : c.status !== "Investigating"
+      ? "Start investigating first"
+      : !canChangeStatus
+        ? "Owner or Lead only"
+        : null;
 
   return (
     <div className="space-y-3">
@@ -222,28 +252,21 @@ function CasePage() {
 
         <aside>
           <Panel title="Actions">
-            {closed ? (
-              <p className="text-sm text-muted-foreground">This case is closed and read-only.</p>
-            ) : (
-              <div className="space-y-2">
-                {canClaim && (
-                  <Button className="w-full" size="sm" disabled={busy} onClick={() => run.mutate(() => api.claimCase(c.id))}>
-                    Claim case
-                  </Button>
-                )}
-                {canChangeStatus && c.status === "New" && (
-                  <Button className="w-full" size="sm" variant="secondary" disabled={busy}
-                    onClick={() => run.mutate(() => api.transitionCase(c.id, "Investigating"))}>
-                    Start investigating
-                  </Button>
-                )}
-                {canChangeStatus && c.status === "Investigating" && (
-                  <Button className="w-full" size="sm" variant="secondary" disabled={busy}
-                    onClick={() => { setReason(""); setCloseOpen(true); }}>
-                    Close case…
-                  </Button>
-                )}
-                {!canChangeStatus && (
+            <div className="space-y-2">
+                {closed && <p className="text-sm text-muted-foreground">This case is closed and read-only.</p>}
+                <Action id="claim" reason={canClaim ? null : claimReason} busy={busy}
+                  onClick={() => run.mutate(() => api.claimCase(c.id))}>
+                  Claim case
+                </Action>
+                <Action id="start" variant="secondary" reason={startReason} busy={busy}
+                  onClick={() => run.mutate(() => api.transitionCase(c.id, "Investigating"))}>
+                  Start investigating
+                </Action>
+                <Action id="close" variant="secondary" reason={closeReason} busy={busy}
+                  onClick={() => { setReason(""); setCloseOpen(true); }}>
+                  Close case…
+                </Action>
+                {!closed && !canChangeStatus && (
                   <p className="text-xs text-muted-foreground">Only the owner or a Lead can change status.</p>
                 )}
                 {canReassign && (
@@ -265,8 +288,7 @@ function CasePage() {
                     </div>
                   </div>
                 )}
-              </div>
-            )}
+            </div>
           </Panel>
         </aside>
       </div>
@@ -302,9 +324,44 @@ function CasePage() {
   );
 }
 
+/** An action button that is always shown; when `reason` is set it is disabled and the reason is shown under it. */
+function Action({
+  id, reason, busy, onClick, variant, children,
+}: {
+  id: string;
+  reason: string | null;
+  busy: boolean;
+  onClick: () => void;
+  variant?: "secondary";
+  children: ReactNode;
+}) {
+  const reasonId = `action-${id}-reason`;
+  return (
+    <div>
+      <Button
+        className="w-full"
+        size="sm"
+        variant={variant}
+        disabled={busy || reason !== null}
+        aria-disabled={reason !== null || undefined}
+        aria-describedby={reason ? reasonId : undefined}
+        onClick={onClick}
+      >
+        {children}
+      </Button>
+      {reason && (
+        <p id={reasonId} className="mt-0.5 text-[11px] text-muted-foreground">
+          {reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Back to the list: a link (not a button), styled like the page's other secondary controls (#131). */
 function BackLink({ closed }: { closed?: boolean }) {
   return (
-    <Link to={closed ? "/closed" : "/"} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+    <Link to={closed ? "/closed" : "/"} className={buttonVariants({ variant: "outline", size: "sm" })}>
       <ArrowLeft className="h-3.5 w-3.5" /> {closed ? "Closed cases" : "Queue"}
     </Link>
   );

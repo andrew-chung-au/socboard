@@ -164,7 +164,7 @@ describe("claim refused with 409", () => {
 
 describe("Lead-only actions", () => {
   it.each<Status>(["New", "Investigating"])(
-    "are hidden from an Analyst who does not own a %s case",
+    "are shown but disabled for an Analyst who does not own a %s case (#131)",
     async (status) => {
       signIn(ANA);
       serveCase(() => makeCase({ status, owner: BEN }));
@@ -174,8 +174,8 @@ describe("Lead-only actions", () => {
       // Positive control: the page has loaded and shows the actions panel for this case.
       expect(await screen.findByText("owner: Ben Okafor", undefined, WAIT)).toBeInTheDocument();
       expect(screen.getByText("Only the owner or a Lead can change status.")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Start investigating" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Close case…" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Start investigating" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Close case…" })).toBeDisabled();
       expect(screen.queryByRole("button", { name: "Reassign" })).toBeNull();
       expect(screen.queryByText("Reassign to")).toBeNull();
     },
@@ -214,8 +214,10 @@ describe("VITE_FEATURE_REASSIGN: the Reassign control for a Lead on a claimed op
   }
 
   it.each<[string, Vars, boolean]>([
-    ["true shows it", { flag: "true", mock: "false" }, true],
+    ["true with the mock on shows it", { flag: "true", mock: undefined }, true],
+    ["true with the mock off hides it: no backend route (#131)", { flag: "true", mock: "false" }, false],
     ["false hides it", { flag: "false", mock: undefined }, false],
+    ["false with the mock off hides it", { flag: "false", mock: "false" }, false],
     ["unset follows the mock: on in mock mode", { flag: undefined, mock: undefined }, true],
     ["unset follows the mock: off when the mock is off", { flag: undefined, mock: "false" }, false],
     ["a value that is not true or false follows the mock", { flag: "yes", mock: "false" }, false],
