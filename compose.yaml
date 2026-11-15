@@ -12,10 +12,17 @@
 #   required: SOCBOARD_TOKEN_SECRET, SOCBOARD_INGEST_API_KEY, SOCBOARD_SEED_PASSWORD_ANALYST_A,
 #             SOCBOARD_SEED_PASSWORD_ANALYST_B, SOCBOARD_SEED_PASSWORD_LEAD,
 #             STACK_PG_SUPERUSER_PASSWORD, STACK_PG_OWNER_PASSWORD, STACK_PG_APP_PASSWORD
-#   optional: STACK_IMAGE, STACK_PGDATA_DIR, STACK_APP_PORT, STACK_PROXY_PORT
+#   optional: STACK_IMAGE, STACK_PGDATA_DIR, STACK_APP_PORT, STACK_PROXY_PORT,
+#             STACK_PROJECT (default socboard): the Compose project name, which prefixes the network,
+#               the containers and the volumes, so a second stack on the host needs its own;
+#             STACK_NET (default 10.231.77): the first three octets of the network's /24. It is a
+#               prefix because Compose has no arithmetic; the layout inside the /24 is fixed here:
+#               .1 gateway, .10 proxy, .128/25 pool for the other containers (#261);
+#             STACK_TRUSTED_PROXIES (default: the proxy's address): the address the app trusts to
+#               forward the client's address; the deploy script sets the gateway on the server (#271).
 # The database passwords go into database URLs, so they are letters and digits only.
 
-name: socboard
+name: ${STACK_PROJECT:-socboard}
 
 x-image: &image ${STACK_IMAGE:-socboard-stack:local}
 
@@ -91,7 +98,7 @@ services:
       SOCBOARD_INGEST_API_KEY: ${SOCBOARD_INGEST_API_KEY:?SOCBOARD_INGEST_API_KEY is required}
       SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_app:${STACK_PG_APP_PASSWORD:?STACK_PG_APP_PASSWORD is required}@db:5432/socboard
       # The proxy's fixed address below. FORWARDED_ALLOW_IPS stays at uvicorn's default (README, "Login attempt limits").
-      SOCBOARD_TRUSTED_PROXIES: 10.231.77.10
+      SOCBOARD_TRUSTED_PROXIES: ${STACK_TRUSTED_PROXIES:-${STACK_NET:-10.231.77}.10}
     ports:
       - 127.0.0.1:${STACK_APP_PORT:-8000}:8000
     healthcheck:
@@ -116,7 +123,7 @@ services:
         condition: service_healthy
     networks:
       stack:
-        ipv4_address: 10.231.77.10
+        ipv4_address: ${STACK_NET:-10.231.77}.10
 
 volumes:
   socboard-pgdata:
@@ -125,12 +132,12 @@ networks:
   stack:
     ipam:
       config:
-        # 10.231.77.0/24: Docker's default address pools are 172.17 to 172.31 and 192.168, so this
+        # The default 10.231.77.0/24: Docker's default address pools are 172.17 to 172.31 and 192.168, so this
         # range avoids them; a VPN that uses it would collide. Other containers get addresses from
         # the upper half, so the proxy's .10 is never taken.
         # The gateway is pinned: with an ip_range and no gateway, Docker takes the range's first
         # address (measured 10.231.77.128 on Docker Engine 29.1.3), and the server's trusted proxy
         # address and terraform/README.md assume 10.231.77.1 (#261).
-        - subnet: 10.231.77.0/24
-          ip_range: 10.231.77.128/25
-          gateway: 10.231.77.1
+        - subnet: ${STACK_NET:-10.231.77}.0/24
+          ip_range: ${STACK_NET:-10.231.77}.128/25
+          gateway: ${STACK_NET:-10.231.77}.1

@@ -45,11 +45,74 @@ def flat(value):
     return yaml.safe_dump(value)
 
 
-GATEWAY = "10.231.77.1"  # what terraform/README.md ("The forwarded address") and the deploy script assume (#261)
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
-def gateway_problems(config, proxy_address):
-    """The stack network's pinned gateway (#261): set, the documented address, inside the subnet, outside ip_range."""
+def expand_text(value, env):
+    """Compose's interpolation for a string: ${V}, $V, ${V:-d}, ${V-d}, nested defaults and $$ (#271).
+
+    Only what compose.yaml uses. A ${V:?message} is left as it is when V is unset or empty (the :? rule
+    is checked on the file's text); set, it gives the value. The default of a missing variable may
+    itself hold a variable.
+    """
+    out, i = [], 0
+    while i < len(value):
+        if value.startswith("$$", i):
+            out.append("$")
+            i += 2
+        elif value.startswith("${", i):
+            depth, j = 1, i + 2
+            while j < len(value) and depth:
+                depth += {"{": 1, "}": -1}.get(value[j], 0)
+                j += 1
+            if depth:
+                raise ValueError(f"unterminated ${{ in {value!r}")
+            inner = value[i + 2 : j - 1]
+            name = NAME.match(inner)
+            if not name:
+                raise ValueError(f"bad variable name in {value!r}")
+            rest = inner[name.end() :]
+            current = env.get(name.group())
+            if rest == "":
+                out.append(current or "")
+            elif rest.startswith(":-"):
+                out.append(current if current else expand_text(rest[2:], env))
+            elif rest.startswith("-"):
+                out.append(current if current is not None else expand_text(rest[1:], env))
+            elif rest.startswith(":?") or rest.startswith("?"):
+                out.append(current if current else value[i:j])
+            else:
+                raise ValueError(f"unsupported form in {value!r}")
+            i = j
+        else:
+            out.append(value[i])
+            i += 1
+    return "".join(out)
+
+
+def expand(value, env):
+    """The parsed file with every string interpolated by env; the original is not changed."""
+    if isinstance(value, str):
+        return expand_text(value, env)
+    if isinstance(value, list):
+        return [expand(item, env) for item in value]
+    if isinstance(value, dict):
+        return {key: expand(item, env) for key, item in value.items()}
+    return value
+
+
+def default_values():
+    """What the real file's own defaults give: the project name and the network prefix (the dev values).
+
+    Read from the real file, not from the copy under test, so a copy that changes its subnet is refused.
+    """
+    doc, _ = load()
+    expanded = expand(doc, {})
+    return expanded["name"], str(expanded["networks"]["stack"]["ipam"]["config"][0]["subnet"]).removesuffix(".0/24")
+
+
+def gateway_problems(config, proxy_address, prefix):
+    """The stack network's pinned gateway (#261): set, `<prefix>.1`, inside the subnet, outside ip_range."""
     gateway = config.get("gateway")
     if gateway is None or str(gateway).strip() == "":
         return ["the stack network has no gateway pinned"]
@@ -61,8 +124,8 @@ def gateway_problems(config, proxy_address):
     except (ValueError, KeyError):
         return ["the gateway, the subnet, the ip_range or the proxy address is not a valid IPv4 value"]
     found = []
-    if str(address) != GATEWAY:
-        found.append(f"the gateway is {address}, not {GATEWAY}")
+    if str(address) != f"{prefix}.1":
+        found.append(f"the gateway is {address}, not {prefix}.1")
     if address not in subnet:
         found.append("the gateway is outside the subnet")
     if address in pool:
@@ -76,8 +139,38 @@ def gateway_problems(config, proxy_address):
     return found
 
 
-def problems(doc, text):
+def network_problems(doc, prefix, env):
+    """The five addresses and the project name follow the variables, one pool entry only (#271)."""
     found = []
+    entries = doc["networks"]["stack"]["ipam"]["config"]
+    if len(entries) != 1:
+        return [f"the stack network has {len(entries)} pool entries, not exactly one"]
+    config = entries[0]
+    proxy_address = doc["services"]["proxy"]["networks"]["stack"]["ipv4_address"]
+    expected = {
+        "subnet": f"{prefix}.0/24",
+        "ip_range": f"{prefix}.128/25",
+    }
+    for key, want in expected.items():
+        if str(config.get(key)) != want:
+            found.append(f"the network's {key} is {config.get(key)}, not {want}")
+    if proxy_address != f"{prefix}.10":
+        found.append(f"the proxy's address is {proxy_address}, not {prefix}.10")
+    want_trusted = env.get("STACK_TRUSTED_PROXIES") or proxy_address
+    if doc["services"]["app"]["environment"].get("SOCBOARD_TRUSTED_PROXIES") != want_trusted:
+        found.append("app does not trust exactly the proxy's address" if not env.get("STACK_TRUSTED_PROXIES") else "app does not trust STACK_TRUSTED_PROXIES")
+    return found + gateway_problems(config, proxy_address, prefix)
+
+
+def problems(doc, text, env=None):
+    env = env or {}
+    raw = doc
+    default_name, default_prefix = default_values()
+    doc = expand(raw, env)
+    prefix = env.get("STACK_NET") or default_prefix
+    found = []
+    if doc.get("name") != (env.get("STACK_PROJECT") or default_name):
+        found.append(f"the project name is {doc.get('name')}, not {env.get('STACK_PROJECT') or default_name}")
     services = doc["services"]
     if set(services) != SERVICES:
         found.append(f"services are {sorted(services)}")
@@ -92,12 +185,12 @@ def problems(doc, text):
         found.append("only app and proxy publish a port")
     if re.search(r"FORWARDED_ALLOW_IPS\s*[:=]\s*['\"]?\*", text):
         found.append("FORWARDED_ALLOW_IPS is *")
-    if "FORWARDED_ALLOW_IPS" in flat(services["app"]):
+    if "FORWARDED_ALLOW_IPS" in flat(raw["services"]["app"]):
         found.append("app sets FORWARDED_ALLOW_IPS (leave uvicorn's default)")
-    holders = {name for name, s in services.items() if SUPERUSER in flat(s)}
+    holders = {name for name, s in raw["services"].items() if SUPERUSER in flat(s)}
     if holders != {"db", "db-init"}:
         found.append(f"the superuser's password is held by {sorted(holders)}")
-    for name, service in services.items():
+    for name, service in raw["services"].items():
         for key in ("command", "entrypoint", "healthcheck"):
             if "PASSWORD" in flat(service.get(key, "")):
                 found.append(f"{name} {key} names a password")
@@ -125,13 +218,8 @@ def problems(doc, text):
     for name in ("seed", "app"):
         if app_role not in services[name]["environment"]["SOCBOARD_DATABASE_URL"]:
             found.append(f"{name} does not connect as the application role")
-    proxy_address = services["proxy"]["networks"]["stack"]["ipv4_address"]
-    if services["app"]["environment"].get("SOCBOARD_TRUSTED_PROXIES") != proxy_address:
-        found.append("app does not trust exactly the proxy's address")
-    if not proxy_address.startswith("10.231.77.") or not doc["networks"]["stack"]["ipam"]["config"][0]["subnet"].startswith("10.231.77."):
-        found.append("the proxy's address is outside the network's fixed subnet")
-    found += gateway_problems(doc["networks"]["stack"]["ipam"]["config"][0], proxy_address)
-    mounts = services["db"]["volumes"]
+    found += network_problems(doc, prefix, env)
+    mounts = raw["services"]["db"]["volumes"]
     if mounts != ["${STACK_PGDATA_DIR:-socboard-pgdata}:/var/lib/postgresql/data"]:
         found.append("db's data directory is not the configurable one")
     if services["db"]["environment"].get("PGDATA") != "/var/lib/postgresql/data/pgdata":
@@ -144,11 +232,11 @@ def test_the_real_file_passes_every_rule():
     assert problems(doc, text) == []
 
 
-def broken(change):
+def broken(change, env=None):
     doc, text = load()
     doc = copy.deepcopy(doc)
     text = change(doc, text) or text
-    return problems(doc, text)
+    return problems(doc, text, env)
 
 
 @pytest.mark.parametrize("published", ["0.0.0.0:8000:8000", "8000:8000", "8000"])
@@ -308,11 +396,18 @@ def set_ipam(**changes):
     return change
 
 
-def test_the_real_gateway_is_pinned_to_the_documented_address_outside_the_pool():
+def default_gateway():
+    """The gateway the file's own defaults give; the README names it too."""
     doc, _ = load()
-    config = doc["networks"]["stack"]["ipam"]["config"][0]
-    assert config["gateway"] == GATEWAY == "10.231.77.1"
-    assert config["ip_range"] == "10.231.77.128/25" and config["subnet"] == "10.231.77.0/24"
+    return expand(doc, {})["networks"]["stack"]["ipam"]["config"][0]["gateway"]
+
+
+def test_the_real_gateway_is_pinned_inside_the_subnet_and_outside_the_pool():
+    doc, _ = load()
+    config = expand(doc, {})["networks"]["stack"]["ipam"]["config"][0]
+    _, prefix = default_values()
+    assert config["gateway"] == f"{prefix}.1"
+    assert config["ip_range"] == f"{prefix}.128/25" and config["subnet"] == f"{prefix}.0/24"
 
 
 @pytest.mark.parametrize(
@@ -346,18 +441,18 @@ def test_a_proxy_address_inside_the_pool_is_refused():
     assert any("proxy's address is inside ip_range" in line for line in found), found
 
 
-def readme_gateway_problems(readme_text):
+def readme_gateway_problems(readme_text, gateway):
     paragraph = next((line for line in readme_text.splitlines() if "The forwarded address" in line), "")
-    if f"`{GATEWAY}`" in paragraph:
+    if f"`{gateway}`" in paragraph:
         return []
     return [
-        f"terraform/README.md's 'The forwarded address' paragraph does not name {GATEWAY}; "
-        "change compose.yaml's gateway, GATEWAY in tests/test_compose.py and that paragraph together (#261)"
+        f"terraform/README.md's 'The forwarded address' paragraph does not name {gateway}; "
+        "change compose.yaml's gateway default and that paragraph together (#261)"
     ]
 
 
 def test_the_terraform_readme_names_the_same_gateway_as_compose_yaml():
-    assert readme_gateway_problems((ROOT / "terraform" / "README.md").read_text(encoding="utf-8")) == []
+    assert readme_gateway_problems((ROOT / "terraform" / "README.md").read_text(encoding="utf-8"), default_gateway()) == []
 
 
 @pytest.mark.parametrize(
@@ -372,5 +467,123 @@ def test_the_terraform_readme_names_the_same_gateway_as_compose_yaml():
     ids=["empty", "no address", "the measured address", "no backticks", "another paragraph"],
 )
 def test_a_readme_that_does_not_name_the_gateway_in_its_forwarded_address_paragraph_is_refused(text):
-    found = readme_gateway_problems(text)
+    found = readme_gateway_problems(text, "10.231.77.1")
     assert found and "compose.yaml's gateway" in found[0]
+
+
+# --- the project name, the network prefix and the trusted proxy as variables (#271) -----------------
+
+SECOND = {"STACK_PROJECT": "socboard-prod", "STACK_NET": "10.231.78"}
+
+
+@pytest.mark.parametrize(
+    ("value", "env", "expected"),
+    [
+        ("literal", {}, "literal"),
+        ("${A:-d}", {}, "d"),
+        ("${A:-d}", {"A": "x"}, "x"),
+        ("${A:-d}", {"A": ""}, "d"),
+        ("${A-d}", {"A": ""}, ""),
+        ("${A-d}", {}, "d"),
+        ("${A:-${B:-z}}.10", {}, "z.10"),
+        ("${A:-${B:-z}}.10", {"B": "y"}, "y.10"),
+        ("${A:-${B:-z}}.10", {"A": "x", "B": "y"}, "x.10"),
+        ("${A:-10.231.77}.0/24", {"A": "10.231.78"}, "10.231.78.0/24"),
+        ("127.0.0.1:${P:-8000}:8000", {}, "127.0.0.1:8000:8000"),
+        ("${IMG:-socboard-stack:local}", {}, "socboard-stack:local"),
+        ("$$HOME ${A:-d}", {}, "$HOME d"),
+        ("${R:?R is required}", {}, "${R:?R is required}"),
+        ("${R:?R is required}", {"R": "v"}, "v"),
+    ],
+)
+def test_the_expander_applies_composes_default_rules(value, env, expected):
+    assert expand_text(value, env) == expected
+
+
+@pytest.mark.parametrize("value", ["${A:-d", "${:-d}", "${A:+d}"])
+def test_the_expander_refuses_what_it_does_not_model(value):
+    with pytest.raises(ValueError):
+        expand_text(value, {})
+
+
+def test_the_expander_does_not_change_its_input():
+    doc, _ = load()
+    before = copy.deepcopy(doc)
+    expand(doc, SECOND)
+    assert doc == before
+
+
+def test_the_real_file_passes_every_rule_with_no_variables_and_with_a_second_stack():
+    doc, text = load()
+    assert problems(doc, text) == []
+    assert problems(doc, text, SECOND) == []
+    assert problems(doc, text, {**SECOND, "STACK_TRUSTED_PROXIES": "10.231.78.1"}) == []
+
+
+def test_the_second_stack_moves_every_address_and_shares_none_with_dev():
+    doc, _ = load()
+    dev, second = expand(doc, {}), expand(doc, SECOND)
+    assert dev["name"] != second["name"] == "socboard-prod"
+    dev_net = ipaddress.IPv4Network(dev["networks"]["stack"]["ipam"]["config"][0]["subnet"])
+    second_net = ipaddress.IPv4Network(second["networks"]["stack"]["ipam"]["config"][0]["subnet"])
+    assert not dev_net.overlaps(second_net)
+    second_config = second["networks"]["stack"]["ipam"]["config"][0]
+    assert second_config == {"subnet": "10.231.78.0/24", "ip_range": "10.231.78.128/25", "gateway": "10.231.78.1"}
+    assert second["services"]["proxy"]["networks"]["stack"]["ipv4_address"] == "10.231.78.10"
+    assert second["services"]["app"]["environment"]["SOCBOARD_TRUSTED_PROXIES"] == "10.231.78.10"
+    assert "10.231.77" not in yaml.safe_dump(second)
+
+
+def test_a_trusted_proxy_variable_reaches_the_app_and_nothing_else():
+    doc, _ = load()
+    server = expand(doc, {"STACK_TRUSTED_PROXIES": "10.231.77.1"})
+    assert server["services"]["app"]["environment"]["SOCBOARD_TRUSTED_PROXIES"] == "10.231.77.1"
+    assert server["services"]["proxy"]["networks"]["stack"]["ipv4_address"] == "10.231.77.10"
+
+
+def test_a_second_stack_on_dev_s_prefix_is_refused_as_overlapping():
+    doc, _ = load()
+    dev = ipaddress.IPv4Network(expand(doc, {})["networks"]["stack"]["ipam"]["config"][0]["subnet"])
+    clash = ipaddress.IPv4Network(expand(doc, {"STACK_NET": "10.231.77"})["networks"]["stack"]["ipam"]["config"][0]["subnet"])
+    assert dev.overlaps(clash)  # the check the prod issues apply to the values they choose
+
+
+@pytest.mark.parametrize("where", ["subnet", "ip_range", "gateway", "proxy", "name"])
+def test_an_address_left_literal_does_not_follow_the_prefix_and_is_refused(where):
+    def change(doc, text):
+        config = doc["networks"]["stack"]["ipam"]["config"][0]
+        if where == "proxy":
+            doc["services"]["proxy"]["networks"]["stack"]["ipv4_address"] = "10.231.77.10"
+        elif where == "name":
+            doc["name"] = "socboard"
+        else:
+            config[where] = {"subnet": "10.231.77.0/24", "ip_range": "10.231.77.128/25", "gateway": "10.231.77.1"}[where]
+
+    assert broken(change) == []  # a literal equal to the default is right for dev; the second stack shows it
+    assert broken(change, SECOND), where
+
+
+def test_a_trusted_address_that_ignores_the_variable_is_refused():
+    def change(doc, text):
+        doc["services"]["app"]["environment"]["SOCBOARD_TRUSTED_PROXIES"] = "${STACK_NET:-10.231.77}.10"
+
+    assert any("STACK_TRUSTED_PROXIES" in line for line in broken(change, {"STACK_TRUSTED_PROXIES": "10.231.77.1"}))
+
+
+def test_a_trusted_address_that_differs_from_the_proxy_under_the_defaults_is_refused():
+    def change(doc, text):
+        doc["services"]["app"]["environment"]["SOCBOARD_TRUSTED_PROXIES"] = "${STACK_TRUSTED_PROXIES:-10.231.77.1}"
+
+    assert any("proxy's address" in line for line in broken(change))
+
+
+def test_a_second_pool_entry_is_refused():
+    def change(doc, text):
+        doc["networks"]["stack"]["ipam"]["config"].append({"subnet": "10.231.99.0/24", "gateway": "10.231.99.1"})
+
+    found = broken(change)
+    assert any("2 pool entries, not exactly one" in line for line in found), found
+
+
+def test_no_pool_entry_is_refused():
+    assert any("0 pool entries" in line for line in broken(lambda doc, text: doc["networks"]["stack"]["ipam"].update(config=[])))
