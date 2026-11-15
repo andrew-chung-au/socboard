@@ -112,6 +112,7 @@ Treat partial output as unverified. Relaunch the role with a note of what's alre
    - For each risk the human wants handled later, the PM files a follow-up issue.
 8. Clean up, then write the session summary following `_docs/agent-kit/procedures/session-summary.md`:
    - Ask each role that worked on the issue for its `Reflection:` block (`_docs/agent-kit/procedures/session-summary.md`, Reflection) before writing the summary; write `unknown (role not asked)` only for a role you could not reach.
+   - Write `_docs/records/findings/<issue>.json` from the findings QA and the other roles reported outside the criteria (`_docs/agent-kit/procedures/session-summary.md`, Findings); the summary then lists one line per finding.
    - Confirm nothing started during the issue is still running (`make <name>-stop` for each).
    - Confirm temporary system changes are undone, or that the human chose to keep them.
    - If a `.scratch/` script is worth keeping, propose it as a test or a make target at the decision point (step 7). Nothing in `.scratch/` survives cleanup.
