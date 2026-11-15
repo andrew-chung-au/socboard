@@ -1,5 +1,6 @@
-# The role ARNs, which the workflows (D18b, D22a, D22b) take as repository variables. A role ARN
-# is not a secret; no output here holds a secret value, so none is marked sensitive.
+# The role ARNs, which the workflows (D18b, D22a, D22b) read as repository secrets: each ARN
+# contains the account number, and Actions logs mask secrets but not variables. No output here
+# holds a secret value, so none is marked sensitive.
 output "plan_role_arn" {
   description = "Role for pull request plan runs."
   value       = aws_iam_role.plan.arn

@@ -2,7 +2,7 @@
 
 `state/` defines one private S3 bucket in `us-east-1` that later holds Terraform state. The human applies it once. An agent never runs `apply`, `destroy` or any step below.
 
-**Status: not yet run.** Terraform and AWS were not available when this was written. Every "Expected" line below is what the author expects, not something seen. Every argument name in `state/main.tf` carries a `VERIFY:` comment until the first `init`, `validate` and apply (Deploy item D19).
+**Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have run only in CI (the `terraform check` workflow, #155). Every "Expected" line below is what the author expects, not something seen. Every argument name in `state/main.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19).
 
 ## Terraform version
 
@@ -72,7 +72,7 @@ No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS
 
 ### Outputs
 
-`plan_role_arn`, `apply_role_arn` and `deploy_role_arn`. The workflows (D18b, D22a, D22b) take them as repository variables, not secrets.
+`plan_role_arn`, `apply_role_arn` and `deploy_role_arn`. The workflows (D18b, D22a, D22b) take them as repository secrets (`AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`), because each ARN contains the account number and Actions logs mask secrets but not variables.
 
 ### Steps for the human (not yet run)
 
@@ -113,7 +113,7 @@ Destroy this part after D17b's server part, because the CI roles are what CI use
 
 `iam-and-budgets/` defines the instance role and profile, the daily snapshot schedule of the data volume with its execution role, and three budget notifications. **The human applies it, and only the human**: an agent never runs `init`, `plan`, `apply` or `destroy`, and CI never applies it (Deploy decision 10). Apply it after `state/` and **before D17b** (the server part, issue #199, `server/` below), which needs its output.
 
-**Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have run only in CI. Every "Expected" line below is what the author expects, not something seen. Every AWS argument and behaviour in `iam-and-budgets/main.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19). Decision record: `_docs/decisions/2026-11-14T0907Z-instance-iam-snapshots-budgets.md` (proposed).
+**Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have run only in CI. Every "Expected" line below is what the author expects, not something seen. Every AWS argument and behaviour in `iam-and-budgets/main.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19). Decision record: `_docs/decisions/2026-11-14T0907Z-instance-iam-snapshots-budgets.md` (approved).
 
 ### What it creates
 
@@ -129,7 +129,7 @@ Destroy this part after D17b's server part, because the CI roles are what CI use
 
 ### The cost
 
-A later change to the instance's permissions, the snapshot schedule or its retention is a manual apply by the human here; CI cannot do it. This is the price of keeping every IAM resource out of CI's reach. For #156 (D16): the CI apply role's deny must cover `iam:*` (including the roles `socboard-instance` and `socboard-snapshot`), `dlm:*`, `budgets:*` and, if CI holds EC2 rights, `ec2:DeleteSnapshot`, so CI cannot shorten retention or change the budget address.
+A later change to the instance's permissions, the snapshot schedule or its retention is a manual apply by the human here; CI cannot do it. This is the price of keeping every IAM resource out of CI's reach. For #156 (D16): the CI apply role's deny must cover `iam:*` (including the roles `socboard-instance` and `socboard-snapshot`), `dlm:*`, `budgets:*` and, if CI holds EC2 rights, `ec2:DeleteSnapshot`, so CI cannot shorten retention or change the budget address. #156 allows one exception: the apply role may pass `socboard-instance` to `ec2.amazonaws.com` (`iam:PassRole`), and nothing else on that role.
 
 ### Steps for the human (not yet run)
 
