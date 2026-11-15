@@ -55,6 +55,15 @@ RUN groupadd --system --gid 10001 socboard \
     && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin socboard
 USER 10001:10001
 
+# Labels last, so changing a build argument does not rebuild a layer above. CI passes the commit and its
+# time (compose.yaml); a build without them says "unknown". The labels are in the image that is tested,
+# because adding one afterwards would change the image id (#235).
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.source="https://github.com/andrew-chung-au/socboard" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
+
 EXPOSE 8000
 # One worker. python -m socboard.migrate and python -m socboard.seed are the one-shot commands.
 CMD ["python", "-m", "socboard.server", "--allow-non-loopback-host"]

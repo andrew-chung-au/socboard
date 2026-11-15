@@ -181,6 +181,16 @@ The `Dockerfile` builds one image that serves the API and the built frontend fro
 - **Requests one run makes:** 4 ingest requests (3 for the journey and 1 for the hostile-text test, of the key's 60 a minute; the first one waits up to a minute if the integration tests just used the allowance up) and 5 sign-ins, of which 1 fails (1 of the 20 failures a client address may have in five minutes). Cases are found by a unique marker in the alert text, never by counts, and the cases of a run stay (the audit trail is append-only), so a second run works. In CI the stack tests run just before it and leave about 10 failed logins on the same client address, so the journey starts with about 10 of the 20 allowed; that is still under the limit.
 - **A failure:** CI keeps the screenshot and the trace for 7 days (artifact `e2e-test-results`). A trace records what the test typed and what the page sent, so CI first runs `e2e/redact_traces.py`, which replaces every value of the run's secrets file (as written, JSON-escaped and URL-encoded), every bearer token and the token of the login answer, and fails the step if one is left; it also refuses a secrets file whose value is shorter than 8 characters, and nothing is uploaded when it fails.
 
+### Published image
+
+CI pushes the image that the Compose job tested to the GitHub Container Registry, from a push to `main` only (`.github/workflows/publish.yml`; the decision is `_docs/decisions/2026-11-15T0915Z-image-publish.md`). Nothing else pushes: a pull request, a fork or another branch never reaches the publishing job, and the workflow's default permissions are `contents: read`.
+
+- **Name and tag:** `ghcr.io/<owner>/socboard:YYYYMMDD-HHMMSS-<7 characters of the commit>`, with the time in UTC taken from the commit itself, so re-running a commit gives the same tag. There is no `latest`. Deploy by the digest (`sha256:...`), which the job prints in its summary and returns as an output.
+- **What is pushed:** the image the integration and browser tests ran against, saved by the Compose job and loaded by the publishing job, never rebuilt. The job compares image ids before and after the push (it pulls the image back by digest). The image's labels carry the source repository, the commit (`org.opencontainers.image.revision`) and its time (`created`), set at build time from `GIT_COMMIT` and `BUILD_DATE` (`compose.yaml`; a local build says `unknown`).
+- **When:** only after every workflow run of that commit has completed with `success`: `scripts/publish_gate.py` decides from the commit's runs. The Terraform check counts when the commit ran it.
+- **Credentials:** the workflow's own token, with `packages: write` on the publishing job only; no personal access token, no repository secret, no cloud role. The publishing job runs no code from the repository, and its actions are pinned by commit.
+- **By hand, once:** the first push creates the package, which GitHub may make private. Set it to public in the package's settings and link it to the repository, then check `docker pull` of the tag from a machine that is not logged in to the registry; the server has no registry login.
+
 ## Currently Out of Scope
 
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
