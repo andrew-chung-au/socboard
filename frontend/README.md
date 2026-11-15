@@ -13,7 +13,7 @@ Vite reads these at build time (and from the shell when the dev server starts). 
 | `VITE_USE_MOCK` | on (any value except the string `false`) | `false` uses the HTTP client against the real backend; anything else, or unset, uses the in-memory mock. |
 | `VITE_API_BASE_URL` | `/api` | Where the HTTP client sends requests. An empty value gives `/api`. |
 | `VITE_POLL_INTERVAL_MS` | `3000` | How often the queue refreshes, in milliseconds. A value that is not a positive number gives `3000`. |
-| `VITE_FEATURE_REASSIGN` | follows the mock: on in mock mode, off otherwise | `true` shows the Lead's Reassign control, `false` hides it. Any other value follows the mock. It hides the control only; the service (the mock now, the backend later) still refuses a reassign by anyone who is not a Lead. |
+| `VITE_FEATURE_REASSIGN` | on in mock mode, off otherwise | With the mock off the Lead's Reassign control is never shown, even when this is `true`: `reassignCase` is planned in `openapi.yaml` and the backend has no such route. In mock mode `false` hides it and any other value shows it. It hides the control only; the service (the mock now, the backend later) still refuses a reassign by anyone who is not a Lead. |
 
 In mock mode a new demo alert is added to the queue every 20 seconds. The timer is off when `VITE_USE_MOCK` is `false`.
 

@@ -157,8 +157,9 @@ function me(): User {
   const token = session.get()?.token;
   const u = token?.startsWith("mock-token-") ? users.find((x) => x.id === token.slice(11)) : undefined;
   if (!u) {
-    session.set(null);
-    throw new ApiError(401, "unauthorized", "Your session has expired. Please sign in again.");
+    const message = "Your session has expired. Please sign in again.";
+    session.expire(message); // as the real client does on a 401 (#131)
+    throw new ApiError(401, "unauthorized", message);
   }
   return u;
 }

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearCacheOnLogout } from "@/router";
 import { routeTree } from "@/routeTree.gen";
 import { api, config, session } from "@/services";
+import { BAD_RESPONSE_MESSAGE } from "@/services/http";
 import { httpService } from "@/services/httpService";
 import type { CaseDetail, CaseSummary, User } from "@/services";
 
@@ -220,12 +221,21 @@ describe("queue polling", () => {
     });
     // Out of severity order on purpose: Low, then Critical.
     const served = [row("9001", "<b>literal</b> low", "Low"), row("9002", "Order test critical", "Critical")];
-    const queue = vi.spyOn(api, "getQueue").mockResolvedValue({ cases: served, servedAt: "2026-01-04T00:00:00Z" });
+    // Through the real client (#131): the stubbed fetch plays the server for GET /api/queue.
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith("/queue") ? reply(200, { cases: served, servedAt: "2026-01-04T00:00:00Z" }) : reply(200, []),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const queueCalls = () => fetchMock.mock.calls.filter(([u]) => u === `${config.apiBaseUrl}/queue`).length;
 
     renderAt("/");
 
     await screen.findByText("<b>literal</b> low", undefined, WAIT);
-    await waitFor(() => expect(queue.mock.calls.length).toBeGreaterThanOrEqual(3), WAIT);
+    const first = queueCalls();
+    expect(first).toBeGreaterThanOrEqual(1);
+    await waitFor(() => expect(queueCalls()).toBeGreaterThanOrEqual(first + 1), WAIT); // one interval
+    await waitFor(() => expect(queueCalls()).toBeGreaterThanOrEqual(first + 2), WAIT); // two intervals
+    expect(queueCalls()).toBeGreaterThanOrEqual(3);
     const shown = screen.getAllByTitle(/literal|Order test/).map((el) => el.textContent);
     expect(shown).toEqual(["<b>literal</b> low", "Order test critical"]);
   }, TEST_TIMEOUT);
@@ -310,5 +320,149 @@ describe("controls the role cannot use are hidden", () => {
 
     expect(await screen.findByText("Audit trail", undefined, WAIT)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Closed" })).toBeInTheDocument();
+  }, TEST_TIMEOUT);
+});
+
+// --- #131 -------------------------------------------------------------------------------------
+
+describe("the user list is asked for only when Reassign can show (#131)", () => {
+  it.each<[string, boolean, number]>([
+    ["off", false, 0],
+    ["on", true, 1],
+  ])("a Lead with featureReassign %s: %i calls to /api/users", async (_label, flag, calls) => {
+    const saved = config.featureReassign;
+    config.featureReassign = flag;
+    try {
+      signIn(LEE);
+      const fetchMock = stubServer(() => makeCase({ owner: ANA, status: "Investigating" }));
+      renderAt(`/cases/${ID}`);
+
+      // Positive control: the page is drawn and the audit (also Lead-only) was asked for.
+      expect(await screen.findByText("Audit trail", undefined, WAIT)).toBeInTheDocument();
+      await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => u.endsWith("/audit"))).toBe(true), WAIT);
+      expect(fetchMock.mock.calls.filter(([u]) => u === `${config.apiBaseUrl}/users`)).toHaveLength(calls);
+    } finally {
+      config.featureReassign = saved;
+    }
+  }, TEST_TIMEOUT);
+});
+
+describe("a 2xx response that is not JSON shows a fixed message (#131)", () => {
+  const notJson = { ok: true, status: 200, text: async () => "<html>captive portal zz-77</html>" };
+
+  it("on the case page: the message, and no error boundary", async () => {
+    signIn(ANA);
+    vi.stubGlobal("fetch", vi.fn(async () => notJson));
+    renderAt(`/cases/${ID}`);
+
+    expect(await screen.findByText(BAD_RESPONSE_MESSAGE, undefined, WAIT)).toBeInTheDocument();
+    expect(screen.queryByText(/Something went wrong on our end/)).toBeNull();
+    expect(screen.queryByText(/zz-77/)).toBeNull();
+  }, TEST_TIMEOUT);
+
+  it("on sign-in: the message, and the page stays on Sign in", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => notJson));
+    renderAt("/login");
+
+    fireEvent.change(await screen.findByLabelText("Username", undefined, WAIT), { target: { value: "analyst-a" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "right" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByText(BAD_RESPONSE_MESSAGE, undefined, WAIT)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(session.get()).toBeNull();
+  }, TEST_TIMEOUT);
+});
+
+describe("Sign in says why the session ended (#131)", () => {
+  const EXPIRED = "Your session has expired. Please sign in again.";
+
+  it("after a 401 it shows the server's message, and a good sign-in clears it", async () => {
+    signIn(ANA);
+    let expired = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/login")) return reply(200, { token: "tok-new", user: ANA });
+        return expired ? reply(401, { code: "unauthorized", message: EXPIRED }) : reply(200, { cases: [], servedAt: "2026-01-01T00:00:00Z" });
+      }),
+    );
+    renderAt("/");
+
+    expect(await screen.findByRole("heading", { name: "Sign in" }, WAIT)).toBeInTheDocument();
+    expect(await screen.findByRole("status", undefined, WAIT)).toHaveTextContent(EXPIRED);
+    expect(window.sessionStorage.getItem("socboard.session")).toBeNull();
+    expect(JSON.stringify({ ...window.localStorage })).not.toContain("expired");
+
+    expired = false;
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "analyst-a" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "right" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByRole("heading", { name: "Open queue" }, WAIT)).toBeInTheDocument();
+    expect(session.endedMessage()).toBeNull();
+  }, TEST_TIMEOUT);
+
+  it("after a plain Log out it shows nothing", async () => {
+    signIn(ANA);
+    vi.stubGlobal("fetch", vi.fn(async () => reply(200, { cases: [], servedAt: "2026-01-01T00:00:00Z" })));
+    renderAt("/");
+
+    fireEvent.click(await screen.findByRole("button", { name: /Log out/ }, WAIT));
+
+    expect(await screen.findByRole("heading", { name: "Sign in" }, WAIT)).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(session.endedMessage()).toBeNull();
+  }, TEST_TIMEOUT);
+});
+
+describe("the case page shows every action, disabled when not allowed (#131)", () => {
+  type Enabled = { claim: boolean; start: boolean; close: boolean };
+  const BUTTONS: Array<[keyof Enabled, string]> = [
+    ["claim", "Claim case"],
+    ["start", "Start investigating"],
+    ["close", "Close case…"],
+  ];
+
+  // Each case is owned by Ana; the viewer is Ana (owner), Ben (an Analyst who is not the owner) or Lee (Lead).
+  it.each<[CaseDetail["status"], string, User, Enabled]>([
+    ["New", "Analyst owner", ANA, { claim: false, start: true, close: false }],
+    ["New", "Analyst non-owner", BEN, { claim: false, start: false, close: false }],
+    ["New", "Lead", LEE, { claim: false, start: true, close: false }],
+    ["Investigating", "Analyst owner", ANA, { claim: false, start: false, close: true }],
+    ["Investigating", "Analyst non-owner", BEN, { claim: false, start: false, close: false }],
+    ["Investigating", "Lead", LEE, { claim: false, start: false, close: true }],
+    ["Closed", "Analyst owner", ANA, { claim: false, start: false, close: false }],
+    ["Closed", "Analyst non-owner", BEN, { claim: false, start: false, close: false }],
+    ["Closed", "Lead", LEE, { claim: false, start: false, close: false }],
+  ])("%s case, %s", async (status, _who, viewer, enabled) => {
+    signIn(viewer);
+    const closingReason = status === "Closed" ? "duplicate" : null;
+    stubServer(() => makeCase({ status, owner: ANA, closingReason }));
+    renderAt(`/cases/${ID}`);
+
+    await screen.findByRole("heading", { name: TITLE }, WAIT);
+    for (const [key, name] of BUTTONS) {
+      const button = await screen.findByRole("button", { name }, WAIT);
+      if (enabled[key]) {
+        expect(button, name).toBeEnabled();
+        expect(button.getAttribute("aria-describedby"), name).toBeNull();
+      } else {
+        expect(button, name).toBeDisabled();
+        const reasonId = button.getAttribute("aria-describedby");
+        expect(reasonId, name).toBeTruthy();
+        expect(document.getElementById(reasonId as string)?.textContent, name).toBeTruthy();
+      }
+    }
+  }, TEST_TIMEOUT);
+
+  it("an unowned New case: Claim is enabled with no reason; the others say why not", async () => {
+    signIn(BEN);
+    stubServer(() => makeCase({ status: "New", owner: null }));
+    renderAt(`/cases/${ID}`);
+
+    expect(await screen.findByRole("button", { name: "Claim case" }, WAIT)).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Close case…" })).toBeDisabled();
+    expect(screen.getByText("Start investigating first")).toBeInTheDocument();
   }, TEST_TIMEOUT);
 });

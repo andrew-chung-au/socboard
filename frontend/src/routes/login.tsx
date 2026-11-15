@@ -28,6 +28,8 @@ function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The server's message from the 401 that ended the last session (#131); null after a plain log out.
+  const ended = session.endedMessage();
 
   if (hydrated && s) return <Navigate to="/" />;
 
@@ -55,6 +57,11 @@ function LoginPage() {
         </div>
         <form onSubmit={submit} className="space-y-4 rounded-md border bg-card p-5">
           <h1 className="text-base font-semibold">Sign in</h1>
+          {ended && !error && (
+            <p role="status" className="rounded-sm border bg-muted px-2 py-1.5 text-sm">
+              {ended}
+            </p>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="u">Username</Label>
             <Input id="u" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
