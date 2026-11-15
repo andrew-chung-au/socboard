@@ -55,7 +55,7 @@ from socboard.audit_guard import (
     refused_statement,
 )
 from socboard.models import AuditEntry
-from db_target import SQLITE_GUARD
+from db_target import SQLITE_GUARD, SQLITE_NULL_ID, SQLITE_TRIGGER_SYNTAX
 
 AUDIT = AuditEntry.__table__
 BIG = 2**63 - 1
@@ -444,7 +444,7 @@ def test_ddl_and_dml_on_a_near_miss_table_name_are_allowed(seeded, name):
     assert_append_audit_works(seeded)
 
 
-@SQLITE_GUARD
+@SQLITE_TRIGGER_SYNTAX
 def test_a_trigger_named_audit_entries_no_update_log_is_allowed(seeded):
     with seeded["engine"].begin() as conn:
         conn.execute(DDL("CREATE TABLE audit_entries_archive (id INTEGER PRIMARY KEY, detail TEXT)"))
@@ -743,7 +743,7 @@ COMPILED_NAME_ROUTES = {
 
 
 @pytest.mark.parametrize("route", COMPILED_NAME_ROUTES)
-@SQLITE_GUARD
+@SQLITE_NULL_ID
 def test_without_the_guard_an_id_under_the_compiled_name_does_reach_the_table(seeded, route):
     engine = seeded["engine"]
     statement, name = COMPILED_NAME_ROUTES[route](seeded, engine)
@@ -766,7 +766,7 @@ def test_an_id_under_a_compiled_bind_name_is_refused(seeded, route, value, sink)
     assert_append_audit_works(seeded)
 
 
-@SQLITE_GUARD
+@SQLITE_NULL_ID
 def test_none_under_a_compiled_bind_name_is_not_refused(seeded):
     engine = seeded["engine"]
     multi = _multi_none(seeded)
