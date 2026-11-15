@@ -1,0 +1,203 @@
+"""The publish workflow and the Compose job's tested-image steps (#235), checked from their text.
+
+Each rule has a test on a small broken copy and one that the real files pass. Nothing here runs Actions:
+`.github/workflows/publish.yml` cannot run on a pull request (workflow_run workflows run from main).
+"""
+
+import copy
+import importlib.util
+import re
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
+PINNED = re.compile(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}")
+spec = importlib.util.spec_from_file_location("publish_gate", ROOT / "scripts" / "publish_gate.py")
+gate_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate_module)
+
+
+def triggers(doc):
+    return doc.get("on", doc.get(True)) or {}  # PyYAML reads the key `on` as True
+
+
+def load(name):
+    text = (WORKFLOWS / name).read_text(encoding="utf-8")
+    return yaml.safe_load(text), text
+
+
+def steps(job):
+    return job.get("steps", [])
+
+
+def problems(doc, text):
+    found = []
+    jobs = doc["jobs"]
+    if doc.get("permissions") != {"contents": "read"}:
+        found.append("the workflow's default permissions are not contents: read")
+    if (doc.get("defaults") or {}).get("run", {}).get("shell") != "bash":
+        found.append("scripts do not run in bash with pipefail (defaults.run.shell is not bash)")
+    if set(triggers(doc)) != {"workflow_run"}:
+        found.append(f"triggers are {sorted(triggers(doc))}, not workflow_run only")
+    writers = {name for name, job in jobs.items() if "write" in (job.get("permissions") or {}).values()}
+    if writers != {"publish"} or jobs["publish"]["permissions"].get("packages") != "write":
+        found.append(f"jobs with a write permission: {sorted(writers)}")
+    if any(key != "packages" and value == "write" for job in jobs.values() for key, value in (job.get("permissions") or {}).items()):
+        found.append("a write permission other than packages")
+    for name, job in jobs.items():
+        for step in steps(job):
+            ref = step.get("uses")
+            if ref and not PINNED.fullmatch(ref):
+                found.append(f"{name} uses {ref}, not pinned by commit")
+    if "secrets." in text or "pull_request" in text.replace("pull request", ""):
+        found.append("the workflow names secrets or a pull_request event")
+    gate_if = jobs["gate"].get("if", "")
+    for needle in ("workflow_run.event == 'push'", "workflow_run.head_branch == 'main'", "head_repository.full_name == github.repository"):
+        if needle not in gate_if:
+            found.append(f"the gate job does not require {needle}")
+    publish = jobs["publish"]
+    if publish.get("needs") != "gate" or "outputs.ready == 'true'" not in publish.get("if", ""):
+        found.append("the publish job does not wait for the gate's ready output")
+    if publish.get("concurrency") != {"group": "publish-main", "cancel-in-progress": False}:
+        found.append("the publish job's concurrency is not one non-cancelling group")
+    commands = "\n".join(step.get("run", "") for step in steps(publish))
+    actions = " ".join(str(step.get("uses", "")) for step in steps(publish))
+    if "actions/checkout" in actions or any(word in commands for word in ("scripts/", "python", "docker build", "buildx", "docker compose", ":latest")):
+        found.append("the publish job runs repository code, builds, or names latest")
+    downloaded = [s for s in steps(publish) if str(s.get("uses", "")).startswith("actions/download-artifact@")]
+    if len(downloaded) != 1 or downloaded[0]["with"].get("name") != "tested-image":
+        found.append("the publish job does not download the artifact tested-image")
+    return found
+
+
+def real():
+    doc, text = load("publish.yml")
+    return doc, text
+
+
+def test_the_real_workflow_passes_every_rule():
+    doc, text = real()
+    assert problems(doc, text) == []
+
+
+def broken(change):
+    doc, text = real()
+    doc = copy.deepcopy(doc)
+    text = change(doc, text) or text
+    return problems(doc, text)
+
+
+def test_a_wider_default_permission_is_refused():
+    assert broken(lambda doc, text: doc.update(permissions={"contents": "read", "packages": "write"}))
+
+
+def test_packages_write_on_the_gate_is_refused():
+    assert broken(lambda doc, text: doc["jobs"]["gate"].update(permissions={"packages": "write", "contents": "read"}))
+
+
+def test_a_workflow_without_the_bash_default_is_refused():
+    def change(doc, text):
+        doc.pop("defaults")
+
+    assert any("pipefail" in p for p in broken(change))
+
+
+def test_a_pull_request_trigger_is_refused():
+    def change(doc, text):
+        doc[True] = {**doc[True], "pull_request": None} if True in doc else doc.update(on={"workflow_run": {}, "pull_request": None})
+
+    assert broken(change)
+
+
+def test_an_action_pinned_by_tag_is_refused():
+    def change(doc, text):
+        doc["jobs"]["publish"]["steps"][0]["uses"] = "actions/download-artifact@v8"
+
+    assert any("not pinned" in p for p in broken(change))
+
+
+def test_a_gate_that_forgets_the_branch_or_the_repository_is_refused():
+    assert broken(lambda doc, text: doc["jobs"]["gate"].update({"if": "github.event.workflow_run.event == 'push'"}))
+
+
+def test_a_publish_job_that_does_not_wait_for_the_gate_is_refused():
+    assert broken(lambda doc, text: doc["jobs"]["publish"].pop("if"))
+
+
+def test_a_cancelling_concurrency_group_is_refused():
+    assert broken(lambda doc, text: doc["jobs"]["publish"].update(concurrency={"group": "publish-main", "cancel-in-progress": True}))
+
+
+def test_a_publish_job_that_checks_out_or_rebuilds_is_refused():
+    def add(step):
+        def change(doc, text):
+            doc["jobs"]["publish"]["steps"].append(step)
+
+        return change
+
+    assert broken(add({"run": "docker build ."}))
+    assert broken(add({"run": "python3 scripts/publish_gate.py"}))
+    assert broken(add({"run": "docker tag x ghcr.io/o/r:latest"}))
+
+
+# --- the trigger list and the required names follow the workflow files ----------------------------
+
+
+def other_workflows():
+    found = {}
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        found[path.name] = (doc["name"], triggers(doc))
+    return found
+
+
+def test_every_workflow_that_runs_on_a_push_triggers_the_publish_workflow():
+    doc, _ = real()
+    listed = set(triggers(doc)["workflow_run"]["workflows"])
+    on_push = {name for file, (name, on) in other_workflows().items() if file != "publish.yml" and "push" in on}
+    assert listed == on_push, (listed ^ on_push)
+
+
+def test_the_gate_requires_exactly_the_checks_that_run_on_every_push():
+    names = {name for file, (name, on) in other_workflows().items() if file != "publish.yml"}
+    assert set(gate_module.REQUIRED) <= names
+    unconditional = {
+        name for file, (name, on) in other_workflows().items() if file != "publish.yml" and not (on.get("push") or {}).get("paths")
+    }
+    assert set(gate_module.REQUIRED) == unconditional
+
+
+# --- the Compose job saves the tested image only on a push to main -------------------------------
+
+
+def test_the_compose_job_uploads_the_tested_image_only_on_a_push_to_main_for_one_day():
+    doc, _ = load("compose.yml")
+    job = doc["jobs"]["compose"]
+    saved = [s for s in steps(job) if "tested-image" in str(s)]
+    assert len(saved) >= 2
+    for step in saved:
+        assert "github.event_name == 'push'" in step["if"] and "refs/heads/main" in step["if"]
+    upload = next(s for s in steps(job) if str(s.get("uses", "")).startswith("actions/upload-artifact@") and (s.get("with") or {}).get("name") == "tested-image")
+    assert PINNED.fullmatch(upload["uses"]) and upload["with"]["name"] == "tested-image" and upload["with"]["retention-days"] == 1
+    assert "permissions" not in job and doc["permissions"] == {"contents": "read"}
+
+
+def test_the_tested_image_is_saved_right_after_the_browser_test_and_before_the_second_start_with_pipefail():
+    doc, _ = load("compose.yml")
+    names = [step.get("name", "") for step in steps(doc["jobs"]["compose"])]
+    browser = next(i for i, n in enumerate(names) if n.startswith("Browser test against the stack"))
+    again = next(i for i, n in enumerate(names) if n.startswith("Start again"))
+    saving = [i for i, n in enumerate(names) if "tested image" in n.lower()]
+    assert saving and all(browser < i < again for i in saving), (browser, saving, again)
+    for step in steps(doc["jobs"]["compose"]):
+        if "docker save" in step.get("run", "") or "docker export" in step.get("run", ""):
+            assert step.get("shell") == "bash", step["name"]
+
+
+def test_the_compose_job_passes_the_commit_and_its_time_to_the_build():
+    doc, _ = load("compose.yml")
+    env = doc["jobs"]["compose"]["env"]
+    assert env["GIT_COMMIT"] == "${{ github.sha }}" and "head_commit.timestamp" in env["BUILD_DATE"]

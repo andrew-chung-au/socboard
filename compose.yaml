@@ -77,7 +77,12 @@ services:
 
   app:
     image: *image
-    build: .
+    build:
+      context: .
+      args:
+        # Set by CI for the image it publishes (#235); a local build says "unknown".
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
     # No command: the image's own start command passes --allow-non-loopback-host and runs one worker.
     environment:
       SOCBOARD_MODE: deployed

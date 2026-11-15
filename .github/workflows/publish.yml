@@ -1,0 +1,181 @@
+# Pushes the image that the Compose job tested to ghcr.io (#235, D14).
+#
+# It runs on `workflow_run`, so GitHub always runs the copy of this file on main, never a pull request's.
+# A gate job decides from the commit's other workflow runs (scripts/publish_gate.py, unit-tested): only a
+# push to main of this repository, with every run of the commit completed and successful. The publishing
+# job then loads the image the Compose job saved, never rebuilds it, tags it with the commit's time and sha,
+# pushes it, pulls it back by digest and compares ids. It is the only job with `packages: write`, it runs
+# no code from the repository, and it uses only the workflow's own token. The package must be made public
+# by the human after the first push (the server has no registry login).
+name: socboard publish
+
+permissions:
+  contents: read
+
+# bash with pipefail for every script: a failed `docker save | gzip` or `... | tee` must fail the step.
+defaults:
+  run:
+    shell: bash
+
+on:
+  workflow_run:
+    # Every workflow that runs on a push to main (tests/test_publish_workflow.py checks the list against
+    # the workflow files): the last one to finish is the one that finds everything green.
+    workflows:
+      - socboard verify
+      - socboard postgres
+      - socboard image
+      - socboard compose
+      - terraform check
+    types: [completed]
+    # No branch filter on purpose: a pull request's runs start this workflow too, and the gate job's `if`
+    # skips them, so "a pull request never pushes" is visible in the Actions list.
+
+jobs:
+  gate:
+    # A pull request, a fork or another branch ends here: the job is skipped.
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      ready: ${{ steps.gate.outputs.ready }}
+      compose_run_id: ${{ steps.gate.outputs.compose_run_id }}
+      tag: ${{ steps.name.outputs.tag }}
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      # The default branch: the decision is made by the script on main, not by the commit's own code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Decide from the commit's workflow runs
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&per_page=100" --jq '.workflow_runs[]' | jq -s '.' > "$RUNNER_TEMP/runs.json"
+          python3 scripts/publish_gate.py gate --repository "$GITHUB_REPOSITORY" --sha "$SHA" --event "$EVENT" \
+            --branch "$BRANCH" --head-repository "$HEAD_REPOSITORY" --runs "$RUNNER_TEMP/runs.json" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Tag and image name
+        id: name
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_TIME: ${{ github.event.workflow_run.head_commit.timestamp }}
+        run: |
+          tag="$(python3 scripts/publish_gate.py tag --sha "$SHA" --timestamp "$COMMIT_TIME")"
+          image="$(python3 scripts/publish_gate.py name --repository "$GITHUB_REPOSITORY")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: gate
+    if: needs.gate.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Pushes to main happen one at a time, in order: a running push is never cancelled.
+    # VERIFY: GitHub keeps one pending run per group, so a third quick merge replaces the pending second.
+    concurrency:
+      group: publish-main
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      tag: ${{ needs.gate.outputs.tag }}
+    env:
+      IMAGE: ${{ needs.gate.outputs.image }}
+      TAG: ${{ needs.gate.outputs.tag }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tested-image
+          run-id: ${{ needs.gate.outputs.compose_run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Check the gate named an image and a tag
+        run: |
+          test -n "$IMAGE" && test -n "$TAG" && test -n "$SHA"
+          echo "$IMAGE:$TAG"
+
+      - name: Load the tested image and check it is the one the Compose job saved
+        run: |
+          gunzip -c tested-image.tar.gz | docker load
+          saved="$(cat tested-image.id)"
+          loaded="$(docker image inspect --format '{{.Id}}' socboard-stack:local)"
+          echo "saved $saved"
+          echo "loaded $loaded"
+          test -n "$saved" && test "$saved" = "$loaded"
+
+      - name: Check the image's labels name this repository and this commit
+        run: |
+          revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' socboard-stack:local)"
+          source="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' socboard-stack:local)"
+          created="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.created"}}' socboard-stack:local)"
+          echo "revision $revision"
+          echo "source $source"
+          echo "created $created"
+          test "$revision" = "$SHA"
+          test "$source" = "https://github.com/$GITHUB_REPOSITORY"
+          test -n "$created" && test "$created" != "unknown"
+
+      - name: Log in to the registry with the workflow's own token
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+
+      - name: Push the image once under its tag, and never over a different image
+        id: push
+        run: |
+          if out="$(docker manifest inspect "$IMAGE:$TAG" 2>&1)"; then
+            echo "$IMAGE:$TAG is already published; checking it is the tested image instead of pushing"
+            docker pull "$IMAGE:$TAG" > /dev/null
+            existing="$(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG")"
+            test "$existing" = "$(cat tested-image.id)"
+          # GHCR may answer "unauthorized" or "denied" for a package that does not exist yet; the push that
+          # follows fails loudly if the token cannot write, and an existing tag is never pushed over because
+          # a token that may write may also read it.
+          elif echo "$out" | grep -qiE "no such manifest|manifest unknown|name unknown|not found|unauthorized|denied"; then
+            docker tag socboard-stack:local "$IMAGE:$TAG"
+            docker push "$IMAGE:$TAG"
+          else
+            echo "could not tell whether $IMAGE:$TAG exists; not pushing"
+            exit 1
+          fi
+          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:$TAG" | grep "^$IMAGE@" | head -n 1 | cut -d@ -f2)"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Pull it back by digest and compare it with the tested image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          tested="$(cat tested-image.id)"
+          docker rmi "$IMAGE:$TAG" socboard-stack:local > /dev/null
+          docker pull "$IMAGE@$DIGEST" > /dev/null
+          pulled="$(docker image inspect --format '{{.Id}}' "$IMAGE@$DIGEST")"
+          echo "tested $tested"
+          echo "pulled $pulled"
+          test "$tested" = "$pulled"
+          {
+            echo "### Published image"
+            echo
+            echo "- Image: \`$IMAGE:$TAG\`"
+            echo "- Digest: \`$DIGEST\`"
+            echo "- Commit: \`$SHA\`"
+            echo "- The package must be public for the server to pull it (set it once in the package's settings)."
+          } >> "$GITHUB_STEP_SUMMARY"

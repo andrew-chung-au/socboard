@@ -243,3 +243,24 @@ def test_dockerignore_allows_the_example_env_file_only_after_the_env_patterns():
     lines = ignore_lines()
     for pattern in (".env", ".env.*", "*.env"):
         assert lines.index(pattern) < lines.index("!.env.example")
+
+
+# --- the labels of the published image (#235) ---------------------------------------------------
+
+
+def test_the_image_carries_the_source_revision_and_created_labels_from_two_build_arguments():
+    final = stages((ROOT / "Dockerfile").read_text(encoding="utf-8"))[-1]
+    arguments = {rest.split("=")[0] for word, rest in final if word == "ARG"}
+    assert {"GIT_COMMIT", "BUILD_DATE"} <= arguments
+    labels = " ".join(rest for word, rest in final if word == "LABEL")
+    assert 'org.opencontainers.image.source="https://github.com/' in labels
+    assert 'org.opencontainers.image.revision="${GIT_COMMIT}"' in labels
+    assert 'org.opencontainers.image.created="${BUILD_DATE}"' in labels
+
+
+def test_compose_passes_the_build_arguments_to_the_one_build_and_defaults_them_to_unknown():
+    import yaml
+
+    build = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))["services"]["app"]["build"]
+    assert build["context"] == "."
+    assert build["args"] == {"GIT_COMMIT": "${GIT_COMMIT:-unknown}", "BUILD_DATE": "${BUILD_DATE:-unknown}"}
