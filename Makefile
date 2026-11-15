@@ -69,6 +69,10 @@ test-one: ## Run one test file: make test-one FILE=path
 	@test -n "$$FILE" || { echo "Usage: make test-one FILE=path/to/test_file"; exit 1; }
 	uv run --locked pytest "$$FILE"
 
+test-stack: ## Run the journeys and the stack tests against the live Compose stack at SOCBOARD_BASE_URL (loopback http only; start it with make compose-up; adds cases and uses up the ingest key's allowance for a minute)
+	@test -n "$$SOCBOARD_BASE_URL" || { echo "test-stack: set SOCBOARD_BASE_URL to the stack's http address on the loopback (make compose-up publishes http://127.0.0.1:8080)"; exit 2; }
+	uv run --locked pytest tests/test_journeys.py tests/test_stack.py
+
 # --- GitHub module (wrappers; no labels, edits or closes except issue-close) ----
 
 issue-file-chars := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 . _ / -

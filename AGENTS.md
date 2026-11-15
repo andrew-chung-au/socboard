@@ -24,6 +24,7 @@ Layout: `socboard/` (application package), `frontend/` (React + TypeScript front
 - **Stop (Compose stack):** `make compose-down` removes the stack's containers and network and keeps the Postgres data; it never generates secrets and never deletes a volume (that is the human's step).
 - **Test (all):** `make test`: the Python tests, then the frontend tests.
 - **Test (one file):** `make test-one FILE=tests/test_socboard.py`
+- **Test (live stack):** `make test-stack` runs the journeys (`tests/test_journeys.py`) and the stack tests (`tests/test_stack.py`) over HTTP against the Compose stack at `SOCBOARD_BASE_URL` (plain `http` on the loopback only; unset or empty exits 2 naming the variable and runs no test). It also needs `SOCBOARD_INGEST_API_KEY` and the three seed passwords in the environment, and `STACK_APP_URL` and `STACK_SCHEMA_FILE` for the stack tests; a missing one fails naming it. A run adds cases and uses up the ingest key's allowance for a minute. Never run in the agent's sandbox (no Docker); CI's Compose job runs it.
 - **Verify:** `make verify`: tests (Python and frontend), whitespace and weakened-test checks. How to use it: `_docs/agent-kit/procedures/verify.md`.
 - **Assert clean:** `make assert-clean`: confirms nothing in this folder changed (used after QA).
 - **Decisions:** `make decisions`: lists each decision record in `_docs/decisions/` with its `Status:` word (proposed, approved or superseded); a record with no status shows MISSING.
