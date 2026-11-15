@@ -45,6 +45,6 @@
 
 ## Unrelated problems noticed but not fixed
 
-<One line per finding: `F-<issue>-<n>: <one sentence> (<status>)`. The full record is in `_docs/records/findings/<issue>.json` (`procedures/session-summary.md`, Findings). Write "none" if there were none.>
+<One line per finding: `F-<issue>-<n>: <one sentence>`. The full record is in `_docs/records/findings/<issue>.json` (`procedures/session-summary.md`, Findings). Write "none" if there were none.>
 
 ## Follow-ups for the next session
