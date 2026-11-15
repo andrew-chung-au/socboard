@@ -1,325 +1,185 @@
-"""The workflow trigger rule and the Terraform plan workflow (#209), checked from their text.
+"""tests/workflow_triggers.py (#258): which workflows GitHub runs on a push to main.
 
-Rule: no workflow triggers on pull_request_target, and a workflow may grant `id-token: write` (workflow or job
-level) only if its triggers are exactly pull_request. A pull_request_target run carries the same
-`:pull_request` OIDC subject the plan role trusts, runs with the base repository's rights and can be started
-by a fork. Each rule has refused fixtures (text here, not files in .github/) and a replay over the real files.
+Every workflow here is a small synthetic document, parsed from YAML text the way the real files are
+(so PyYAML's reading of `on` as `True` is in play). The two answers are (can run on a push to main,
+runs on every push to main).
 """
 
-import copy
-import re
-from pathlib import Path
+import textwrap
 
 import pytest
+import workflow_triggers as triggers
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
-WORKFLOWS = ROOT / ".github" / "workflows"
-PLAN = "terraform-plan.yml"
-FAIL_MESSAGE = "terraform plan failed; reproduce it locally with the server plan step in terraform/README.md"
-FAIL_LINE = f'fail() {{ echo "{FAIL_MESSAGE}"; exit 1; }}'
-PINNED = re.compile(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}")
-TERRAFORM_WORD = re.compile(r"(?<![\w/.$-])terraform(?![\w/.-])")
-CHDIR = "terraform -chdir=terraform/server "
-PLAN_FILE = '"$RUNNER_TEMP/server.tfplan"'
-ALLOWED_TERRAFORM_LINES = {
-    "init": re.compile(
-        re.escape(CHDIR + 'init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" > /dev/null 2>&1 || fail')
-    ),
-    "plan": re.compile(
-        re.escape(CHDIR + f"plan -input=false -lock=false -no-color -out={PLAN_FILE} > /dev/null 2>&1 || fail")
-    ),
-    "show": re.compile(re.escape(CHDIR + f"show -json {PLAN_FILE} 2> /dev/null | python3 -I scripts/check_plan_actions.py")),
+BODY = "jobs:\n  p:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo probe\n"
+
+
+def doc(on_text, name="probe"):
+    head = f"name: {name}\n" if name else ""
+    return yaml.safe_load(head + textwrap.dedent(on_text).strip("\n") + "\n" + BODY)
+
+
+CASES = [
+    # (id, `on:` text, can run on a push to main, runs on every push to main)
+    ("string push", "on: push", True, True),
+    ("string pull_request", "on: pull_request", False, False),
+    ("string workflow_dispatch", "on: workflow_dispatch", False, False),
+    ("list push and pull_request", "on: [push, pull_request]", True, True),
+    ("list pull_request", "on: [pull_request]", False, False),
+    ("list push", "on: [push]", True, True),
+    ("mapping schedule", "on:\n  schedule:\n    - cron: '0 0 * * *'", False, False),
+    ("mapping workflow_run", "on:\n  workflow_run:\n    workflows: [a]\n    types: [completed]", False, False),
+    ("mapping pull_request only", "on:\n  pull_request:", False, False),
+    ("mapping pull_request with filters", "on:\n  pull_request:\n    paths: ['a/**']", False, False),
+    ("mapping push null", "on:\n  push:", True, True),
+    ("mapping push empty", "on:\n  push: {}", True, True),
+    ("push and pull_request together", "on:\n  push:\n  pull_request:", True, True),
+    ("branches main", "on:\n  push:\n    branches: [main]", True, True),
+    ("branches double star", "on:\n  push:\n    branches: ['**']", True, True),
+    ("branches star", "on:\n  push:\n    branches: ['*']", True, True),
+    ("branches main and release", "on:\n  push:\n    branches: [main, 'release/*']", True, True),
+    ("branches release only", "on:\n  push:\n    branches: ['release/*']", False, False),
+    ("branches own probe branch", "on:\n  push:\n    branches: [oidc-probe-156]", False, False),
+    ("branches a string", "on:\n  push:\n    branches: oidc-probe-156", False, False),
+    ("branches ma star", "on:\n  push:\n    branches: ['ma*']", True, True),
+    ("branches mai", "on:\n  push:\n    branches: ['mai']", False, False),
+    ("branches everything but main", "on:\n  push:\n    branches: ['**', '!main']", False, False),
+    ("branches negation then a later positive", "on:\n  push:\n    branches: ['!main', main]", True, True),
+    ("branches negation of another", "on:\n  push:\n    branches: ['**', '!release/*']", True, True),
+    ("branches-ignore main", "on:\n  push:\n    branches-ignore: [main]", False, False),
+    ("branches-ignore other", "on:\n  push:\n    branches-ignore: ['feature/*']", True, True),
+    ("branches-ignore star", "on:\n  push:\n    branches-ignore: ['*']", False, False),
+    ("tags only", "on:\n  push:\n    tags: ['v*']", False, False),
+    ("branches and tags", "on:\n  push:\n    branches: [main]\n    tags: ['v*']", True, True),
+    ("paths", "on:\n  push:\n    paths: ['terraform/**']", True, False),
+    ("paths-ignore", "on:\n  push:\n    paths-ignore: ['docs/**']", True, False),
+    ("branches main and paths", "on:\n  push:\n    branches: [main]\n    paths: ['x']", True, False),
+    ("branches probe and paths", "on:\n  push:\n    branches: [probe]\n    paths: ['x']", False, False),
+    # patterns the module does not model count as the real workflow they might be
+    ("unmodelled class", "on:\n  push:\n    branches: ['m[a]in']", True, True),
+    ("unmodelled question mark", "on:\n  push:\n    branches: ['mai?n']", True, True),
+    ("unmodelled plus", "on:\n  push:\n    branches: ['ma+in']", True, True),
+    ("unmodelled in branches-ignore", "on:\n  push:\n    branches-ignore: ['m[a]in']", True, True),
+    ("unmodelled negation keeps the match", "on:\n  push:\n    branches: ['**', '!m[a]in']", True, True),
+]
+
+
+@pytest.mark.parametrize(("on_text", "can_run", "every_push"), [c[1:] for c in CASES], ids=[c[0] for c in CASES])
+def test_a_workflow_is_classified_as_github_would_run_it(on_text, can_run, every_push):
+    assert triggers.classify(doc(on_text)) == (can_run, every_push)
+
+
+def test_the_key_on_is_read_whether_pyyaml_gives_it_as_a_string_or_as_true():
+    parsed = yaml.safe_load("on: push\n" + BODY)
+    assert True in parsed and "on" not in parsed
+    assert triggers.classify(parsed) == (True, True)
+    quoted = yaml.safe_load("'on': push\n" + BODY)
+    assert "on" in quoted and triggers.classify(quoted) == (True, True)
+
+
+@pytest.mark.parametrize("text", ["name: x\n" + BODY, "name: x\non:\n" + BODY, "name: x\non: 5\n" + BODY])
+def test_a_workflow_with_no_usable_on_cannot_run_on_a_push(text):
+    assert triggers.classify(yaml.safe_load(text)) == (False, False)
+
+
+def test_a_workflow_with_no_name_is_identified_by_its_path():
+    unnamed = doc("on: push", name=None)
+    assert triggers.workflow_name(unnamed, ".github/workflows/x.yml") == ".github/workflows/x.yml"
+    assert triggers.workflow_name(doc("on: push"), "x.yml") == "probe"
+    assert triggers.workflow_name({"name": ""}, "x.yml") == "x.yml"
+    assert triggers.workflow_name({"name": 7}, "x.yml") == "x.yml"
+
+
+def test_the_same_text_with_only_the_branch_filter_changed_flips_the_outcome():
+    probe = "on:\n  push:\n    branches: [oidc-probe-156]"
+    assert triggers.classify(doc(probe)) == (False, False)
+    assert triggers.classify(doc(probe.replace("[oidc-probe-156]", "[oidc-probe-156, main]"))) == (True, True)
+    assert triggers.classify(doc(probe.replace("branches: [oidc-probe-156]", "branches-ignore: [oidc-probe-156]"))) == (True, True)
+
+
+# --- the check between the files, the trigger list and the gate's list ---------------------------
+
+REAL = {
+    "verify.yml": doc("on:\n  push:\n  pull_request:", "socboard verify"),
+    "postgres.yml": doc("on:\n  push:\n  pull_request:", "socboard postgres"),
+    "terraform-check.yml": doc("on:\n  push:\n    branches: [main]\n    paths: ['terraform/**']\n  pull_request:\n    paths: ['terraform/**']", "terraform check"),
+    "publish.yml": doc("on:\n  workflow_run:\n    workflows: [socboard verify]\n    types: [completed]", "socboard publish"),
 }
-FORBIDDEN_IN_RUN = ("apply", "destroy", "import", "force-unlock", "state ", "-lock=true", "tee", "upload")
+LISTED = {"socboard verify", "socboard postgres", "terraform check"}
+REQUIRED = {"socboard verify", "socboard postgres"}
 
 
-def workflow_files():
-    return sorted(p for p in WORKFLOWS.iterdir() if p.suffix in (".yml", ".yaml"))
+def check(extra=None, listed=LISTED, required=REQUIRED):
+    workflows = {**REAL, **(extra or {})}
+    return triggers.problems(workflows, set(listed), set(required), "publish.yml")
 
 
-def trigger_names(doc):
-    """The workflow's trigger names, or None for a form this rule does not know."""
-    on = doc.get("on", doc.get(True))  # PyYAML (YAML 1.1) reads the key `on` as True
-    if isinstance(on, str):
-        return [on]
-    if isinstance(on, list) and on and all(isinstance(t, str) for t in on):
-        return on
-    if isinstance(on, dict) and on and all(isinstance(t, str) for t in on):
-        return list(on)
-    return None
-
-
-def grants_id_token(permissions):
-    """True, False, or None for a form this rule does not know."""
-    if permissions is None or permissions in ("read-all", {}):
-        return False
-    if permissions == "write-all":
-        return True
-    if isinstance(permissions, dict):
-        return permissions.get("id-token") == "write"
-    return None
-
-
-def rule_problems(name, text):
-    """Problems with one workflow file under the trigger rule; [] means it passes."""
-    try:
-        doc = yaml.safe_load(text)
-    except yaml.YAMLError:
-        return [f"{name}: not parsable YAML"]
-    if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
-        return [f"{name}: not a workflow with jobs"]
-    triggers = trigger_names(doc)
-    if triggers is None:
-        return [f"{name}: triggers in a form the rule does not know"]
-    found = []
-    if "pull_request_target" in triggers:
-        found.append(f"{name}: triggers on pull_request_target")
-    grants = [grants_id_token(doc.get("permissions"))]
-    grants += [grants_id_token(job.get("permissions")) if isinstance(job, dict) else None for job in doc["jobs"].values()]
-    if None in grants:
-        found.append(f"{name}: permissions in a form the rule does not know")
-    elif any(grants) and triggers != ["pull_request"]:
-        found.append(f"{name}: grants id-token: write with triggers {triggers}, not pull_request only")
-    return found
-
-
-def grants_any_id_token(text):
-    doc = yaml.safe_load(text)
-    perms = [doc.get("permissions")] + [job.get("permissions") for job in doc["jobs"].values()]
-    return any(grants_id_token(p) for p in perms)
-
-
-GOOD = """
-on:
-  pull_request:
-    paths: ["terraform/server/**"]
-permissions: {}
-jobs:
-  plan:
-    permissions:
-      id-token: write
-      contents: read
-    runs-on: ubuntu-latest
-    steps: [{run: "true"}]
-"""
+def test_the_baseline_is_clean():
+    assert check() == []
 
 
 @pytest.mark.parametrize(
-    "text",
+    "on_text",
     [
-        GOOD.replace("pull_request:", "pull_request_target:"),
-        GOOD.replace("pull_request:", "pull_request_target:").replace("id-token: write", "id-token: none"),
-        GOOD.replace("pull_request:", "push:"),
-        GOOD.replace("on:\n  pull_request:", "on:\n  push:\n  pull_request:"),
-        GOOD.replace("permissions: {}", "permissions: write-all").replace("pull_request:", "push:"),
-        GOOD.replace("permissions: {}", "permissions:\n  id-token: write").replace("pull_request:", "workflow_dispatch:"),
-        "on: pull_request_target\njobs: {a: {runs-on: x, steps: []}}\n",
-        "on: [push, pull_request_target]\njobs: {a: {runs-on: x, steps: []}}\n",
-        "on: 7\njobs: {a: {runs-on: x, steps: []}}\n",
-        "jobs: {a: {runs-on: x, steps: []}}\n",
-        GOOD.replace("permissions: {}", "permissions: [id-token]"),
-        "on: [pull_request\njobs: :\n",
-        "just text\n",
+        "on: push",
+        "on: [push]",
+        "on: [push, pull_request]",
+        "on:\n  push:",
+        "on:\n  push:\n    branches: ['**']",
+        "on:\n  push:\n    branches: [main, 'release/*']",
+        "on:\n  push:\n    branches-ignore: ['feature/*']",
+        "on:\n  push:\n    branches: ['m[a]in']",
+        "on:\n  push:\n    paths: ['x/**']",
     ],
 )
-def test_the_rule_refuses(text):
-    problems = rule_problems("fixture.yml", text)
-    assert problems and all(p.startswith("fixture.yml: ") for p in problems)
+def test_a_workflow_that_can_run_on_main_and_is_not_listed_is_refused_by_name(on_text):
+    found = check({"new.yml": doc(on_text, "a new check")})
+    assert any("a new check" in line and "not in publish.yml's trigger list" in line for line in found), found
 
 
 @pytest.mark.parametrize(
-    "text",
+    "on_text",
     [
-        GOOD,
-        "on: pull_request\npermissions:\n  id-token: write\njobs: {a: {runs-on: x, steps: []}}\n",
-        "on: [push, pull_request]\npermissions: {contents: read}\njobs: {a: {runs-on: x, steps: []}}\n",
-        GOOD.replace("id-token: write", "id-token: read").replace("pull_request:", "push:"),
+        "on: pull_request",
+        "on: [pull_request]",
+        "on:\n  pull_request:\n    paths: ['x']",
+        "on: workflow_dispatch",
+        "on:\n  schedule:\n    - cron: '0 0 * * *'",
+        "on:\n  push:\n    branches: [oidc-probe-156]",
+        "on:\n  push:\n    branches-ignore: [main]",
+        "on:\n  push:\n    tags: ['v*']",
     ],
 )
-def test_the_rule_allows(text):
-    assert rule_problems("fixture.yml", text) == []
+def test_a_workflow_that_cannot_run_on_main_needs_no_entry(on_text):
+    assert check({"probe.yml": doc(on_text, "a probe")}) == []
 
 
-def test_replay_every_workflow_passes_and_only_the_plan_workflow_grants_id_token():
-    files = workflow_files()
-    assert files, "no workflow file found"
-    problems = [p for f in files for p in rule_problems(f.name, f.read_text(encoding="utf-8"))]
-    assert problems == []
-    granting = {f.name for f in files if grants_any_id_token(f.read_text(encoding="utf-8"))}
-    assert granting == {PLAN}
+def test_an_unfiltered_push_probe_is_refused_and_the_message_says_what_to_do():
+    found = check({"probe.yml": doc("on: push", "a probe")})
+    assert found and "restrict `on.push.branches`" in found[0] and "a probe" in found[0]
 
 
-# The plan workflow's own rules.
+def test_a_listed_workflow_that_cannot_run_on_main_is_refused():
+    found = check({"probe.yml": doc("on: pull_request", "a probe")}, listed=LISTED | {"a probe"})
+    assert any("cannot run on a push to main" in line and "a probe" in line for line in found)
 
 
-def load_plan():
-    return yaml.safe_load((WORKFLOWS / PLAN).read_text(encoding="utf-8"))
+def test_a_path_filtered_workflow_must_be_listed_but_must_not_be_required():
+    assert check(required=REQUIRED | {"terraform check"})
+    assert check(listed=LISTED - {"terraform check"})
 
 
-def string_values(node):
-    if isinstance(node, dict):
-        for value in node.values():
-            yield from string_values(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from string_values(value)
-    elif isinstance(node, str):
-        yield node
+def test_an_every_push_workflow_missing_from_the_required_list_is_refused():
+    found = check({"new.yml": doc("on: push", "a new check")}, listed=LISTED | {"a new check"})
+    assert any("required list" in line and "a new check" in line for line in found)
 
 
-def plan_problems(doc):
-    found = []
-    on = doc.get("on", doc.get(True)) or {}
-    if not isinstance(on, dict) or list(on) != ["pull_request"]:
-        found.append("triggers are not pull_request only")
-    elif set((on["pull_request"] or {}).get("paths", [])) != {"terraform/server/**", "terraform/.terraform-version", f".github/workflows/{PLAN}"}:
-        found.append("the paths filter is not the server folder, the version file and this file")
-    if doc.get("permissions") != {}:
-        found.append("workflow permissions are not {}")
-    if (doc.get("defaults") or {}).get("run", {}).get("shell") != "bash":
-        found.append("scripts do not run in bash")
-    jobs = doc.get("jobs") or {}
-    if list(jobs) != ["plan"]:
-        return found + [f"jobs are {list(jobs)}, not plan only"]
-    job = jobs["plan"]
-    if job.get("permissions") != {"id-token": "write", "contents": "read"}:
-        found.append("the plan job's permissions are not id-token: write and contents: read")
-    if job.get("if") != "github.event.pull_request.head.repo.full_name == github.repository":
-        found.append("the plan job has no fork condition")
-    steps = job.get("steps") or []
-    uses = [s["uses"] for s in steps if "uses" in s]
-    for ref in uses:
-        if not PINNED.fullmatch(ref):
-            found.append(f"{ref} is not pinned by commit")
-        if ref.split("@")[0] in ("actions/upload-artifact", "actions/cache"):
-            found.append(f"{ref} uploads or caches files")
-    creds = [s for s in steps if s.get("uses", "").startswith("aws-actions/configure-aws-credentials@")]
-    if len(creds) != 1:
-        found.append("not exactly one AWS credentials step")
-    else:
-        given = creds[0].get("with") or {}
-        if given.get("role-to-assume") != "${{ secrets.AWS_PLAN_ROLE_ARN }}" or given.get("aws-region") != "us-east-1":
-            found.append("the credentials step does not assume secrets.AWS_PLAN_ROLE_ARN in us-east-1")
-        if any(key.startswith("aws-access-key") or key.startswith("aws-secret") or key.startswith("aws-session") for key in given):
-            found.append("the credentials step passes a stored credential")
-    if [v for v in string_values(doc) if "AWS_PLAN_ROLE_ARN" in v] != ["${{ secrets.AWS_PLAN_ROLE_ARN }}"]:
-        found.append("the role ARN appears somewhere other than the credentials step's input")
-    names = [s.get("name") or s.get("uses") or f"#{i}" for i, s in enumerate(steps)]
-    backend = [i for i, s in enumerate(steps) if "terraform/server/backend.tf" in s.get("run", "") and "D19a" in s.get("run", "")]
-    if not backend or not creds or backend[0] > steps.index(creds[0]):
-        found.append("no backend file check naming D19a before the credentials step")
-    cleanup = [s for s in steps if s.get("run", "").strip() == f"rm -f {PLAN_FILE}"]
-    if not cleanup or cleanup[0].get("if") != "always()":
-        found.append("the plan file is not deleted in an if: always() step")
-    ran = set()
-    for step, name in zip(steps, names):
-        run = step.get("run", "")
-        if not TERRAFORM_WORD.search(run.replace(FAIL_MESSAGE, "")):
-            for word in FORBIDDEN_IN_RUN:
-                if word in run:
-                    found.append(f"step {name!r} runs {word!r}")
-            continue
-        found += terraform_step_problems(name, run, ran)
-    if ran != set(ALLOWED_TERRAFORM_LINES):
-        found.append(f"terraform commands run: {sorted(ran)}, not init, plan and show")
-    return found
+def test_a_required_name_with_no_workflow_is_refused():
+    assert any("no such workflow" in line for line in check(required=REQUIRED | {"socboard image"}))
 
 
-def terraform_step_problems(name, run, ran):
-    found = []
-    lines = [line.strip() for line in run.splitlines() if line.strip()]
-    if FAIL_LINE not in lines:
-        found.append(f"step {name!r} has no fixed failure message")
-    for line in lines:
-        if line == FAIL_LINE:
-            continue
-        for word in FORBIDDEN_IN_RUN:
-            if word in line:
-                found.append(f"step {name!r} runs {word!r}")
-        if re.search(r"\b(echo|printf|cat)\b", line) or "GITHUB_STEP_SUMMARY" in line:
-            found.append(f"step {name!r} prints something other than the fixed message: {line}")
-        if not TERRAFORM_WORD.search(line):
-            continue
-        matched = [cmd for cmd, shape in ALLOWED_TERRAFORM_LINES.items() if shape.fullmatch(line)]
-        if not matched:
-            found.append(f"step {name!r} runs terraform in a shape that may print: {line}")
-        ran.update(matched)
-    return found
-
-
-def test_the_plan_workflow_passes_its_rules():
-    assert plan_problems(load_plan()) == []
-
-
-def test_the_plan_workflow_keeps_the_terraform_check_pins():
-    check = yaml.safe_load((WORKFLOWS / "terraform-check.yml").read_text(encoding="utf-8"))
-    check_uses = {s["uses"] for s in check["jobs"]["check"]["steps"] if "uses" in s}
-    plan_uses = {s["uses"] for s in load_plan()["jobs"]["plan"]["steps"] if "uses" in s}
-    assert check_uses <= plan_uses
-
-
-def test_every_pinned_action_names_its_version_in_a_comment():
-    text = (WORKFLOWS / PLAN).read_text(encoding="utf-8")
-    for line in text.splitlines():
-        if "uses:" in line:
-            assert re.search(r"@[0-9a-f]{40} # v\d+\.\d+\.\d+$", line), line
-
-
-def plan_step(doc):
-    return next(s for s in doc["jobs"]["plan"]["steps"] if "show -json" in s.get("run", ""))
-
-
-def edit_run(old, new):
-    def change(doc):
-        step = plan_step(doc)
-        assert old in step["run"]
-        step["run"] = step["run"].replace(old, new)
-
-    return change
-
-
-def set_key(path, value):
-    def change(doc):
-        node = doc
-        for key in path[:-1]:
-            node = node[key]
-        node[path[-1]] = value
-
-    return change
-
-
-def add_step(step):
-    return lambda doc: doc["jobs"]["plan"]["steps"].insert(-1, step)
-
-
-BROKEN = {
-    "plan output printed": edit_run('-out="$RUNNER_TEMP/server.tfplan" > /dev/null 2>&1', '-out="$RUNNER_TEMP/server.tfplan"'),
-    "init error printed": edit_run('}}" > /dev/null 2>&1', '}}" > /dev/null'),
-    "plan teed": edit_run('server.tfplan" > /dev/null 2>&1 || fail', 'server.tfplan" 2>&1 | tee plan.txt > /dev/null || fail'),
-    "show printed": edit_run("2> /dev/null | python3 -I scripts/check_plan_actions.py", "2> /dev/null"),
-    "show stderr kept": edit_run('server.tfplan" 2> /dev/null |', 'server.tfplan" |'),
-    "plan locks": edit_run("-lock=false", "-lock=true"),
-    "plan without lock flag": edit_run("-lock=false ", ""),
-    "apply added": edit_run("set +e\n", "terraform -chdir=terraform/server apply -auto-approve > /dev/null 2>&1 || fail\nset +e\n"),
-    "state subcommand": edit_run("set +e\n", "terraform -chdir=terraform/server state list > /dev/null 2>&1 || fail\nset +e\n"),
-    "failure text echoed": edit_run("2>&1 || fail\nset +e", "2>&1 || { echo oops; fail; }\nset +e"),
-    "different failure message": edit_run("server plan step", "plan step"),
-    "no fork condition": set_key(["jobs", "plan", "if"], "true"),
-    "write token": set_key(["jobs", "plan", "permissions", "pull-requests"], "write"),
-    "workflow permissions": set_key(["permissions"], {"contents": "read"}),
-    "push trigger": set_key([True, "push"], {}),
-    "role from a variable": lambda doc: doc["jobs"]["plan"]["steps"][4]["with"].update({"role-to-assume": "${{ vars.AWS_PLAN_ROLE_ARN }}"}),
-    "role in the summary": add_step({"run": 'echo "${{ secrets.AWS_PLAN_ROLE_ARN }}" >> "$GITHUB_STEP_SUMMARY"'}),
-    "plan uploaded": add_step({"uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "with": {"path": "plan"}}),
-    "show printed by another step": add_step({"run": 'terraform -chdir=terraform/server show "$RUNNER_TEMP/server.tfplan"'}),
-    "action by tag": set_key(["jobs", "plan", "steps", 4, "uses"], "aws-actions/configure-aws-credentials@v6"),
-    "no cleanup": lambda doc: doc["jobs"]["plan"]["steps"].pop(),
-}
-
-
-@pytest.mark.parametrize("case", sorted(BROKEN))
-def test_a_broken_plan_workflow_is_refused(case):
-    doc = copy.deepcopy(load_plan())
-    BROKEN[case](doc)
-    assert plan_problems(doc), case
+def test_a_workflow_with_no_name_is_listed_and_found_by_its_path():
+    unnamed = doc("on: push", name=None)
+    assert check({".github/workflows/x.yml": unnamed})
+    found = check({".github/workflows/x.yml": unnamed}, listed=LISTED | {".github/workflows/x.yml"}, required=REQUIRED | {".github/workflows/x.yml"})
+    assert found == []
