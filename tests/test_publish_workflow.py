@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 import pytest
+import workflow_triggers
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,28 +147,43 @@ def test_a_publish_job_that_checks_out_or_rebuilds_is_refused():
 # --- the trigger list and the required names follow the workflow files ----------------------------
 
 
-def other_workflows():
+OWN = ".github/workflows/publish.yml"
+# What the files say today (#235). A renamed or removed workflow fails these before anything else does.
+TRIGGER_LIST = {"socboard verify", "socboard postgres", "socboard image", "socboard compose", "terraform check"}
+REQUIRED = {"socboard verify", "socboard postgres", "socboard image", "socboard compose"}
+
+
+def real_workflows():
+    """Every workflow file GitHub reads (`.yml` and `.yaml`), by path, parsed."""
     found = {}
-    for path in sorted(WORKFLOWS.glob("*.yml")):
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-        found[path.name] = (doc["name"], triggers(doc))
+    for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
+        found[f".github/workflows/{path.name}"] = yaml.safe_load(path.read_text(encoding="utf-8"))
     return found
 
 
-def test_every_workflow_that_runs_on_a_push_triggers_the_publish_workflow():
+def test_every_workflow_that_can_run_on_a_push_to_main_triggers_the_publish_workflow():
     doc, _ = real()
     listed = set(triggers(doc)["workflow_run"]["workflows"])
-    on_push = {name for file, (name, on) in other_workflows().items() if file != "publish.yml" and "push" in on}
-    assert listed == on_push, (listed ^ on_push)
+    assert workflow_triggers.list_problems(real_workflows(), listed, OWN) == []
 
 
-def test_the_gate_requires_exactly_the_checks_that_run_on_every_push():
-    names = {name for file, (name, on) in other_workflows().items() if file != "publish.yml"}
-    assert set(gate_module.REQUIRED) <= names
-    unconditional = {
-        name for file, (name, on) in other_workflows().items() if file != "publish.yml" and not (on.get("push") or {}).get("paths")
-    }
-    assert set(gate_module.REQUIRED) == unconditional
+def test_the_gate_requires_exactly_the_checks_that_run_on_every_push_to_main():
+    assert workflow_triggers.required_problems(real_workflows(), set(gate_module.REQUIRED), OWN) == []
+
+
+def test_the_trigger_list_and_the_required_list_are_the_ones_the_files_name_today():
+    doc, _ = real()
+    assert set(triggers(doc)["workflow_run"]["workflows"]) == TRIGGER_LIST
+    assert set(gate_module.REQUIRED) == REQUIRED
+
+
+def test_every_real_workflow_file_parses_and_is_named_or_found_by_its_path():
+    found = real_workflows()
+    assert OWN in found and len(found) >= 6
+    for path, doc in found.items():
+        assert isinstance(doc, dict), path
+        workflow_triggers.classify(doc)  # no exception on any real form of `on:`
+        assert workflow_triggers.workflow_name(doc, path), path
 
 
 # --- the Compose job saves the tested image only on a push to main -------------------------------
