@@ -12,6 +12,11 @@ name: socboard publish
 permissions:
   contents: read
 
+# bash with pipefail for every script: a failed `docker save | gzip` or `... | tee` must fail the step.
+defaults:
+  run:
+    shell: bash
+
 on:
   workflow_run:
     # Every workflow that runs on a push to main (tests/test_publish_workflow.py checks the list against
@@ -68,8 +73,10 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
           COMMIT_TIME: ${{ github.event.workflow_run.head_commit.timestamp }}
         run: |
-          echo "tag=$(python3 scripts/publish_gate.py tag --sha "$SHA" --timestamp "$COMMIT_TIME")" >> "$GITHUB_OUTPUT"
-          echo "image=$(python3 scripts/publish_gate.py name --repository "$GITHUB_REPOSITORY")" >> "$GITHUB_OUTPUT"
+          tag="$(python3 scripts/publish_gate.py tag --sha "$SHA" --timestamp "$COMMIT_TIME")"
+          image="$(python3 scripts/publish_gate.py name --repository "$GITHUB_REPOSITORY")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: gate
@@ -98,6 +105,11 @@ jobs:
           run-id: ${{ needs.gate.outputs.compose_run_id }}
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
+
+      - name: Check the gate named an image and a tag
+        run: |
+          test -n "$IMAGE" && test -n "$TAG" && test -n "$SHA"
+          echo "$IMAGE:$TAG"
 
       - name: Load the tested image and check it is the one the Compose job saved
         run: |
@@ -134,7 +146,10 @@ jobs:
             docker pull "$IMAGE:$TAG" > /dev/null
             existing="$(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG")"
             test "$existing" = "$(cat tested-image.id)"
-          elif echo "$out" | grep -qiE "no such manifest|manifest unknown|not found"; then
+          # GHCR may answer "unauthorized" or "denied" for a package that does not exist yet; the push that
+          # follows fails loudly if the token cannot write, and an existing tag is never pushed over because
+          # a token that may write may also read it.
+          elif echo "$out" | grep -qiE "no such manifest|manifest unknown|name unknown|not found|unauthorized|denied"; then
             docker tag socboard-stack:local "$IMAGE:$TAG"
             docker push "$IMAGE:$TAG"
           else

@@ -20,8 +20,17 @@ REPO = "andrew-chung-au/socboard"
 NAMES = ("socboard verify", "socboard postgres", "socboard image", "socboard compose")
 
 
-def run(name, id, status="completed", conclusion="success", sha=SHA, event="push"):
-    return {"id": id, "name": name, "status": status, "conclusion": conclusion, "head_sha": sha, "event": event}
+def run(name, id, status="completed", conclusion="success", sha=SHA, event="push", branch="main", repository=REPO):
+    return {
+        "id": id,
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "head_sha": sha,
+        "event": event,
+        "head_branch": branch,
+        "head_repository": {"full_name": repository},
+    }
 
 
 def all_green():
@@ -97,6 +106,28 @@ def test_the_publish_workflows_own_runs_and_other_commits_runs_are_ignored():
     assert decide(runs)[0] is True
 
 
+def test_the_same_commit_pushed_to_another_branch_neither_hides_a_failure_on_main_nor_blocks_it():
+    failed_on_main = [run(NAMES[0], 100, conclusion="failure")] + [r for r in all_green() if r["name"] != NAMES[0]]
+    green_elsewhere = run(NAMES[0], 900, branch="feature")  # a newer, green run of the same sha on another branch
+    assert decide(failed_on_main + [green_elsewhere])[0] is False
+    running_elsewhere = run("socboard verify", 901, status="in_progress", conclusion=None, branch="feature")
+    assert decide(all_green() + [running_elsewhere])[0] is True
+
+
+def test_runs_of_the_same_commit_from_a_fork_do_not_count():
+    fork_failure = run(NAMES[1], 950, conclusion="failure", repository="someone-else/socboard")
+    assert decide(all_green() + [fork_failure])[0] is True
+    only_fork = [r for r in all_green() if r["name"] != NAMES[3]] + [run(NAMES[3], 951, repository="someone-else/socboard")]
+    ready, reason, _ = decide(only_fork)
+    assert not ready and NAMES[3] in reason
+
+
+def test_a_run_whose_repository_is_missing_does_not_count():
+    nameless = run(NAMES[2], 960)
+    nameless["head_repository"] = None
+    assert decide([r for r in all_green() if r["name"] != NAMES[2]] + [nameless])[0] is False
+
+
 def test_a_pull_request_run_of_the_same_commit_does_not_count_for_a_push():
     runs = [r for r in all_green() if r["name"] != NAMES[3]] + [run(NAMES[3], 777, event="pull_request")]
     ready, reason, _ = decide(runs)
@@ -143,7 +174,20 @@ def test_a_sha_that_is_not_forty_lower_case_hex_characters_is_refused(sha):
         gate.tag_for(sha, "2026-11-15T09:12:34Z")
 
 
-@pytest.mark.parametrize("stamp", ["", "yesterday", "2026-11-15", "2026-11-15T09:12:34", "2026-11-15 09:12:34Z", "2026-11-15T09:12:34Z; rm -rf /"])
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "",
+        "yesterday",
+        "2026-11-15",
+        "2026-11-15T09:12:34",
+        "2026-11-15 09:12:34Z",
+        "2026-11-15T09:12:34Z; rm -rf /",
+        "2026-13-45T09:12:34Z",
+        "9999-12-31T23:59:59-01:00",
+        "٢٠٢٦-١١-١٥T٠٩:١٢:٣٤Z",
+    ],
+)
 def test_a_timestamp_that_is_not_iso_with_an_offset_is_refused(stamp):
     with pytest.raises(gate.BadInput):
         gate.tag_for(SHA, stamp)
@@ -179,7 +223,7 @@ def test_a_refusal_is_still_exit_zero_with_ready_false(tmp_path, capsys):
     assert out[0] == "ready=false" and out[2] == "compose_run_id="
 
 
-@pytest.mark.parametrize("content", ["", "not json", "{}", "[1, 2]", f'[{{"head_sha": "{SHA}", "event": "push", "name": "x"}}]'])
+@pytest.mark.parametrize("content", ["", "not json", "{}", "[1, 2]", f'[{{"head_sha": "{SHA}", "event": "push", "head_branch": "main", "head_repository": {{"full_name": "{REPO}"}}, "name": "x"}}]'])
 def test_unusable_runs_are_exit_two_without_a_traceback(tmp_path, capsys, content):
     runs = tmp_path / "runs.json"
     runs.write_text(content, encoding="utf-8")

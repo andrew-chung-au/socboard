@@ -4,11 +4,13 @@
 +      # Baked into the image's labels (compose.yaml build arguments; #235). Empty on a pull request.
 +      GIT_COMMIT: ${{ github.sha }}
 +      BUILD_DATE: ${{ github.event.head_commit.timestamp }}
-@@ -129,0 +133,30 @@
+@@ -115,0 +119,33 @@
 +
-+      # Only a push to main saves the image: the publish workflow (publish.yml) pushes exactly this one.
++      # Only a push to main saves the image, right after the tests that ran against it (before the second start,
++      # which builds again): the publish workflow (publish.yml) pushes exactly this one.
 +      - name: Check the tested image's files, as the image job does
 +        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
++        shell: bash
 +        run: |
 +          id="$(docker create socboard-stack:local)"
 +          mkdir -p "$RUNNER_TEMP/image-files"
@@ -18,6 +20,7 @@
 +
 +      - name: Save the tested image for the publish workflow
 +        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
++        shell: bash
 +        run: |
 +          docker save socboard-stack:local | gzip -1 > "$RUNNER_TEMP/tested-image.tar.gz"
 +          docker image inspect --format '{{.Id}}' socboard-stack:local > "$RUNNER_TEMP/tested-image.id"

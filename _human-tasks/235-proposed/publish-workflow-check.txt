@@ -38,6 +38,8 @@ def problems(doc, text):
     jobs = doc["jobs"]
     if doc.get("permissions") != {"contents": "read"}:
         found.append("the workflow's default permissions are not contents: read")
+    if (doc.get("defaults") or {}).get("run", {}).get("shell") != "bash":
+        found.append("scripts do not run in bash with pipefail (defaults.run.shell is not bash)")
     if set(triggers(doc)) != {"workflow_run"}:
         found.append(f"triggers are {sorted(triggers(doc))}, not workflow_run only")
     writers = {name for name, job in jobs.items() if "write" in (job.get("permissions") or {}).values()}
@@ -94,6 +96,13 @@ def test_a_wider_default_permission_is_refused():
 
 def test_packages_write_on_the_gate_is_refused():
     assert broken(lambda doc, text: doc["jobs"]["gate"].update(permissions={"packages": "write", "contents": "read"}))
+
+
+def test_a_workflow_without_the_bash_default_is_refused():
+    def change(doc, text):
+        doc.pop("defaults")
+
+    assert any("pipefail" in p for p in broken(change))
 
 
 def test_a_pull_request_trigger_is_refused():
@@ -174,6 +183,18 @@ def test_the_compose_job_uploads_the_tested_image_only_on_a_push_to_main_for_one
     upload = next(s for s in steps(job) if str(s.get("uses", "")).startswith("actions/upload-artifact@") and (s.get("with") or {}).get("name") == "tested-image")
     assert PINNED.fullmatch(upload["uses"]) and upload["with"]["name"] == "tested-image" and upload["with"]["retention-days"] == 1
     assert "permissions" not in job and doc["permissions"] == {"contents": "read"}
+
+
+def test_the_tested_image_is_saved_right_after_the_browser_test_and_before_the_second_start_with_pipefail():
+    doc, _ = load("compose.yml")
+    names = [step.get("name", "") for step in steps(doc["jobs"]["compose"])]
+    browser = next(i for i, n in enumerate(names) if n.startswith("Browser test against the stack"))
+    again = next(i for i, n in enumerate(names) if n.startswith("Start again"))
+    saving = [i for i, n in enumerate(names) if "tested image" in n.lower()]
+    assert saving and all(browser < i < again for i in saving), (browser, saving, again)
+    for step in steps(doc["jobs"]["compose"]):
+        if "docker save" in step.get("run", "") or "docker export" in step.get("run", ""):
+            assert step.get("shell") == "bash", step["name"]
 
 
 def test_the_compose_job_passes_the_commit_and_its_time_to_the_build():

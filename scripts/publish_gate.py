@@ -29,7 +29,7 @@ REQUIRED = ("socboard verify", "socboard postgres", "socboard image", COMPOSE_WO
 SHA = re.compile(r"[0-9a-f]{40}")
 # An owner is letters, digits and hyphens; a name is letters, digits, `_`, `.` and `-`, and is not `.` or `..`.
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9_.-]+")
-TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
+TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", re.ASCII)
 
 
 class BadInput(ValueError):
@@ -40,7 +40,17 @@ def decide(*, repository, sha, event, branch, head_repository, runs):
     """(ready, reason, compose_run_id) for one commit. `runs` are workflow runs of any commit."""
     if event != "push" or branch != "main" or head_repository != repository:
         return False, "not a push to main of this repository", None
-    mine = [run for run in runs if run.get("head_sha") == sha and run.get("event") == "push" and run.get("name") != PUBLISH_WORKFLOW]
+    # Only this commit's runs on main of this repository: the same sha pushed to another branch or fork has runs of
+    # its own, and they must neither hide a failure on main nor block it while they are still running.
+    mine = [
+        run
+        for run in runs
+        if run.get("head_sha") == sha
+        and run.get("event") == "push"
+        and run.get("head_branch") == "main"
+        and (run.get("head_repository") or {}).get("full_name") == repository
+        and run.get("name") != PUBLISH_WORKFLOW
+    ]
     latest = {}
     for run in mine:  # a re-run keeps its id; of two runs of one workflow the newer has the larger id
         run_id = int(run["id"])  # a run without an id is unusable input, not a run to skip
@@ -63,10 +73,14 @@ def tag_for(sha, timestamp):
         raise BadInput("sha must be 40 lower-case hex characters")
     if not TIMESTAMP.fullmatch(timestamp):
         raise BadInput("timestamp must be an ISO 8601 date and time with an offset")
-    moment = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    try:
+        moment = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        stamp = f"{moment.astimezone(timezone.utc):%Y%m%d-%H%M%S}"
+    except (ValueError, OverflowError):
+        raise BadInput("timestamp is not a date the tag can hold") from None
     if moment.tzinfo is None:
         raise BadInput("timestamp must carry an offset")
-    return f"{moment.astimezone(timezone.utc):%Y%m%d-%H%M%S}-{sha[:7]}"
+    return f"{stamp}-{sha[:7]}"
 
 
 def image_name(repository):

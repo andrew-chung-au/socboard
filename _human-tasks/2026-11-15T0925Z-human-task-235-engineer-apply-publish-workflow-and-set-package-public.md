@@ -52,7 +52,8 @@ Tell the orchestrator once it is pushed. The Compose job on the pull request wil
 
 After you merge, the pushes to `main` start `socboard verify`, `postgres`, `image` and `compose`. When the last one completes, `socboard publish` runs: the gate job says `ready=true`, the publishing job pushes the image. Send the orchestrator the link to the `socboard publish` run. If it fails, nothing deploys from it yet (D20 and D22a do not exist), and the orchestrator fixes it in a new pull request.
 
-Expected: a run named `socboard publish` with `gate` and `publish` both green, and a job summary showing the image, the tag and the digest.
+Expected: a run named `socboard publish` with `gate` and `publish` both green, and a job summary showing the image, the tag and the digest. Read the log of the push and login steps once: no token, only `Login Succeeded` and the layer lines.
+If the push fails with a denied or unauthorized message on this first run, send the lines (the first run is also the check of how GHCR answers for a package that does not exist yet).
 Note: runs of `socboard publish` for the other, earlier-finishing workflows end with `ready=false` and a `publish` job that is skipped. That is the design.
 
 ### Step 4: make the package public and link it to the repository
@@ -61,7 +62,8 @@ GitHub creates the package on the first push, often as private. The server has n
 
 1. On GitHub: your profile or organisation, Packages, `socboard`, Package settings.
 2. If the package is not connected to the repository, connect it (the image's `org.opencontainers.image.source` label names the repository, which normally links it).
-3. Under Danger Zone, change the visibility to Public.
+3. Under "Manage Actions access", make sure this repository is listed with the Write role (a package created by a workflow is usually linked at once; if it is not, the second push gets a 403).
+4. Under Danger Zone, change the visibility to Public.
 
 Risk: anyone can then pull the image. It holds no secret (the image check of #190 runs on it) and the repository is public. Making a package private again is possible; deleting a published version is not undone.
 
