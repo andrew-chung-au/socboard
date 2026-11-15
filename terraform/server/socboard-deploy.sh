@@ -56,6 +56,7 @@ NAMES=(SOCBOARD_TOKEN_SECRET SOCBOARD_INGEST_API_KEY SOCBOARD_SEED_PASSWORD_ANAL
   STACK_PG_OWNER_PASSWORD STACK_PG_APP_PASSWORD)
 
 CAND_UP=0
+LOCKED=0
 REDACT=()
 declare -A S
 
@@ -107,8 +108,11 @@ die_logs() {
 
 cleanup() {
   local rc=$?
-  [ "$CAND_UP" = 1 ] && docker rm -f "$CAND" >/dev/null 2>&1
-  rm -f "$VARS"
+  # A run that lost the lock removes nothing: the variable file and the candidate belong to the run that holds it.
+  if [ "$LOCKED" = 1 ]; then
+    [ "$CAND_UP" = 1 ] && docker rm -f "$CAND" >/dev/null 2>&1
+    rm -f "$VARS"
+  fi
   exec 9>&-
   exit "$rc"
 }
@@ -168,6 +172,7 @@ check_release() {
 mkdir -p "$RUN_DIR" || die 8
 exec 9>"$RUN_DIR/lock" || die 8
 flock -n 9 || die 8
+LOCKED=1
 
 # --- 2. the digest check (the document's allowedPattern is the first check) ----------------------
 digest=${1-$DIGEST_PARAM}
@@ -181,7 +186,8 @@ IMAGE="$IMAGE_REPO@$digest"
 PREV=$(docker inspect --format "$(tpl .Config.Image)" "$APP" 2>/dev/null) || PREV=''
 if [ "$PREV" = "$IMAGE" ]; then
   st=$(docker inspect --format "$(tpl .State.Health.Status)" "$APP" 2>/dev/null) || st=''
-  if [ "$st" = healthy ]; then
+  run=$(docker inspect --format "$(tpl .State.Running)" "$APP" 2>/dev/null) || run=''
+  if [ "$st" = healthy ] && [ "$run" = true ]; then
     say 'socboard-deploy: already deployed. Nothing was changed.'
     exit 0
   fi

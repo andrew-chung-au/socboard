@@ -529,6 +529,18 @@ def test_a_second_run_while_one_holds_the_lock_exits_8_and_changes_nothing(box):
     assert [p.name for p in box.files_left()] == ["lock"]
 
 
+def test_a_run_that_loses_the_lock_leaves_the_lock_holders_variable_file_alone(box):
+    box.run_dir.mkdir(parents=True)
+    planted = box.run_dir / "stack-vars"
+    planted.write_text("STACK_IMAGE=planted\n", encoding="utf-8")
+    with open(box.run_dir / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        r = box.run()
+    assert_only(r, 8, FIXED[8])
+    assert r.kinds() == ["flock"]
+    assert planted.read_text(encoding="utf-8") == "STACK_IMAGE=planted\n"
+
+
 # --- already deployed --------------------------------------------------------------------------------
 
 
@@ -536,9 +548,17 @@ def test_the_same_digest_running_healthy_is_already_deployed_and_nothing_else_ru
     box.set_app(IMAGE)
     r = box.run()
     assert_only(r, 0, ALREADY)
-    assert r.kinds() == ["flock", "inspect-image", "inspect-health"]
+    assert r.kinds() == ["flock", "inspect-image", "inspect-health", "inspect-running"]
     assert [p.name for p in box.files_left()] == ["lock"]
     assert_safe(r)
+
+
+def test_the_same_digest_healthy_but_stopped_continues_as_a_normal_deploy(box):
+    box.set_app(IMAGE, health="healthy", running="false")
+    r = box.run()
+    assert ALREADY not in r.out
+    assert_only(r, 0, DEPLOYED)
+    assert "pull" in r.kinds() and "up-app" in r.kinds()
 
 
 def test_the_same_digest_running_unhealthy_continues_as_a_normal_deploy(box):
