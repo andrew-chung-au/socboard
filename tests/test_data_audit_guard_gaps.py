@@ -1,4 +1,4 @@
-"""The audit guard's remaining DDL and id gaps (#99): L1 to L5 from #11's QA findings.
+"""The audit guard's remaining DDL and id gaps (#99): L1 to L5 from #11's QA findings, as #107 narrowed them.
 
 Every refusal runs with the guard on, on a migrated temporary database, and each one checks that
 nothing changed (rows, `sqlite_sequence`, `sqlite_master`) and that `append_audit` still works
@@ -22,7 +22,12 @@ from data_support import (
 )
 from sqlalchemy import (
     DDL,
+    Column,
     Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
     bindparam,
     column,
     delete,
@@ -36,7 +41,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import DropIndex
 from test_data_audit_triggers import guards_disabled
@@ -238,12 +243,6 @@ RENDER_REFUSALS = {
         "DROP TRIGGER %(a)s%(b)s", context={"a": "audit_entries_no_", "b": "update"}
     ),
     "context_table_name": lambda: DDL("DROP TABLE %(n)s", context={"n": "audit_entries"}),
-    "fallback_missing_key_names_a_context_value": lambda: DDL(
-        "DROP TRIGGER %(missing)s", context={"n": "audit_entries_no_update"}
-    ),
-    "fallback_bad_format_names_a_context_value": lambda: DDL(
-        "DROP TRIGGER %z", context={"n": "audit_entries_no_delete"}
-    ),
     "fallback_missing_key_names_in_the_template": lambda: DDL("DROP TRIGGER audit_entries_no_reuse_id -- %(missing)s"),
     "double_percent_in_the_template": lambda: DDL("DROP TRIGGER audit_entries_no_update -- 100%%"),
 }
@@ -267,6 +266,15 @@ def test_a_ddl_whose_rendered_text_names_nothing_is_not_refused():
     assert not refused_statement(DDL("SELECT '%%' /* %(n)s */", context={"n": "audit_entries_archive"}))
     assert not refused_statement(DDL("SELECT %(missing)s", context={"n": "audit_entries_archive"}))
     assert not refused_statement(DDL("DROP TRIGGER %(a)s%(b)s", context={"a": "audit_entries_no_", "b": "update_log"}))
+
+
+@pytest.mark.parametrize("sql", ["DROP TRIGGER %(missing)s", "DROP TRIGGER %z"])
+def test_an_unrenderable_ddl_is_matched_on_its_template_alone_and_fails_in_sqlalchemy(seeded, sql):
+    # #107 decision 2: the context values are not matched, because SQLAlchemy raises before the database.
+    ddl = DDL(sql, context={"n": "audit_entries_no_update"})
+    assert not refused_statement(ddl)
+    with pytest.raises((KeyError, ValueError)):  # SQLAlchemy's own error, not AuditImmutableError
+        _conn(seeded["engine"], ddl)
 
 
 # --- L3: DropIndex --------------------------------------------------------------------------------
@@ -587,29 +595,38 @@ def test_an_id_through_a_named_bound_parameter_is_refused(seeded, route, value):
 
 
 @SQLITE_GUARD
-def test_a_named_bound_parameter_executed_with_none_is_not_refused(seeded):
+def test_a_bound_parameter_for_id_executed_with_none_is_refused(seeded):  # #107 decision 1
     engine = seeded["engine"]
     statement = insert(AUDIT).values(id=bindparam("x"), **_row(seeded))
-    _conn_commit(engine, statement, {"x": None})
-    assert len(snapshot(engine)[0]) == 2
-    _conn_commit(engine, statement, [{"x": None}, {"x": None}])
-    assert len(snapshot(engine)[0]) == 4
+    anonymous, name = _anonymous_bind(seeded, engine)
+    before = snapshot(engine)
+    for sink, stmt, parameters in [
+        (_conn, statement, {"x": None}), (_conn, statement, [{"x": None}, {"x": None}]),
+        (_session, statement, {"x": None}),
+        (_conn, anonymous, {name: None}), (_conn, anonymous, [{name: None}, {name: None}]),
+    ]:
+        with pytest.raises(AuditImmutableError):
+            sink(engine, stmt, parameters)
+    assert snapshot(engine) == before
     assert_append_audit_works(seeded)
 
 
-def test_the_guard_function_resolves_a_bound_parameter_against_the_execute_parameters():
+def test_the_guard_function_refuses_a_bound_parameter_for_id_whatever_its_value():
     row = dict(case_id=1, actor_id=1, action="a", detail="d", at=NOW)
     statement = insert(AUDIT).values(id=bindparam("x"), **row)
-    assert not refused_statement(statement, {"x": None})
-    assert not refused_statement(statement, ([{"x": None}, {"x": None}], {}))
-    assert not refused_statement(statement)  # no parameter and no value of its own
+    assert refused_statement(statement, {"x": None})
+    assert refused_statement(statement, ([{"x": None}, {"x": None}], {}))
+    assert refused_statement(statement)  # no parameter and no value of its own
     assert refused_statement(statement, {"x": 1})
     assert refused_statement(statement, [{"x": None}, {"x": 1}])
     assert refused_statement(statement, ([{"x": 1}], {}))
     assert refused_statement(insert(AUDIT).values(id=bindparam("x", value=5), **row))
     assert refused_statement(insert(AUDIT).values(id=bindparam("x", callable_=lambda: 5), **row))
     assert refused_statement(insert(AUDIT).values([{**row, "id": bindparam("x")}]), {"x": 3})
-    assert not refused_statement(insert(AUDIT).values([{**row, "id": bindparam("x")}]), {"x": None})
+    assert refused_statement(insert(AUDIT).values([{**row, "id": bindparam("x")}]), {"x": None})
+    for bind in (bindparam(None), bindparam("x", unique=True), bindparam("x", value=None)):
+        assert refused_statement(insert(AUDIT).values([{**row, "id": None}, {**row, "id": bind}]))
+    assert not refused_statement(insert(AUDIT).values(id=None, **row))  # a plain None is no bindparam
 
 
 EXPRESSION_IDS = {
@@ -633,39 +650,7 @@ def test_an_expression_in_the_id_position_is_refused(seeded, name):
     assert_append_audit_works(seeded)
 
 
-# --- #99 round 2: a pragma or name behind a comment ----------------------------------------------
-
-COMMENTED_PRAGMA_FORMS = [
-    "PRAGMA /* x */ {p} = ON",
-    "PRAGMA/**/{p} = ON",
-    "PRAGMA main./**/{p} = ON",
-    "PRAGMA -- c\n {p} = ON",
-    "PRAGMA/* a */main/* b */./* c */{p}=1",
-    "PRAGMA\n-- c\n-- d\n{p}(1)",
-    "pragma /* x */ {p} = on",
-    "SELECT '--'; PRAGMA {p} = ON",  # the quotes hide no comment: stripping alone would miss this
-    "SELECT '/*'; PRAGMA {p} = ON; SELECT '*/'",
-]
-
-
-@pytest.mark.parametrize("pragma", ["ignore_check_constraints", "writable_schema"])
-@pytest.mark.parametrize("form", COMMENTED_PRAGMA_FORMS)
-@SQLITE_GUARD
-def test_a_dangerous_pragma_behind_a_comment_is_refused(seeded, pragma, form):
-    before = snapshot(seeded["engine"])
-    with pytest.raises(AuditImmutableError):
-        _conn(seeded["engine"], DDL(form.format(p=pragma)))
-    assert snapshot(seeded["engine"]) == before
-    assert_append_audit_works(seeded)
-
-
-@pytest.mark.parametrize("pragma", ["ignore_check_constraints", "writable_schema"])
-def test_a_commented_dangerous_pragma_is_not_lifted_by_allow_schema_changes(seeded, pragma):
-    with allow_schema_changes():
-        for form in COMMENTED_PRAGMA_FORMS[:4]:
-            with pytest.raises(AuditImmutableError):
-                _conn(seeded["engine"], DDL(form.format(p=pragma)))
-
+# --- #99 round 2: a pragma or name beside a comment (matched without stripping since #107) --------
 
 @pytest.mark.parametrize(
     "sql",
@@ -712,15 +697,19 @@ def test_near_misses_behind_comments_are_still_allowed(sql):
 @pytest.mark.parametrize(
     "sql",
     [
-        # a comment that names the table is refused: the raw text is matched as well as the comment-stripped text
         "SELECT 1 /* audit_entries */ -- audit_entries_archive",
+        "-- audit_entries is protected",
+        "SELECT 'audit_entries_no_update'",
+        "SELECT 1 /* sqlite_sequence */",
+        "SELECT 'writable_schema'",
     ],
 )
 def test_a_comment_that_names_the_table_is_refused(sql):
+    # open limit (#107): the guard parses no SQL, so a word in a comment or a string literal counts
     assert refused_statement(DDL(sql))
 
 
-# --- #99 round 3: the id is resolved by the compiler, not by key names ---------------------------
+# --- #99 round 3: an id under the name the compiler gives its bind (no compile in the guard: #107) -
 
 
 def _multi_none(seeded):
@@ -784,10 +773,7 @@ def test_none_under_a_compiled_bind_name_is_not_refused(seeded):
     _conn_commit(engine, multi)
     _conn_commit(engine, multi, {"id_m1": None})
     _conn_commit(engine, multi, {"id_m0": None, "id_m1": None})
-    statement, name = _anonymous_bind(seeded, engine)
-    _conn_commit(engine, statement, {name: None})
-    _conn_commit(engine, statement, [{name: None}, {name: None}])
-    assert len(snapshot(engine)[0]) == 1 + 2 + 2 + 2 + 1 + 2
+    assert len(snapshot(engine)[0]) == 1 + 2 + 2 + 2
     assert_append_audit_works(seeded)
 
 
@@ -796,21 +782,15 @@ def test_the_guard_function_reads_the_values_bound_for_id_in_every_parameter_row
     multi = insert(AUDIT).values([{**row, "id": None}, {**row, "id": None}])
     assert refused_statement(multi, {"id_m1": 5})
     assert refused_statement(multi, ([{"id_m0": None}, {"id_m1": 5}], {}))
+    assert refused_statement(multi, {"ID_M1": 5})
     assert not refused_statement(multi)
     assert not refused_statement(multi, {"id_m1": None})
     assert not refused_statement(multi, {"unrelated": 5})
-    assert not refused_statement(insert(AUDIT).values(id=bindparam(None), **row))
+    assert not any(refused_statement(multi, {key: 5}) for key in ("a\nb", "id\n", "id_m1\n", "ID_M0\n"))  # no crash
+    assert refused_statement(insert(AUDIT).values(id=bindparam(None), **row))  # #107 decision 1
 
 
-def test_a_form_the_dialect_cannot_compile_is_refused(seeded):
-    dialect = type(seeded["engine"].dialect)()
-    dialect.supports_multivalues_insert = False  # compiling a multi-row values() raises
-    multi = _multi_none(seeded)
-    assert refused_statement(multi, None, dialect)
-    assert not refused_statement(multi, None, seeded["engine"].dialect)
-
-
-# --- #99 round 3: the pragma names and ATTACH, whatever the syntax around them -------------------
+# --- #99 round 3: the pragma names, whatever the syntax around them ------------------------------
 
 SCHEMA_ALIASES = ['"my-db"', '"my db"', '"a.b"', "x$y", "[my-db]", "'my-db'", "`my-db`", "main", "café"]
 PRAGMA_NAMES = ["ignore_check_constraints", "writable_schema"]
@@ -835,42 +815,26 @@ def test_the_pragma_names_are_refused_wherever_they_appear(sql):
     assert refused_statement(DDL(sql))
 
 
-ATTACH_FORMS = [
-    "ATTACH DATABASE ':memory:' AS \"my-db\"",
-    "attach ':memory:' AS x",
-    "ATTACH\n':memory:' AS x",
-    "DETACH DATABASE x",
-    "detach x",
-    "/* c */ ATTACH ':memory:' AS x",
-    "-- c\nATTACH ':memory:' AS x",
-    "SELECT 1; ATTACH ':memory:' AS x",
-    "SELECT 1; /* c */ DETACH x",
-    "SELECT '--'; ATTACH ':memory:' AS x",
-]
-
-
-@pytest.mark.parametrize("sql", ATTACH_FORMS)
 @SQLITE_GUARD
-def test_attach_and_detach_are_refused(seeded, sql):
+def test_attach_is_not_refused_but_a_pragma_or_name_behind_its_alias_is(seeded):  # #107: no ATTACH rule
     before = snapshot(seeded["engine"])
-    with pytest.raises(AuditImmutableError):
-        _conn(seeded["engine"], DDL(sql))
-    assert snapshot(seeded["engine"]) == before
-    assert_append_audit_works(seeded)
-
-
-@SQLITE_GUARD
-def test_attach_with_a_hyphenated_alias_then_the_pragma_is_refused_at_both_steps(seeded):
-    before = snapshot(seeded["engine"])
-    for sql in ("ATTACH DATABASE ':memory:' AS \"my-db\"", 'PRAGMA "my-db".ignore_check_constraints = ON'):
-        with pytest.raises(AuditImmutableError):
-            _conn(seeded["engine"], DDL(sql))
+    with seeded["engine"].connect() as conn:
+        conn.execute(DDL("ATTACH DATABASE ':memory:' AS \"my-db\""))
+        for sql in (
+            'PRAGMA "my-db".ignore_check_constraints = ON',
+            'DROP TABLE "my-db".audit_entries',
+            'DROP TRIGGER "my-db".audit_entries_no_update',
+            'DELETE FROM "my-db".sqlite_sequence',
+        ):
+            with pytest.raises(AuditImmutableError):
+                conn.execute(DDL(sql))
+        conn.execute(DDL('DETACH DATABASE "my-db"'))
     assert snapshot(seeded["engine"]) == before
 
 
-def test_attach_and_the_pragma_names_are_not_lifted_by_allow_schema_changes(seeded):
+def test_the_pragma_names_behind_an_alias_are_not_lifted_by_allow_schema_changes(seeded):
     with allow_schema_changes():
-        for sql in (ATTACH_FORMS[0], ATTACH_FORMS[3], 'PRAGMA "my-db".writable_schema = 1'):
+        for sql in ('PRAGMA "my-db".writable_schema = 1', "PRAGMA x$y.ignore_check_constraints = ON"):
             with pytest.raises(AuditImmutableError):
                 _conn(seeded["engine"], DDL(sql))
 
@@ -883,11 +847,46 @@ def test_attach_and_the_pragma_names_are_not_lifted_by_allow_schema_changes(seed
         "PRAGMA xwritable_schema",
         "PRAGMA user_version",
         "SELECT 1 FROM audit_entries_archive",
-        "SELECT 'attach'",
-        "SELECT 1; SELECT 2 AS attach_count",
-        "SELECT 1 AS detach",
-        "SELECT attached FROM t",
+        "SELECT 1 FROM audit_entries$x",  # #107: `$` is part of an identifier
+        "SELECT 1 FROM x$audit_entries",
+        "DROP TRIGGER audit_entries_no_update$old",
+        "DELETE FROM sqlite_sequence$x",
+        "DELETE FROM x$sqlite_sequence",
     ],
 )
-def test_near_misses_of_the_pragma_and_attach_words_are_allowed(sql):
+def test_near_misses_of_the_pragma_words_and_names_are_allowed(sql):
     assert not refused_statement(DDL(sql))
+
+
+@pytest.mark.parametrize("sql", ["DROP TABLE audit_entries", "SELECT a$b FROM audit_entries", "DELETE FROM sqlite_sequence -- x$y"])
+def test_a_name_beside_a_dollar_identifier_is_still_refused(sql):
+    assert refused_statement(DDL(sql))
+
+
+# --- #107: QA's Low items ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("key", ["xid", "x_m1", "id_x_m0", "rowid_m12"])  # an alias may itself end in _m<n>
+def test_an_id_under_a_column_key_alias_is_refused(key):
+    alias = Table("audit_entries", MetaData(), Column("id", Integer, key=key), Column("detail", String))
+    rows = [{key: None, "detail": "a"}, {key: None, "detail": "b"}]
+    assert refused_statement(insert(alias).values({key: BIG}))
+    assert refused_statement(insert(alias).values([rows[0], {key: BIG, "detail": "b"}]))
+    assert refused_statement(insert(alias), {key: BIG})
+    assert refused_statement(insert(alias).values(rows), {f"{key}_m1": BIG})
+    assert not refused_statement(insert(alias).values({key: None}))
+    assert not refused_statement(insert(alias).values(rows))
+    assert not refused_statement(insert(alias), {key: None})
+
+
+def test_a_mistyped_execute_key_raises_sqlalchemys_error_not_the_audit_refusal(seeded):
+    statement = insert(AUDIT).values(id=None, **{**_row(seeded), "case_id": bindparam("case")})
+    with pytest.raises(StatementError, match="case"):  # AuditImmutableError is not a StatementError
+        _conn(seeded["engine"], statement, {"cse": seeded["case_id"]})
+
+
+def test_the_replace_upsert_and_lightweight_index_rules_refuse_without_an_id():  # no other rule sees these
+    row, light = dict(case_id=1, actor_id=1, action="a", detail="d", at=NOW), table("audit_entries", column("case_id"))
+    assert refused_statement(insert(AUDIT).prefix_with("OR REPLACE").values(**row))
+    assert refused_statement(sqlite_insert(AUDIT).values(**row).on_conflict_do_update(set_={"detail": "x"}))
+    assert refused_statement(DropIndex(Index("ix_other", light.c.case_id)))
