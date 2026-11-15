@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { config } from "@/services/config";
+import { BAD_RESPONSE_CODE, BAD_RESPONSE_MESSAGE } from "@/services/http";
 import { httpService } from "@/services/httpService";
 import { session } from "@/services/session";
 import { ApiError, type User } from "@/services/types";
@@ -42,8 +43,18 @@ describe("httpService: method and path of each function", () => {
     ["getClosedCases", "GET", "/cases?status=Closed", () => httpService.getClosedCases()],
     ["getCase", "GET", "/cases/C-1001", () => httpService.getCase("C-1001")],
     ["claimCase", "POST", "/cases/C-1001/claim", () => httpService.claimCase("C-1001")],
-    ["transitionCase", "POST", "/cases/C-1001/transition", () => httpService.transitionCase("C-1001", "Investigating")],
-    ["reassignCase", "POST", "/cases/C-1001/reassign", () => httpService.reassignCase("C-1001", "u2")],
+    [
+      "transitionCase",
+      "POST",
+      "/cases/C-1001/transition",
+      () => httpService.transitionCase("C-1001", "Investigating"),
+    ],
+    [
+      "reassignCase",
+      "POST",
+      "/cases/C-1001/reassign",
+      () => httpService.reassignCase("C-1001", "u2"),
+    ],
     ["addNote", "POST", "/cases/C-1001/notes", () => httpService.addNote("C-1001", "hello")],
     ["getAudit", "GET", "/cases/C-1001/audit", () => httpService.getAudit("C-1001")],
     ["listUsers", "GET", "/users", () => httpService.listUsers()],
@@ -92,7 +103,10 @@ describe("httpService: token and bodies", () => {
     expect(JSON.parse(lastCall().init.body ?? "null")).toEqual({ to: "Investigating" });
 
     await httpService.transitionCase("C-1001", "Closed", "duplicate");
-    expect(JSON.parse(lastCall().init.body ?? "null")).toEqual({ to: "Closed", closingReason: "duplicate" });
+    expect(JSON.parse(lastCall().init.body ?? "null")).toEqual({
+      to: "Closed",
+      closingReason: "duplicate",
+    });
   });
 
   it("sends reassign as { userId } and a note as { text }", async () => {
@@ -114,7 +128,10 @@ describe("httpService: token and bodies", () => {
   it("returns the parsed JSON body", async () => {
     fetchMock.mockResolvedValueOnce(reply(200, { cases: [], servedAt: "2026-01-01T00:00:00Z" }));
 
-    await expect(httpService.getQueue()).resolves.toEqual({ cases: [], servedAt: "2026-01-01T00:00:00Z" });
+    await expect(httpService.getQueue()).resolves.toEqual({
+      cases: [],
+      servedAt: "2026-01-01T00:00:00Z",
+    });
   });
 });
 
@@ -149,7 +166,11 @@ describe("httpService: error shapes", () => {
   });
 
   it("falls back to a generic message when the body is not JSON", async () => {
-    fetchMock.mockResolvedValueOnce({ ok: false, status: 500, text: async () => "<html>boom</html>" });
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: async () => "<html>boom</html>",
+    });
 
     await expect(httpService.getQueue()).rejects.toMatchObject({
       status: 500,
@@ -161,7 +182,10 @@ describe("httpService: error shapes", () => {
   it("maps a network failure to ApiError(0, network_error)", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
-    await expect(httpService.getQueue()).rejects.toMatchObject({ status: 0, code: "network_error" });
+    await expect(httpService.getQueue()).rejects.toMatchObject({
+      status: 0,
+      code: "network_error",
+    });
   });
 
   it("clears the session on a 401 from an authenticated call", async () => {
@@ -181,5 +205,67 @@ describe("httpService: error shapes", () => {
     });
 
     expect(session.get()?.token).toBe("tok-1");
+  });
+});
+
+describe("http: a success that is not JSON, and a late 401 (#131)", () => {
+  function rawReply(status: number, text: string) {
+    return { ok: status >= 200 && status < 300, status, text: async () => text };
+  }
+
+  it("a 2xx body that is not JSON is an ApiError with fixed text, not null data", async () => {
+    fetchMock.mockResolvedValueOnce(rawReply(200, "<html>proxy page marker-77</html>"));
+
+    const err = await httpService.getQueue().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({
+      status: 200,
+      code: BAD_RESPONSE_CODE,
+      message: BAD_RESPONSE_MESSAGE,
+    });
+    expect(String((err as ApiError).message)).not.toContain("marker-77");
+  });
+
+  it("a 204, or an empty 200, still resolves", async () => {
+    fetchMock.mockResolvedValueOnce(rawReply(204, ""));
+    await expect(httpService.getQueue()).resolves.toBeNull();
+    fetchMock.mockResolvedValueOnce(rawReply(200, ""));
+    await expect(httpService.getQueue()).resolves.toBeNull();
+  });
+
+  it("a non-JSON error body keeps the old behaviour: a status message, not bad_response", async () => {
+    fetchMock.mockResolvedValueOnce(rawReply(502, "<html>bad gateway</html>"));
+
+    await expect(httpService.getQueue()).rejects.toMatchObject({ status: 502, code: "http_502" });
+  });
+
+  it("a 401 for a request sent with an older token keeps the newer session", async () => {
+    let answer!: (value: unknown) => void;
+    fetchMock.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+
+    const pending = httpService.getQueue(); // sent with tok-1
+    expect(lastCall().init.headers["Authorization"]).toBe("Bearer tok-1");
+    session.set({ token: "tok-2", user }); // signed in again
+    answer(reply(401, { code: "unauthorized", message: "Expired." }));
+
+    await expect(pending).rejects.toMatchObject({ status: 401 });
+    expect(session.get()?.token).toBe("tok-2");
+    expect(session.endedMessage()).toBeNull();
+  });
+
+  it("a 401 for the current token ends the session and keeps the server's message in memory only", async () => {
+    fetchMock.mockResolvedValueOnce(
+      reply(401, { code: "unauthorized", message: "Server says expired 42." }),
+    );
+
+    await expect(httpService.getQueue()).rejects.toMatchObject({ status: 401 });
+
+    expect(session.get()).toBeNull();
+    expect(session.endedMessage()).toBe("Server says expired 42.");
+    expect(JSON.stringify({ ...window.sessionStorage })).not.toContain("expired 42");
+    expect(JSON.stringify({ ...window.localStorage })).not.toContain("expired 42");
+    session.set({ token: "tok-3", user }); // the next sign-in clears it
+    expect(session.endedMessage()).toBeNull();
   });
 });

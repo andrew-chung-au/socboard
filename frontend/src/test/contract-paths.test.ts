@@ -60,7 +60,10 @@ describe("service-layer paths exist in openapi.yaml", () => {
       fetchMock.mockClear();
       await call();
       const [url, init] = fetchMock.mock.calls[0] as [string, { method: string }];
-      const route = url.slice(config.apiBaseUrl.length).split("?")[0].replace(/^\/cases\/[^/]+/, "/cases/{id}");
+      const route = url
+        .slice(config.apiBaseUrl.length)
+        .split("?")[0]
+        .replace(/^\/cases\/[^/]+/, "/cases/{id}");
       sent.push(`${init.method} ${route}`);
     }
 

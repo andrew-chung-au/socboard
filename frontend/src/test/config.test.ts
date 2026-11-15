@@ -85,3 +85,28 @@ describe("services index: which service is selected", () => {
     expect(api).toBe(httpService);
   });
 });
+
+describe("config: VITE_FEATURE_REASSIGN with VITE_USE_MOCK (#131)", () => {
+  async function reassignFor(flag: string | undefined, useMock: string | undefined) {
+    vi.resetModules();
+    vi.stubEnv("VITE_FEATURE_REASSIGN", flag);
+    vi.stubEnv("VITE_USE_MOCK", useMock);
+    return (await import("@/services/config")).config.featureReassign;
+  }
+
+  // The four combinations of the two flags: with the mock off the control is never shown,
+  // because reassignCase is x-status: planned in openapi.yaml and the backend has no route.
+  it.each<[string, string | undefined, boolean]>([
+    ["true", undefined, true],
+    ["true", "false", false],
+    ["false", undefined, false],
+    ["false", "false", false],
+  ])("flag %j with VITE_USE_MOCK %j gives %j", async (flag, useMock, shown) => {
+    expect(await reassignFor(flag, useMock)).toBe(shown);
+  });
+
+  it("unset follows the mock: on in mock mode, off with the mock off", async () => {
+    expect(await reassignFor(undefined, undefined)).toBe(true);
+    expect(await reassignFor(undefined, "false")).toBe(false);
+  });
+});

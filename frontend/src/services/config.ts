@@ -1,10 +1,11 @@
 const useMock = import.meta.env.VITE_USE_MOCK !== "false";
 
-// VITE_FEATURE_REASSIGN: "true" shows the Reassign control, "false" hides it, anything else
-// (unset, empty, another word) follows the mock: on in mock mode, off otherwise. The flag only
-// hides the control; the service (and later the backend) still refuses a reassign by a non-Lead.
+// VITE_FEATURE_REASSIGN: with the mock off the Reassign control is never shown, whatever the flag
+// says, because `reassignCase` is `x-status: planned` in openapi.yaml and the backend has no such
+// route (#131). In mock mode "false" hides it and anything else (unset, empty, "true", another
+// word) shows it. The flag only hides the control; the service still refuses a non-Lead.
 const reassignFlag = import.meta.env.VITE_FEATURE_REASSIGN;
-const featureReassign = reassignFlag === "true" ? true : reassignFlag === "false" ? false : useMock;
+const featureReassign = useMock && reassignFlag !== "false";
 
 export const config = {
   useMock,

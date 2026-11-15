@@ -2,8 +2,8 @@
 
 The database is the first layer: migration 0001 creates three SQLite triggers on `audit_entries`
 that abort any UPDATE, any DELETE and any INSERT that reuses an id. This module is the second
-layer, and the only guard against DDL on the table (the triggers cannot stop a DROP) (decision
-record `_docs/decisions/2026-11-12T0834Z-data-model.md`). Three guards act at the application
+layer, and on SQLite the only guard against DDL on the table (the triggers cannot stop a DROP)
+(decision record `_docs/decisions/2026-11-12T0834Z-data-model.md`; Postgres, below). Three guards act at the application
 layer:
 
 1. Mapper events on `AuditEntry` (registered in `socboard/models.py`) raise on an ORM update or
@@ -37,6 +37,15 @@ layer:
   `sqlite_sequence` passes.
   Not covered: a custom `ExecutableDDLElement` with `@compiles` that emits `DROP TRIGGER`, and
   `CreateIndex` of a new index on a lightweight `audit_entries` column.
+
+On Postgres (#195) the rules are the same and behave the same, since nothing is compiled. The
+database layer there is migration 0002's four `ENABLE ALWAYS` triggers (update, delete, reused id,
+truncate) and the rule that only the table's owner may alter or drop it or its triggers, so the guard
+is an extra layer and not the only one against DDL. The SQLite-only rules (`sqlite_sequence`, the
+two pragma names, the `OR REPLACE` prefix) never match a Postgres statement and stay. Not refused
+on Postgres, and left to the database: a TRUNCATE that reaches the table only by CASCADE, `SET
+session_replication_role`, replacing or dropping a trigger function, and `ALTER SEQUENCE` or
+`setval` on `audit_entries_id_seq` (`tests/test_data_audit_guard_postgres.py`).
 
 Migrations are the one legitimate schema change: `socboard.migrate.run` wraps the Alembic command
 in `allow_schema_changes()`, which lifts the table and index DDL check (and only that) for the
@@ -127,7 +136,11 @@ def _unwrap(table):
 
 
 def _is_audit_name(name) -> bool:
-    """SQLite treats table names case-insensitively, even when quoted."""
+    """Any case counts: SQLite treats table names case-insensitively, even when quoted.
+
+    Postgres keeps a quoted name's case, so there this also refuses a separate table named, for
+    example, `"Audit_Entries"`; harmless, as no such table exists (#195).
+    """
     return isinstance(name, str) and name.lower() == AUDIT_TABLE
 
 

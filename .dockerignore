@@ -18,6 +18,9 @@ frontend/dist
 !.env.example
 !**/.env.example
 
+# The Compose stack's local secrets (#221): `build: .` sends the folder as the build context.
+compose.secrets
+
 # Databases and their journal files.
 *.db
 **/*.db
