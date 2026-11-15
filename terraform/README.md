@@ -253,3 +253,17 @@ Run in `terraform/server/` as in the server section (same backend). These are fo
 ### Teardown
 
 Nothing separate: the bootstrap goes with the instance (server teardown above). Caddy's certificate data stays on the data volume until the volume itself is destroyed.
+
+## The deploy document (`socboard-deploy`)
+
+`server/deploy_document.tf` creates one Systems Manager document, `socboard-deploy` (type `Command`), whose content is `server/socboard-deploy.sh` as written (issue #237, Deploy item D20). It has one parameter, `digest`, an image digest (`sha256:` and 64 lower-case hex digits). The pattern is checked by the document at `SendCommand` and again by the script. It is part of `server/`, so the human applies it first and `terraform plan` shows only the document added (`Plan: 1 to add, 0 to change, 0 to destroy.`); the instance is not replaced, because its user data is untouched.
+
+**Status: not yet run.** `terraform test` (mock provider) checks the document's shape, and the script is tested offline with stub programs (`tests/test_deploy_script.py`). Nothing has been applied or run on the server, so every AWS and Ubuntu detail carries `VERIFY:` in the files until the first deploy.
+
+- **Who may do what.** CI's apply role may change the document (`ManageDeployDocument` in `ci-access/apply.tf`), so once CI applies `server/` (D22b), whoever approves an `infra` apply can change what runs as root with the application secret. The deploy role may only send this one document (it can send no AWS-owned document, so no generic shell) and read a command's result.
+- **A change to the script is an update of the document.** Edit `socboard-deploy.sh`, then plan and apply `server/`; the plan shows the document changed in place. The script is the whole content: it fetches no script at run time.
+- **What the script does, in order:** takes a lock, checks the digest, stops with "already deployed" if that image is running healthy, pulls the image by digest and checks its labels, fetches `compose.yaml` and `compose/db_init.py` of the image's own revision, reads the secret `socboard/app`, writes the variable file in `/run/socboard-deploy` (a memory file system, deleted at exit), starts `db`, checks the stack network's gateway against the expected proxy address, runs `db-init`, `migrate` and `seed`, proves the image as a candidate on `127.0.0.1:8001`, swaps the `app` container, checks the new release (health, the full smoke check, host Caddy) and restores the previous image if a check fails. It never touches Caddy, runs no SQL and undoes no migration.
+- **Exit codes** (the fixed text of each is in the script): 2 refused digest, 3 secret not usable, 4 image or files, 5 `db-init`, `migrate` or `seed`, 6 candidate not healthy, 7 failed after the swap (restored, or nothing to restore), 8 another run in progress, 9 failed and not restored, 10 the stack network's gateway is not the expected proxy address.
+- **The proxy address.** The script sets `SOCBOARD_TRUSTED_PROXIES` to the expected `10.231.77.1` through an override file it writes next to `compose.yaml`, and stops with exit 10 if the stack network's gateway is another address. This needs the gateway pinned in `compose.yaml`; the first deploy waits for that change to merge.
+- **The secret** is set by the human (`put-secret-value` from a file made on the human's own machine); the script never creates it. The task file `_human-tasks/*-human-task-237-engineer-first-deploy.md` has the steps.
+- **Teardown:** nothing separate; `terraform destroy` of `server/` removes the document.

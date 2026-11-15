@@ -258,3 +258,58 @@ run "refuses_a_zone_outside_us_east_1" {
 
   expect_failures = [var.availability_zone]
 }
+
+# The deploy document (issue #237): one Command document, one parameter `digest` with the digest
+# pattern, and the script as its only step. A second parameter, another name, type or pattern, a
+# second step or a changed script header fails here.
+run "deploy_document" {
+  command = plan
+
+  assert {
+    condition     = aws_ssm_document.deploy.name == "socboard-deploy" && aws_ssm_document.deploy.document_type == "Command" && aws_ssm_document.deploy.document_format == "JSON"
+    error_message = "The document must be a JSON Command document named socboard-deploy."
+  }
+
+  assert {
+    condition     = keys(jsondecode(aws_ssm_document.deploy.content).parameters) == ["digest"] && jsondecode(aws_ssm_document.deploy.content).parameters.digest.type == "String" && jsondecode(aws_ssm_document.deploy.content).parameters.digest.allowedPattern == "^sha256:[0-9a-f]{64}$"
+    error_message = "The document must have exactly one parameter, digest, a String with the pattern ^sha256:[0-9a-f]{64}$."
+  }
+
+  assert {
+    condition     = keys(jsondecode(aws_ssm_document.deploy.content).parameters.digest) == ["allowedPattern", "description", "type"]
+    error_message = "The digest parameter must set only its type, description and allowedPattern."
+  }
+
+  assert {
+    condition     = length(jsondecode(aws_ssm_document.deploy.content).mainSteps) == 1 && jsondecode(aws_ssm_document.deploy.content).mainSteps[0].action == "aws:runShellScript"
+    error_message = "The document must have one step, aws:runShellScript."
+  }
+
+  # The step is the script: a shebang first, the one parameter reference, and no other doubled brace
+  # (Systems Manager would read one as a parameter reference).
+  assert {
+    condition = (
+      jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand[0] == "#!/bin/bash"
+      && strcontains(join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand), "DIGEST_PARAM='{{ digest }}'\n")
+      && length(split("{{", join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand))) == 2
+    )
+    error_message = "The step must be the script: first line #!/bin/bash, exactly one parameter reference, {{ digest }}."
+  }
+
+  # Never held: no account number (twelve digits), no ARN, no secret pattern of the kit's scan.
+  assert {
+    condition = alltrue([for p in [
+      "(^|[^0-9])[0-9]{12}([^0-9]|$)",
+      "(^|[^A-Za-z])arn:",
+      "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+      "ghp_[A-Za-z0-9]{36}",
+      "AKIA[0-9A-Z]{16}",
+    ] : !can(regex(p, aws_ssm_document.deploy.content))])
+    error_message = "The document must hold no account number, ARN or secret."
+  }
+
+  assert {
+    condition     = aws_ssm_document.deploy.tags == tomap({ project = "socboard" })
+    error_message = "The document must carry project = socboard."
+  }
+}

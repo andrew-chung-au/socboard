@@ -14,7 +14,8 @@
 # `project = "socboard"` in its own create call (instance, data volume, security group, Elastic IP);
 # the root volume stays untagged (#162 snapshots every volume with that tag); no IAM data source,
 # no remote state and no Parameter Store lookup (all refused to the CI roles); no IAM, DLM, budget,
-# KMS or Systems Manager resource. Never held here: no secret value, in the user data or anywhere.
+# KMS resource. The one Systems Manager resource is the deploy document (deploy_document.tf, #237),
+# which the apply role may manage. Never held here: no secret value, in the user data or anywhere.
 #
 # The bootstrap (issue #233, D17c) is the user data: bootstrap.sh.tftpl, rendered below. It installs
 # Docker, the Compose plugin and Caddy, mounts the data volume and writes Caddy's file.
