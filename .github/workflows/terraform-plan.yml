@@ -6,6 +6,13 @@
 #   prints one fixed message, and the plan file is deleted at the end. Diagnose a failure locally.
 # - scripts/check_plan_actions.py fails the job on any destroy or replace; those go through the human's apply.
 # - The role ARN comes from a secret (masked); never pass it through a variable, a step output or the summary.
+#   The ARN is never printed, so the account number stays out of the log (mask-aws-account-id stays on as well).
+# - The credentials action prints "Authenticated as assumedRoleId AROA..." and mask-aws-account-id does not hide it.
+#   The step before it masks the plan role's unique ID, read from secrets.AWS_PLAN_ROLE_ID (the only place that
+#   secret is used), and fails with a fixed message, no value, if the secret is empty.
+# - The log-check job runs after the plan job, even if it failed (same-repository pull requests only). It holds only
+#   actions: read and no secret: it downloads the plan job's log with gh and fails if the log still holds an
+#   AROA... unique ID (masking is best-effort). It prints only fixed lines, never the log or the match.
 # - The plan role cannot read a secret value, but the reviewer must refuse a change to terraform/server/outputs.tf
 #   that outputs a secret value, or an output not marked sensitive that could hold one (Deploy record, section F).
 # - Instance user data must never hold a secret: the plan role reads it (ec2:Describe*) in every same-repository run.
@@ -59,6 +66,16 @@ jobs:
             exit 1
           fi
 
+      - name: Mask the plan role's unique ID
+        env:
+          ROLE_ID: ${{ secrets.AWS_PLAN_ROLE_ID }}
+        run: |
+          if [ -z "$ROLE_ID" ]; then
+            echo "::error::the plan role unique ID secret is missing or empty"
+            exit 1
+          fi
+          echo "::add-mask::$ROLE_ID"
+
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
@@ -81,3 +98,35 @@ jobs:
       - name: Delete the plan file
         if: always()
         run: rm -f "$RUNNER_TEMP/server.tfplan"
+
+  # Fails closed: no plan job, no log, an empty log or a match all fail the job. Never prints the log or a match.
+  log-check:
+    needs: plan
+    if: always() && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: The plan job's log holds no role unique ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          fail() { echo "log check failed: the plan job's log could not be checked"; exit 1; }
+          log="$RUNNER_TEMP/plan-job.log"
+          trap 'rm -f "$log"' EXIT
+          job_id=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate --jq '.jobs[] | select(.name == "plan") | .id' 2> /dev/null) || fail
+          case "$job_id" in ''|*[!0-9]*) fail ;; esac
+          gh api "repos/$REPO/actions/jobs/$job_id/logs" > "$log" 2> /dev/null || fail
+          if [ ! -s "$log" ]; then fail; fi
+          set +e
+          grep -Eq 'AROA[A-Z0-9]+' "$log"
+          found=$?
+          set -e
+          if [ "$found" -eq 0 ]; then echo "log check FAILED: the plan job's log holds a role unique ID"; exit 1; fi
+          if [ "$found" -ne 1 ]; then fail; fi
+          rm -f "$log"
+          echo "log check passed: the plan job's log holds no role unique ID"
