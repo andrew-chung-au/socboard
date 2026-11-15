@@ -43,6 +43,7 @@ QUEUE_WAIT = 5.0  # the spec's target: a new alert in the queue within 5 seconds
 POLL_INTERVAL = 0.5
 MAX_RESPONSE_BYTES = 1024 * 1024
 
+CUT_SHORT = "the answer was cut short"  # a body that ended before the length the server declared
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 CODE_PATTERN = re.compile(r"[a-z_]{1,40}")
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9._~+/=-]{1,4096}")
@@ -87,6 +88,10 @@ def parse_base_url(url: str) -> tuple[str, str, int | None, str]:
     """(scheme, host, port, path prefix) for a URL this check may send credentials to, or Refused."""
     if not url or any(ord(char) <= 0x20 or ord(char) == 0x7F for char in url):
         raise Refused("the URL is empty or holds a space or control character")
+    # Before the URL is split, so no part of it (a path that cannot be sent, a host that would be
+    # converted and looked up) is acted on; the text never echoes the URL.
+    if not url.isascii():
+        raise Refused("the URL must hold ASCII characters only")
     if "?" in url or "#" in url:
         raise Refused("the URL must have no query and no fragment")
     try:
@@ -190,11 +195,20 @@ class Client:
                 chunks.append(chunk)
             if expired.is_set():  # a body that ends at the shut socket is not a whole answer
                 raise StepFailed("timed out")
+            # `read(65536)` returns an empty end, not an error, when a body with a valid
+            # Content-Length stops early; `http.client` keeps the bytes still owed in `length`
+            # (None when there is no valid length or the answer is chunked, 0 once all arrived).
+            if getattr(response, "length", None):
+                raise StepFailed(CUT_SHORT)
             return Answer(response.status, b"".join(chunks))
         except StepFailed:
             raise
         except TimeoutError:
             raise StepFailed("timed out") from None
+        except http.client.IncompleteRead:  # a chunked answer that ended before its last chunk
+            if expired.is_set():
+                raise StepFailed("timed out") from None
+            raise StepFailed(CUT_SHORT) from None
         except (OSError, http.client.HTTPException, ValueError) as error:
             if expired.is_set():
                 raise StepFailed("timed out") from None

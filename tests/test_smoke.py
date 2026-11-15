@@ -79,6 +79,14 @@ class Recorded:
         self.method, self.path, self.headers, self.body = method, path, headers, body
 
 
+class Raw:
+    """A reply the stub writes byte for byte (a status line, headers and a body of its own), so a
+    test can send a length it does not deliver."""
+
+    def __init__(self, data):
+        self.bytes = data
+
+
 class Stub:
     def __init__(self, routes):
         self.routes = routes
@@ -95,6 +103,9 @@ class Stub:
                 stub.requests.append(request)
                 route = stub.routes.get((self.command, self.path.split("?")[0]))
                 status, payload, headers = route(request) if route else reply(404, {"code": "not_found"})
+                if isinstance(payload, Raw):  # the exact bytes, then the connection closes
+                    self.wfile.write(payload.bytes)
+                    return
                 data = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
                 self.send_response(status)
                 for name, value in headers.items():
@@ -363,6 +374,184 @@ def test_a_redirect_to_another_origin_gets_no_request_there(make_stub, capsys):
 
 # --- the URL rules ------------------------------------------------------------------------------
 
+# --- a truncated answer is a failed step (#212) -------------------------------------------------
+
+CUT = "the answer was cut short"
+AUDIT_PATH = f"/api/cases/{CASE_ID}/audit"
+# (step line, method, path, status line of the cut answer)
+CUT_STEPS = [
+    ("step 1 health", "GET", "/api/health", "200 OK"),
+    ("step 2 login", "POST", "/api/login", "200 OK"),
+    ("step 3 ingest", "POST", "/api/alerts", "201 Created"),
+    ("step 4 queue", "GET", "/api/queue", "200 OK"),
+    ("step 5 audit", "GET", AUDIT_PATH, "200 OK"),
+]
+
+
+def cut_answer(status_line, declared=500, delivered=b'{"status": "o'):
+    return Raw(f"HTTP/1.0 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {declared}\r\n\r\n".encode() + delivered)
+
+
+def routes_with(method, path, raw):
+    routes = good_routes()
+    routes[(method, path)] = lambda request: reply(0, raw)
+    return routes
+
+
+@pytest.mark.parametrize(("step", "method", "path", "status_line"), CUT_STEPS, ids=[case[0] for case in CUT_STEPS])
+def test_a_body_shorter_than_its_content_length_fails_its_step_as_cut_short(step, method, path, status_line, make_stub, capsys):
+    stub = make_stub(routes_with(method, path, cut_answer(status_line)))
+    code, output = run(stub.url, capsys)
+    assert code == 1
+    assert f"{step}: FAILED ({CUT})" in output
+    assert stub.paths().count((method, path)) == 1  # a cut poll at step 4 is not polled again
+    assert_no_secrets(output)
+    later = [line for line in output.splitlines() if line.startswith("step ") and line < step]
+    assert all(line.endswith(": ok") for line in later)
+
+
+@pytest.mark.parametrize("status_line", ["401 Unauthorized", "429 Too Many Requests", "500 Internal Server Error", "403 Forbidden"])
+def test_a_cut_answer_with_another_status_is_cut_short_and_prints_no_code_from_the_partial_body(status_line, make_stub, capsys):
+    raw = cut_answer(status_line, declared=500, delivered=b'{"code": "rate_limited", "mess')
+    code, output = run(make_stub(routes_with("POST", "/api/login", raw)).url, capsys)
+    assert code == 1
+    assert f"step 2 login: FAILED ({CUT})" in output
+    assert "rate_limited" not in output
+    assert "HTTP 4" not in output and "HTTP 5" not in output
+
+
+CHUNKED = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: application/json\r\n\r\n"
+CHUNKED_CUTS = [
+    ("before the first size line", CHUNKED),
+    ("inside a chunk", CHUNKED + b"10\r\nabc"),
+    ("after a whole chunk with no final chunk", CHUNKED + b"4\r\nabcd\r\n"),
+]
+
+
+@pytest.mark.parametrize(("data",), [(case[1],) for case in CHUNKED_CUTS], ids=[case[0] for case in CHUNKED_CUTS])
+def test_a_chunked_answer_that_ends_before_its_last_chunk_is_cut_short(data, make_stub, capsys):
+    code, output = run(make_stub(routes_with("GET", "/api/health", Raw(data))).url, capsys)
+    assert code == 1
+    assert f"step 1 health: FAILED ({CUT})" in output
+    assert "IncompleteRead" not in output
+
+
+WHOLE = b'{"status": "ok"}'
+WHOLE_ANSWERS = [
+    ("no length, ends at the close (HTTP/1.0)", b"HTTP/1.0 200 OK\r\n\r\n" + WHOLE),
+    ("no length, Connection close (HTTP/1.1)", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n" + WHOLE),
+    ("a matching Content-Length", b"HTTP/1.0 200 OK\r\nContent-Length: " + str(len(WHOLE)).encode() + b"\r\n\r\n" + WHOLE),
+    ("more bytes than the Content-Length (the rest is ignored)", b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\n" + WHOLE),
+    ("a Content-Length that is not a number", b"HTTP/1.0 200 OK\r\nContent-Length: abc\r\n\r\n" + WHOLE),
+    ("a negative Content-Length", b"HTTP/1.0 200 OK\r\nContent-Length: -5\r\n\r\n" + WHOLE),
+    ("a chunked answer with its last chunk", b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n0\r\n\r\n"),
+]
+
+
+@pytest.mark.parametrize(("data",), [(case[1],) for case in WHOLE_ANSWERS], ids=[case[0] for case in WHOLE_ANSWERS])
+def test_an_answer_that_is_whole_still_passes_step_1(data, make_stub, capsys):
+    code, output = run(make_stub(routes_with("GET", "/api/health", Raw(data))).url, capsys, "--health-only", environ={})
+    assert code == 0, output
+    assert "step 1 health: ok" in output
+
+
+def test_a_204_with_a_content_length_and_no_body_is_not_reported_as_cut_short(make_stub, capsys):
+    raw = Raw(b"HTTP/1.0 204 No Content\r\nContent-Length: 10\r\n\r\n")
+    code, output = run(make_stub(routes_with("GET", "/api/health", raw)).url, capsys, "--health-only", environ={})
+    assert code == 1
+    assert "step 1 health: FAILED (HTTP 204)" in output  # the status is wrong for health, the body is not cut
+    assert CUT not in output
+
+
+def test_the_response_too_large_text_wins_over_cut_short(make_stub, capsys, monkeypatch):
+    monkeypatch.setattr(smoke, "MAX_RESPONSE_BYTES", 100)
+    raw = cut_answer("200 OK", declared=5000, delivered=b"x" * 400)
+    code, output = run(make_stub(routes_with("GET", "/api/health", raw)).url, capsys, "--health-only", environ={})
+    assert code == 1
+    assert "step 1 health: FAILED (the response is too large)" in output
+
+
+def test_a_cut_answer_that_comes_after_the_time_limit_says_timed_out(capsys, monkeypatch):
+    """Time wins: a declared length sent slowly and then cut when the watchdog shuts the socket."""
+    monkeypatch.setattr(smoke, "REQUEST_TIMEOUT", 0.5)
+    # Headers with a declared length, a few body bytes, then silence on an open connection: the
+    # read blocks until the watchdog shuts the socket, and what it then sees is a short body.
+    for preamble, forever, silent in (
+        (b"HTTP/1.0 200 OK\r\nContent-Length: 100000\r\n\r\nabc", False, True),
+        (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nabc", False, True),
+        (b"HTTP/1.0 200 OK\r\nContent-Length: 100000\r\n\r\n", True, False),
+    ):
+        server = Trickle(preamble, forever, slow_preamble=False, silent=silent)
+        try:
+            code, output = run(server.url, capsys, "--health-only", environ={})
+        finally:
+            server.close()
+        assert code == 1
+        assert "step 1 health: FAILED (timed out)" in output
+        assert CUT not in output
+
+
+def test_the_client_reads_the_bytes_still_owed_from_http_client(make_stub):
+    """The check relies on `HTTPResponse.length` (an undocumented attribute of http.client): zero
+    for a whole body, the bytes owed for a short one. This pins that on the Python in use."""
+    stub = make_stub(routes_with("GET", "/api/health", cut_answer("200 OK", declared=50, delivered=b"abcd")))
+    host, port = stub.url.removeprefix("http://").split(":")
+    connection = http.client.HTTPConnection(host, int(port), timeout=5)
+    connection.request("GET", "/api/health")
+    response = connection.getresponse()
+    while response.read(65536):
+        pass
+    assert response.length == 46
+    connection.close()
+
+
+# --- a URL with a character above ASCII is refused (#212) ----------------------------------------
+
+NON_ASCII_LINE = "smoke check: refused: the URL must hold ASCII characters only"
+NON_ASCII_URLS = [
+    ("a path", "http://127.0.0.1:8000/caf\u00e9"),
+    ("a path on https", "https://example.com/caf\u00e9"),
+    ("an https host", "https://b\u00fccher.example"),
+    ("a fullwidth host", "https://\uff11\uff12\uff17.0.0.1"),
+    ("a non-ASCII port digit", "http://127.0.0.1:\uff18\uff10\uff18\uff10"),
+    ("a non-ASCII scheme letter", "ht\u0442p://127.0.0.1:8000"),
+    ("a non-ASCII user part", "https://us\u00e9r@example.com"),
+    ("a lone surrogate from an undecodable byte", "http://127.0.0.1:8000/\udcff"),
+    ("a loopback host spelled with a non-ASCII letter", "http://l\u00f6calhost:8000"),
+]
+
+
+@pytest.mark.parametrize("flags", [(), ("--health-only",)], ids=["full", "health-only"])
+@pytest.mark.parametrize(("url",), [(case[1],) for case in NON_ASCII_URLS], ids=[case[0] for case in NON_ASCII_URLS])
+def test_a_non_ascii_url_exits_2_with_one_fixed_line_before_any_lookup_or_request(url, flags, capsys, monkeypatch):
+    lookups = []
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: lookups.append(args) or [])
+    code, output = run(url, capsys, *flags)
+    assert code == 2
+    assert output.splitlines() == [NON_ASCII_LINE]
+    assert output.isascii()  # no part of the URL is echoed
+    assert lookups == []
+
+
+def test_a_non_ascii_path_on_a_listening_server_sends_no_request(make_stub, capsys):
+    stub = make_stub()
+    code, output = run(stub.url + "/caf\u00e9", capsys, "--health-only", environ={})
+    assert code == 2
+    assert NON_ASCII_LINE in output
+    assert stub.requests == []
+
+
+def test_a_url_with_a_space_and_a_non_ascii_character_gets_the_space_text(capsys):
+    code, output = run("http://127.0.0.1:8000/caf\u00e9 x", capsys)
+    assert code == 2
+    assert "space or control character" in output
+    assert output.isascii()
+
+
+def test_an_xn_form_host_is_still_accepted():
+    assert smoke.parse_base_url("https://xn--bcher-kva.example") == ("https", "xn--bcher-kva.example", None, "")
+
+
 REFUSED_URLS = [
     ("embedded credentials", "http://user:secretpw@127.0.0.1:8000"),
     ("embedded user only", "http://user@127.0.0.1:8000"),
@@ -507,8 +696,8 @@ def test_a_response_over_the_size_limit_fails_its_step(make_stub, capsys, monkey
 class Trickle:
     """A raw server that sends its answer one byte at a time, so no single read ever times out."""
 
-    def __init__(self, preamble, forever, slow_preamble=True):
-        self.slow_preamble = slow_preamble
+    def __init__(self, preamble, forever, slow_preamble=True, silent=False):
+        self.slow_preamble, self.silent = slow_preamble, silent
         self.server = socket.socket()
         self.server.bind(("127.0.0.1", 0))
         self.server.listen(5)
@@ -537,6 +726,8 @@ class Trickle:
             while not self.stop.is_set() and self.forever:
                 connection.sendall(b" ")
                 time.sleep(0.1)
+            while not self.stop.is_set() and self.silent:  # headers sent, then nothing, connection open
+                time.sleep(0.05)
         except OSError:
             pass
         finally:
