@@ -1,0 +1,128 @@
+# The SOCBoard stack (#221): Postgres 16, two database roles, a migration, a seed, the app and a
+# local proxy. Start it with `make compose-up`, stop it with `make compose-down`.
+#
+# Start order: db healthy -> db-init -> migrate -> seed -> app healthy -> proxy.
+# Roles (decision 8 of the Deploy record): `migrate` connects as the owner role, which owns the
+# tables; `seed` and `app` connect as the application role, which does not own them and cannot
+# disable the audit triggers. Only `db` and `db-init` hold the Postgres superuser's password.
+#
+# Variables Compose reads (the first five are the app's own, socboard/settings.py; the rest are
+# stack-only, described in the README, and the app never reads them). Every required one uses
+# ${NAME:?...}, so a missing or empty one stops `docker compose up` naming it:
+#   required: SOCBOARD_TOKEN_SECRET, SOCBOARD_INGEST_API_KEY, SOCBOARD_SEED_PASSWORD_ANALYST_A,
+#             SOCBOARD_SEED_PASSWORD_ANALYST_B, SOCBOARD_SEED_PASSWORD_LEAD,
+#             STACK_PG_SUPERUSER_PASSWORD, STACK_PG_OWNER_PASSWORD, STACK_PG_APP_PASSWORD
+#   optional: STACK_IMAGE, STACK_PGDATA_DIR, STACK_APP_PORT, STACK_PROXY_PORT
+# The database passwords go into database URLs, so they are letters and digits only.
+
+name: socboard
+
+x-image: &image ${STACK_IMAGE:-socboard-stack:local}
+
+services:
+  db:
+    image: postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657 # VERIFY: the digest is the index digest, read from Docker Hub on 2026-11-15
+    environment:
+      POSTGRES_PASSWORD: ${STACK_PG_SUPERUSER_PASSWORD:?STACK_PG_SUPERUSER_PASSWORD is required}
+      # A subdirectory, so a mount point with a lost+found folder (a new volume) does not stop initdb.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      # A name gives a named volume; an absolute path gives a bind mount (D17c mounts its volume here).
+      - ${STACK_PGDATA_DIR:-socboard-pgdata}:/var/lib/postgresql/data
+    healthcheck:
+      # -h 127.0.0.1: the temporary server of the first start listens on its socket only.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [stack]
+
+  db-init:
+    image: postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+    command: ["sh", "/db-init.sh"]
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGPASSWORD: ${STACK_PG_SUPERUSER_PASSWORD:?STACK_PG_SUPERUSER_PASSWORD is required}
+      STACK_PG_OWNER_PASSWORD: ${STACK_PG_OWNER_PASSWORD:?STACK_PG_OWNER_PASSWORD is required}
+      STACK_PG_APP_PASSWORD: ${STACK_PG_APP_PASSWORD:?STACK_PG_APP_PASSWORD is required}
+    volumes:
+      - ./compose/db-init.sh:/db-init.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [stack]
+
+  migrate:
+    image: *image
+    command: ["python", "-m", "socboard.migrate"]
+    environment:
+      SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_owner:${STACK_PG_OWNER_PASSWORD:?STACK_PG_OWNER_PASSWORD is required}@db:5432/socboard
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks: [stack]
+
+  seed:
+    image: *image
+    command: ["python", "-m", "socboard.seed"]
+    environment:
+      SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_app:${STACK_PG_APP_PASSWORD:?STACK_PG_APP_PASSWORD is required}@db:5432/socboard
+      SOCBOARD_SEED_PASSWORD_ANALYST_A: ${SOCBOARD_SEED_PASSWORD_ANALYST_A:?SOCBOARD_SEED_PASSWORD_ANALYST_A is required}
+      SOCBOARD_SEED_PASSWORD_ANALYST_B: ${SOCBOARD_SEED_PASSWORD_ANALYST_B:?SOCBOARD_SEED_PASSWORD_ANALYST_B is required}
+      SOCBOARD_SEED_PASSWORD_LEAD: ${SOCBOARD_SEED_PASSWORD_LEAD:?SOCBOARD_SEED_PASSWORD_LEAD is required}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [stack]
+
+  app:
+    image: *image
+    build: .
+    # No command: the image's own start command passes --allow-non-loopback-host and runs one worker.
+    environment:
+      SOCBOARD_MODE: deployed
+      SOCBOARD_HOST: 0.0.0.0
+      SOCBOARD_TOKEN_SECRET: ${SOCBOARD_TOKEN_SECRET:?SOCBOARD_TOKEN_SECRET is required}
+      SOCBOARD_INGEST_API_KEY: ${SOCBOARD_INGEST_API_KEY:?SOCBOARD_INGEST_API_KEY is required}
+      SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_app:${STACK_PG_APP_PASSWORD:?STACK_PG_APP_PASSWORD is required}@db:5432/socboard
+      # The proxy's fixed address below. FORWARDED_ALLOW_IPS stays at uvicorn's default (README, "Login attempt limits").
+      SOCBOARD_TRUSTED_PROXIES: 10.231.77.10
+    ports:
+      - 127.0.0.1:${STACK_APP_PORT:-8000}:8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    networks: [stack]
+
+  proxy:
+    image: caddy:2.11.9@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c # VERIFY: the digest is the index digest, read from Docker Hub on 2026-11-15
+    volumes:
+      - ./compose/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - 127.0.0.1:${STACK_PROXY_PORT:-8080}:80
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      stack:
+        ipv4_address: 10.231.77.10
+
+volumes:
+  socboard-pgdata:
+
+networks:
+  stack:
+    ipam:
+      config:
+        # 10.231.77.0/24: Docker's default address pools are 172.17 to 172.31 and 192.168, so this
+        # range avoids them; a VPN that uses it would collide. Other containers get addresses from
+        # the upper half, so the proxy's .10 is never taken.
+        - subnet: 10.231.77.0/24
+          ip_range: 10.231.77.128/25

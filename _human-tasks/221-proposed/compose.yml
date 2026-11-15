@@ -1,0 +1,81 @@
+# The Compose stack (#221): start it, check the roles and the ports, start it again, stop it.
+# No repository secret is read: make compose-up makes throwaway secrets in the runner's checkout.
+name: socboard compose
+
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Every docker compose command below reads the secrets file make compose-up writes.
+      COMPOSE_ENV_FILES: compose.secrets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+
+      - run: uv sync --locked
+
+      - name: Start the stack
+        run: make compose-up
+
+      - name: Health through the proxy and on the app's own port
+        run: |
+          make smoke URL=http://127.0.0.1:8080 HEALTH_ONLY=1
+          make smoke URL=http://127.0.0.1:8000 HEALTH_ONLY=1
+
+      - name: The application role is not a superuser or the owner, cannot disable the triggers, and the four triggers are on
+        run: |
+          docker compose exec -T app python - <<'PY'
+          import os, sys
+          from sqlalchemy import create_engine, text
+          engine = create_engine(os.environ["SOCBOARD_DATABASE_URL"], hide_parameters=True)
+          with engine.connect() as conn:
+              role = conn.execute(text("SELECT rolsuper, rolcreatedb, rolcreaterole, current_user::text FROM pg_roles WHERE rolname = current_user")).one()
+              owner = conn.execute(text("SELECT pg_get_userbyid(relowner)::text FROM pg_class WHERE relname = 'audit_entries'")).scalar_one()
+              triggers = [row[0] for row in conn.execute(text("SELECT tgname || ' ' || tgenabled::text FROM pg_trigger WHERE tgrelid = 'audit_entries'::regclass AND NOT tgisinternal ORDER BY tgname"))]
+          assert role[:3] == (False, False, False), "the application role has a privilege it must not have"
+          assert role[3] == "socboard_app" and owner == "socboard_owner", "wrong roles"
+          assert triggers == ["audit_entries_no_delete A", "audit_entries_no_reuse_id A", "audit_entries_no_truncate A", "audit_entries_no_update A"], triggers
+          try:
+              with engine.begin() as conn:
+                  conn.execute(text("ALTER TABLE audit_entries DISABLE TRIGGER ALL"))
+          except Exception:
+              print("DISABLE TRIGGER refused")
+          else:
+              sys.exit("DISABLE TRIGGER was not refused")
+          PY
+
+      - name: The superuser's password is not in the app's environment
+        run: |
+          if docker compose exec -T app env | grep -q '^STACK_PG_SUPERUSER_PASSWORD='; then
+            echo "the app holds the superuser's password"
+            exit 1
+          fi
+
+      - name: Start again; it succeeds and the seeded users are unchanged
+        run: |
+          count() { docker compose exec -T app python -c "import os; from sqlalchemy import create_engine, text; print(create_engine(os.environ['SOCBOARD_DATABASE_URL']).connect().execute(text('SELECT count(*) FROM users')).scalar_one())"; }
+          before="$(count)"
+          make compose-up
+          after="$(count)"
+          echo "users before $before, after $after"
+          test "$before" = "3" && test "$after" = "3"
+
+      - name: Stop it; the data volume stays
+        run: |
+          make compose-down
+          docker volume ls --quiet | grep --line-regexp socboard_socboard-pgdata
+
+      - name: The stack's log, if anything failed
+        if: failure()
+        run: docker compose logs --no-color
