@@ -165,7 +165,9 @@ def test_the_gate_requires_exactly_the_checks_that_run_on_every_push():
     names = {name for file, (name, on) in other_workflows().items() if file != "publish.yml"}
     assert set(gate_module.REQUIRED) <= names
     unconditional = {
-        name for file, (name, on) in other_workflows().items() if file != "publish.yml" and not (on.get("push") or {}).get("paths")
+        name
+        for file, (name, on) in other_workflows().items()
+        if file != "publish.yml" and "push" in on and not (on["push"] or {}).get("paths")
     }
     assert set(gate_module.REQUIRED) == unconditional
 
