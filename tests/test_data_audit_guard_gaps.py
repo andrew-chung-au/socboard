@@ -41,6 +41,7 @@ from sqlalchemy import (
     text,
     update,
 )
+from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, StatementError
@@ -1189,3 +1190,61 @@ def test_canary_sqlalchemy_still_exposes_resolved_on_a_lambda_statement():
     assert isinstance(spoiled, NullLambdaStatement)
     assert isinstance(spoiled._resolved, Insert)  # `.spoil()` keeps its statement in `_resolved` too
     assert not refused_statement(lambda_stmt(lambda: insert(AUDIT).values(case_id=1, actor_id=1, action="a")))
+
+
+# --- #215: what only the Session do_orm_execute hook does ------------------------------------------
+
+HOOK_ONLY_STATEMENTS = {
+    "update": lambda s: (update(AuditEntry).values(detail="changed"), None),
+    "delete": lambda s: (delete(AuditEntry), None),
+    "insert_explicit_id": lambda s: (insert(AuditEntry), _row(s, id=7)),
+    "ddl_drop_table": lambda s: (DDL("DROP TABLE audit_entries"), None),
+}
+
+
+def _audit_state(engine):
+    """Rows, and on SQLite the audit sequence value, read with raw SQL before any counter is attached."""
+    with engine.connect() as conn:
+        rows = conn.exec_driver_sql("SELECT id, detail FROM audit_entries ORDER BY id").all()
+        sequence = None
+        if engine.dialect.name == "sqlite":  # SQLite-only: sqlite_sequence is SQLite's catalogue
+            sequence = conn.exec_driver_sql("SELECT seq FROM sqlite_sequence WHERE name = 'audit_entries'").scalar()
+    return [tuple(r) for r in rows], sequence
+
+
+def _count_connections(engine):
+    """Count pool checkouts and `begin` events with `event.listen`; returns the counts dict."""
+    counts = {"checkout": 0, "begin": 0}
+    event.listen(engine, "begin", lambda conn: counts.__setitem__("begin", counts["begin"] + 1))
+    event.listen(engine, "checkout", lambda *a: counts.__setitem__("checkout", counts["checkout"] + 1))
+    return counts
+
+
+@pytest.mark.parametrize("name", HOOK_ONLY_STATEMENTS)
+def test_the_session_hook_refuses_before_a_connection_or_transaction_is_taken(seeded, name):
+    """Only the `do_orm_execute` hook can raise before the Session takes a connection (the Engine
+    listener runs on one), so this fails with the hook removed and passes with only the hook."""
+    engine = seeded["engine"]
+    statement, parameters = HOOK_ONLY_STATEMENTS[name](seeded)
+    before = _audit_state(engine)
+    counts = _count_connections(engine)
+    with Session(engine) as session:
+        with pytest.raises(AuditImmutableError) as info:
+            session.execute(statement, parameters)
+        assert str(info.value) == IMMUTABLE_MESSAGE
+        assert counts == {"checkout": 0, "begin": 0}
+        assert not session.in_transaction()
+    assert counts == {"checkout": 0, "begin": 0}
+    assert _audit_state(engine) == before
+
+
+def test_a_statement_through_session_connection_takes_a_connection_before_the_listener_refuses_it(seeded):
+    """The control: the hook does not see `session.connection().execute`, and the counter shows 1 checkout."""
+    engine = seeded["engine"]
+    before = _audit_state(engine)
+    counts = _count_connections(engine)
+    with Session(engine) as session:
+        with pytest.raises(AuditImmutableError):
+            session.connection().execute(update(AuditEntry).values(detail="changed"))
+        assert counts["checkout"] == 1
+    assert _audit_state(engine) == before

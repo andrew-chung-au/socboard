@@ -9,7 +9,8 @@ layer:
 1. Mapper events on `AuditEntry` (registered in `socboard/models.py`) raise on an ORM update or
    delete at flush time.
 2. A `do_orm_execute` hook on `Session` refuses a statement that `refused_statement` rejects, in
-   ORM or Core form.
+   ORM or Core form. It refuses a `Session.execute` statement before the session takes a connection
+   or a transaction, and every statement it refuses the `Engine` listener (item 3) refuses too.
 3. One `before_execute` listener on `Engine` applies the same check to every Core statement on a
    connection, which also covers `Session.bulk_update_mappings`.
 
