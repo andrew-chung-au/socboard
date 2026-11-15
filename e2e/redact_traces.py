@@ -5,19 +5,23 @@
 A Playwright trace records what the test typed (the sign-in password), the headers the page sent (the
 bearer token) and the answers it got (the token in the login response), and the repository is public,
 so the artifact must hold none of them. This replaces, in every file under the results folder and in
-every member of every `.zip` in it (except images and video): each value in the secrets file that is
-at least 8 characters long, any `Bearer <token>`, and any `"token": "<value>"`. It then reads
-everything again and fails if a secret value is still there.
+every member of every `.zip` in it (except images and video): each value in the secrets file, in its
+plain, JSON-escaped and URL-encoded forms, any `Bearer <token>`, and any `"token": "<value>"`. It then
+reads everything again and fails if a secret value is still there.
 
 Exit 0 when done (or when there is no results folder: a passing run leaves none). Exit 1 when a zip cannot
-be read or a value is still found afterwards. Exit 2 when the secrets file cannot be read: the caller
-must not upload anything then. It prints counts and file paths, never a value.
+be read or a value is still found afterwards. Exit 2 when the secrets file cannot be read, holds no value,
+or holds a value shorter than 8 characters (too short to replace safely: it would also change ordinary
+text): the caller must not upload anything then. It prints counts, file paths and variable names, never
+a value.
 """
 
+import json
 import re
 import sys
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 PLACEHOLDER = b"[redacted]"
 MIN_LENGTH = 8
@@ -26,13 +30,28 @@ BEARER = re.compile(rb"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+")
 TOKEN_FIELD = re.compile(rb'("token"\s*:\s*")[^"]*(")')
 
 
+class TooShortError(ValueError):
+    """A value is shorter than MIN_LENGTH. The message names the variable only."""
+
+
 def secret_values(secrets_file: Path) -> list[bytes]:
-    """The values in `NAME=value` lines that are long enough to be worth hiding, longest first."""
+    """Every form of every value in `NAME=value` lines, longest first.
+
+    A line may quote its value. Forms: as written, JSON-escaped (a quote or a backslash in a trace's
+    JSON) and URL-encoded (a value in a URL). A non-empty value under MIN_LENGTH raises TooShortError.
+    """
     values = set()
     for line in secrets_file.read_text(encoding="utf-8").splitlines():
         name, separator, value = line.partition("=")
-        if separator and len(value.strip()) >= MIN_LENGTH:
-            values.add(value.strip().encode())
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if not separator or not value:
+            continue
+        if len(value) < MIN_LENGTH:
+            raise TooShortError(f"{name.strip()} holds a value shorter than {MIN_LENGTH} characters")
+        for form in (value, json.dumps(value)[1:-1], quote(value, safe="")):
+            values.add(form.encode())
     return sorted(values, key=len, reverse=True)
 
 
@@ -80,6 +99,9 @@ def main(argv: list[str]) -> int:
     results, secrets_file = Path(argv[0]), Path(argv[1])
     try:
         values = secret_values(secrets_file)
+    except TooShortError as error:
+        print(f"redact: {error}; nothing was changed and nothing may be uploaded", file=sys.stderr)
+        return 2
     except (OSError, ValueError):
         print("redact: the secrets file could not be read; nothing was changed and nothing may be uploaded", file=sys.stderr)
         return 2

@@ -31,7 +31,8 @@ async function signIn(page: Page, user: User): Promise<void> {
   await expect(page.getByRole("heading", { name: "Open queue" })).toBeVisible();
 }
 
-const WHEN = "2026-11-12T09:00:00Z";
+const EARLY = "2026-11-12T09:00:00Z";
+const LATE = "2026-11-12T10:30:00Z";
 
 test("two analysts and a lead: queue order, claim, a refused second claim, close with a reason, the audit trail", async ({
   page: pageA,
@@ -40,29 +41,35 @@ test("two analysts and a lead: queue order, claim, a refused second claim, close
   const base = stackAddress();
   await assertStackUp(base);
   const marker = newMarker();
-  const titles = { critical: `${marker} critical`, high: `${marker} high`, low: `${marker} low` };
+  // Titles carry no severity word, so a row's severity is read from its badge, not from its title.
+  const titles = { critical: `${marker} alpha`, highOld: `${marker} bravo`, highNew: `${marker} charlie` };
 
-  await test.step("ingest three alerts through the API", async () => {
+  await test.step("ingest three alerts through the API, in an order that is not the queue order", async () => {
+    // Ingested newer high, critical, older high: neither the ingest order nor the title order is the
+    // queue order (critical, older high, newer high), so the test fails unless the server really sorts
+    // by severity, then alert timestamp, then id.
     const created = [
-      await ingest(base, { type: "malware_detection", asset: "dc-01", timestamp: WHEN, title: titles.critical, description: "Synthetic." }),
-      await ingest(base, { type: "unusual_network_traffic", asset: "web-prod-01", timestamp: WHEN, title: titles.high, description: "Synthetic." }),
-      await ingest(base, { type: "failed_login", asset: "kiosk-02", timestamp: WHEN, title: titles.low, description: "Synthetic." }),
+      await ingest(base, { type: "unusual_network_traffic", asset: "web-prod-01", timestamp: LATE, title: titles.highNew, description: "Synthetic." }),
+      await ingest(base, { type: "malware_detection", asset: "dc-01", timestamp: EARLY, title: titles.critical, description: "Synthetic." }),
+      await ingest(base, { type: "failed_login", asset: "dc-01", timestamp: EARLY, title: titles.highOld, description: "Synthetic." }),
     ];
-    expect(created.map((c) => c.severity)).toEqual(["Critical", "High", "Low"]);
+    expect(created.map((c) => c.severity)).toEqual(["High", "Critical", "High"]);
   });
 
   await signIn(pageA, USERS.a);
   const rows = pageA.getByRole("row").filter({ hasText: marker });
 
-  await test.step("analyst-a sees them in the queue, most severe first, each with its severity", async () => {
+  await test.step("analyst-a sees them most severe first, ties broken by the older alert, each row's badge matching", async () => {
     await expect(rows).toHaveCount(3);
-    const text = await rows.allTextContents();
-    const at = (title: string) => text.findIndex((row) => row.includes(title));
-    expect(at(titles.critical)).toBeLessThan(at(titles.high));
-    expect(at(titles.high)).toBeLessThan(at(titles.low));
-    await expect(rows.filter({ hasText: titles.critical })).toContainText(/critical/i);
-    await expect(rows.filter({ hasText: titles.high })).toContainText(/high/i);
-    await expect(rows.filter({ hasText: titles.low })).toContainText(/low/i);
+    const titleOrder = (await rows.allTextContents()).map((row) =>
+      (Object.entries(titles).find(([, t]) => row.includes(t)) ?? ["?"])[0],
+    );
+    expect(titleOrder).toEqual(["critical", "highOld", "highNew"]);
+    // The severity the user sees is the badge in the row's first cell, not a word in the title.
+    const badge = (title: string) => rows.filter({ hasText: title }).locator("td").first();
+    await expect(badge(titles.critical)).toContainText(/critical/i);
+    await expect(badge(titles.highOld)).toContainText(/high/i);
+    await expect(badge(titles.highNew)).toContainText(/high/i);
   });
 
   await rows.filter({ hasText: titles.critical }).click();
@@ -127,6 +134,9 @@ test("two analysts and a lead: queue order, claim, a refused second claim, close
     await expect(audit.locator("tbody tr td:nth-child(3)")).toHaveText(["ingested", "claimed", "status_changed", "status_changed"]);
     await expect(audit.locator("tbody tr td:nth-child(2)")).toHaveText(["system", USERS.a.displayName, USERS.a.displayName, USERS.a.displayName]);
     for (const cell of await audit.locator("tbody tr td:nth-child(1)").allTextContents()) expect(cell.trim()).not.toBe("");
+    // The two status changes are the start and the close, in that order (the ingest text is not pinned).
+    await expect(audit.locator("tbody tr").nth(2).locator("td").nth(3)).toContainText("Investigating");
+    await expect(audit.locator("tbody tr").nth(3).locator("td").nth(3)).toContainText("Closed");
     await contextLead.close();
   });
 });
@@ -164,10 +174,12 @@ test("a wrong password shows the sign-in error and signs nobody in", async ({ pa
   const base = stackAddress();
   await assertStackUp(base);
   await page.goto("/");
+  // A made-up username, not a real account: the answer is the same by design (no username is revealed), and a
+  // failure on a real account would count against that user's 5 in five minutes and could lock a later run out.
   await page.getByLabel("Username").fill(`nobody-${newMarker()}`);
   await page.getByLabel("Password").fill("not-the-password-0"); // a fixed, made-up value: not a credential
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(/invalid username or password/i);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Open queue" })).toHaveCount(0);
   expect(await page.evaluate(() => sessionStorage.length)).toBe(0);
