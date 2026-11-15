@@ -27,11 +27,29 @@ PINS = {
 }
 FIND_CONDITIONS = (
     "github.event.workflow_run.conclusion == 'success'",
-    "github.event.workflow_run.event == 'push'",
+    "github.event.workflow_run.event == 'workflow_run'",
     "github.event.workflow_run.head_branch == 'main'",
     "github.event.workflow_run.head_repository.full_name == github.repository",
 )
 ARTIFACT_KEYS = ("schema", "image", "tag", "digest", "revision")
+CHECKOUT = {"persist-credentials": False}
+DOWNLOAD = {
+    "name": "published-image",
+    "path": "${{ runner.temp }}/published",
+    "run-id": "${{ github.event.workflow_run.id }}",
+    "github-token": "${{ github.token }}",
+    "repository": "${{ github.repository }}",
+}
+FIND_ENV = {"GH_TOKEN": "${{ github.token }}", "HEAD_SHA": "${{ github.event.workflow_run.head_sha }}", "FOUND": "${{ steps.look.outputs.found }}"}
+DEPLOY_ENV = {
+    "DEPLOY_INSTANCE_ID": "${{ vars.DEPLOY_INSTANCE_ID }}",
+    "DEPLOY_URL": "${{ vars.DEPLOY_URL }}",
+    "IMAGE": "${{ needs.find.outputs.image }}",
+    "TAG": "${{ needs.find.outputs.tag }}",
+    "DIGEST": "${{ needs.find.outputs.digest }}",
+    "REVISION": "${{ needs.find.outputs.revision }}",
+    "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+}
 
 
 def triggers(doc):
@@ -149,6 +167,12 @@ def problems(doc, text):
         if "${{" in block:
             found.append("a run block interpolates an expression (values must come through env:)")
             break
+    for name, job in jobs.items():
+        if "continue-on-error" in job or any("continue-on-error" in step for step in steps(job)):
+            found.append(f"{name} has continue-on-error (a failed step must fail the run)")
+        for step in steps(job):
+            if action(step) == "actions/checkout" and (step.get("with") or {}) != CHECKOUT:
+                found.append(f"{name} checks out something other than the default branch's commit without credentials")
     for block in run_blocks(doc):
         if re.search(r"\baws\s", block):
             found.append("a run block calls aws directly (only scripts/ci_deploy.py may)")
@@ -163,13 +187,15 @@ def find_step_problems(find):
     downloads = [s for s in steps(find) if action(s) == "actions/download-artifact"]
     if len(downloads) != 1 or (downloads[0].get("with") or {}).get("name") != "published-image":
         found.append("the find job does not download exactly the artifact published-image")
-    elif (downloads[0].get("with") or {}).get("run-id") != "${{ github.event.workflow_run.id }}":
-        found.append("the find job does not download the artifact of the triggering publish run")
+    elif (downloads[0].get("with") or {}) != DOWNLOAD:
+        found.append("the find job does not download the artifact of the triggering publish run, with the run's token, from this repository")
     script = [s for s in steps(find) if "scripts/ci_deploy.py find" in s.get("run", "")]
     if len(script) != 1 or "--output \"$GITHUB_OUTPUT\"" not in script[0]["run"]:
         found.append("the find job does not decide with scripts/ci_deploy.py find writing to GITHUB_OUTPUT")
-    elif "commits/main" not in script[0]["run"]:
-        found.append("the find job does not read the head of main")
+    elif 'main_head="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"' not in script[0]["run"] or '--main-head "$main_head"' not in script[0]["run"] or '--head-sha "$HEAD_SHA"' not in script[0]["run"]:
+        found.append("the find job does not compare the publish run's commit with the head of main")
+    elif (script[0].get("env") or {}) != FIND_ENV:
+        found.append("the find step's environment is not the token, the publish run's commit and the look result")
     return found
 
 
@@ -193,8 +219,13 @@ def deploy_step_problems(deploy):
     if {"aws-access-key-id", "aws-secret-access-key", "aws-session-token"} & set(credentials):
         found.append("the role step is given a stored key")
     record = steps(deploy)[upload].get("with") or {}
-    if record.get("name") != "deploy-record-dev" or record.get("retention-days") != 90 or record.get("if-no-files-found") != "error":
-        found.append("the record is not uploaded as deploy-record-dev, kept 90 days, failing when missing")
+    if record != {"name": "deploy-record-dev", "path": "${{ runner.temp }}/deploy-record-dev.json", "retention-days": 90, "overwrite": True, "if-no-files-found": "error"}:
+        found.append("the record is not uploaded as deploy-record-dev, kept 90 days, overwritten on a re-run, failing when missing")
+    check_env = steps(deploy)[check].get("env") or {}
+    if check_env != {"DEPLOY_INSTANCE_ID": "${{ vars.DEPLOY_INSTANCE_ID }}", "DEPLOY_URL": "${{ vars.DEPLOY_URL }}"}:
+        found.append("the check step does not read exactly the two Environment variables")
+    if (steps(deploy)[send].get("env") or {}) != DEPLOY_ENV:
+        found.append("the deploy step's environment is not the two variables, the find outputs and the run link")
     if "if" in steps(deploy)[upload]:
         found.append("the record upload has its own if (it must run only after every step passed)")
     return found
@@ -336,8 +367,16 @@ def test_a_direct_aws_call_is_refused():
         (lambda deploy: deploy["steps"][-1]["with"].update({"retention-days": 7}), "kept 90 days"),
         (lambda deploy: deploy["steps"][-1]["with"].update({"name": "deploy-record"}), "deploy-record-dev"),
         (lambda deploy: deploy["steps"][-1].update({"if": "always()"}), "its own if"),
+        (lambda deploy: deploy["steps"][-1]["with"].pop("overwrite"), "overwritten on a re-run"),
+        (lambda deploy: deploy["steps"][0]["with"].update(ref="${{ needs.find.outputs.revision }}"), "default branch's commit"),
+        (lambda deploy: deploy["steps"][0]["with"].update({"persist-credentials": True}), "default branch's commit"),
+        (lambda deploy: deploy["steps"][3].update({"continue-on-error": True}), "continue-on-error"),
+        (lambda deploy: deploy.update({"continue-on-error": True}), "continue-on-error"),
+        (lambda deploy: deploy["steps"][3]["env"].update(DIGEST="${{ needs.find.outputs.tag }}"), "deploy step's environment"),
+        (lambda deploy: deploy["steps"][3]["env"].update(DEPLOY_URL="${{ vars.DEPLOY_INSTANCE_ID }}"), "deploy step's environment"),
+        (lambda deploy: deploy["steps"][1]["env"].update(DEPLOY_URL="${{ vars.OTHER }}"), "check step"),
     ],
-    ids=["reversed", "step after the upload", "no check", "role from a variable", "region", "session name", "stored key", "retention", "record name", "upload always"],
+    ids=["reversed", "step after the upload", "no check", "role from a variable", "region", "session name", "stored key", "retention", "record name", "upload always", "no overwrite", "checkout ref", "credentials kept", "step continues", "job continues", "digest from the tag", "swapped variables", "check reads another"],
 )
 def test_a_wrong_deploy_step_is_refused(change, expected):
     def apply(doc, text):
@@ -354,8 +393,14 @@ def test_a_wrong_deploy_step_is_refused(change, expected):
         (lambda find: find["steps"][2]["with"].update({"run-id": "${{ github.run_id }}"}), "triggering publish run"),
         (lambda find: find["steps"][3].update(run=find["steps"][3]["run"].replace('--output "$GITHUB_OUTPUT"', "")), "writing to GITHUB_OUTPUT"),
         (lambda find: find["steps"][3].update(run=find["steps"][3]["run"].replace("commits/main", "commits/HEAD")), "head of main"),
+        (lambda find: find["steps"][3].update(run=find["steps"][3]["run"].replace('--main-head "$main_head"', '--main-head "$HEAD_SHA"')), "head of main"),
+        (lambda find: find["steps"][2]["with"].pop("github-token"), "run's token"),
+        (lambda find: find["steps"][2]["with"].update(repository="someone/socboard"), "from this repository"),
+        (lambda find: find["steps"][3]["env"].update(HEAD_SHA="${{ github.sha }}"), "find step's environment"),
+        (lambda find: find["steps"][0]["with"].update(ref="${{ github.event.workflow_run.head_sha }}"), "default branch's commit"),
+        (lambda find: find["steps"][3].update({"continue-on-error": True}), "continue-on-error"),
     ],
-    ids=["other artifact", "own run", "no output file", "not main"],
+    ids=["other artifact", "own run", "no output file", "not main", "main head is the publish commit", "no token", "other repository", "other commit", "checkout ref", "continue on error"],
 )
 def test_a_wrong_find_step_is_refused(change, expected):
     def apply(doc, text):

@@ -25,9 +25,12 @@ on:
 jobs:
   find:
     # A pull request, a fork, another branch, or a publish run that failed ends here: the job is skipped.
+    # A publish run's own event is always `workflow_run` (it is started by the other workflows), so the
+    # push is proven by its artifact: the publish job runs, and leaves `published-image`, only for a push
+    # to main (scripts/publish_gate.py). The branch and repository here are those of the commit.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.event == 'workflow_run' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
@@ -128,4 +131,6 @@ jobs:
           name: deploy-record-dev
           path: ${{ runner.temp }}/deploy-record-dev.json
           retention-days: 90
+          # A re-run of the same run replaces the record instead of failing on the existing name.
+          overwrite: true
           if-no-files-found: error

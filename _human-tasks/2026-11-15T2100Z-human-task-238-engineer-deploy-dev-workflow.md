@@ -79,6 +79,9 @@ HUMAN_APPROVED=1 git commit -m "Add the dev deploy workflow and the publish job'
 git push origin issue-238-deploy-dev
 ```
 
+Expected: the commit hook accepts the protected files because of `HUMAN_APPROVED=1`, and the push prints `issue-238-deploy-dev -> issue-238-deploy-dev`.
+If different: if the hook refuses, send its message; never use `--no-verify`.
+
 Tell the orchestrator once it is pushed. CI on the pull request checks both files statically; neither workflow runs on a pull request.
 Risk: none until the merge. `workflow_run` workflows run only from `main`.
 
@@ -90,7 +93,9 @@ After #237's first deploy, in your Terraform checkout of `terraform/server/`:
 terraform output -raw instance_id
 ```
 
-Expected: `i-` followed by 17 hex digits. The host name is the one #237's first deploy used for the public URL.
+Expected: `i-` followed by 17 hex digits.
+
+The host name is the one in the public URL that #237's first deploy reached with a valid certificate: its task file's result row for the URL. Use that row, not a value from memory.
 If different: if Terraform has no output, run `terraform output` and send the names (not the values) it lists.
 Risk: read-only.
 

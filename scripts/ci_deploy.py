@@ -28,12 +28,14 @@ INSTANCE_ID = re.compile(r"i-[0-9a-f]{8,17}")
 URL = re.compile(r"https://[A-Za-z0-9.-]+")
 IMAGE = re.compile(r"ghcr\.io/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._/-]*")
 RUN_ID = re.compile(r"[0-9]{1,20}")
+RUN_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]{1,20}")
 ARTIFACT_KEYS = {"schema", "image", "tag", "digest", "revision"}
 RECORD_KEYS = (
     "schema", "environment", "result", "image", "digest", "tag", "revision", "deployed_at", "run_id", "run_url", "command_id",
 )
 
 POLL_SECONDS = 5
+AWS_CALL_SECONDS = 60
 POLL_LIMIT_SECONDS = 20 * 60
 NOT_YET_SECONDS = 60
 HEALTH_TRIES = 6
@@ -43,19 +45,24 @@ RUNNING = {"Pending", "InProgress", "Delayed"}
 
 DEPLOYED = "socboard-deploy: deployed."
 ALREADY = "socboard-deploy: already deployed. Nothing was changed."
-# The script's fixed lines (#237's failure table). Only these are ever printed from the server's output.
-FAILURES = {
-    "socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.",
-    "socboard-deploy: the application secret could not be read or is not usable. The current release was not changed.",
-    "socboard-deploy: the image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.",
-    "socboard-deploy: db-init, migrate or seed failed. The current release was not changed.",
-    "socboard-deploy: the new app container did not become healthy. The current release was not changed.",
-    "socboard-deploy: the new release failed after the swap; the previous release was restored.",
-    "socboard-deploy: the new release failed after the swap; there was no previous release to restore.",
-    "socboard-deploy: another run is in progress. Nothing was changed.",
-    "socboard-deploy: the new release failed after the swap and the previous release could not be restored.",
-    "socboard-deploy: the stack network's gateway is not the configured proxy address. The current release was not changed.",
+# The script's fixed lines, by exit code (#237's failure table, and terraform/server/socboard-deploy.sh's
+# text_for, which tests/test_ci_deploy.py compares with this table once that file is on main). Only these
+# lines are ever printed from the server's output.
+FAILURE_LINES = {
+    2: ("socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.",),
+    3: ("socboard-deploy: the application secret could not be read or is not usable. The current release was not changed.",),
+    4: ("socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.",),
+    5: ("socboard-deploy: db-init, migrate or seed failed. The current release was not changed.",),
+    6: ("socboard-deploy: the new app container did not become healthy. The current release was not changed.",),
+    7: (
+        "socboard-deploy: the new release failed after the swap; the previous release was restored.",
+        "socboard-deploy: the new release failed after the swap; there was no previous release to restore.",
+    ),
+    8: ("socboard-deploy: another run is in progress. Nothing was changed.",),
+    9: ("socboard-deploy: the new release failed after the swap and the previous release could not be restored.",),
+    10: ("socboard-deploy: the stack network's gateway is not the configured proxy address. The current release was not changed.",),
 }
+FAILURES = {line for lines in FAILURE_LINES.values() for line in lines}
 KNOWN_LINES = FAILURES | {DEPLOYED, ALREADY}
 
 
@@ -122,14 +129,19 @@ def find(args, out):
 
 def run_aws(arguments):
     """One `aws` call. Returns (exit code, stdout text, stderr text); nothing is printed."""
-    done = subprocess.run(["aws", *arguments], capture_output=True, text=True, check=False, timeout=120)
+    try:
+        done = subprocess.run(["aws", *arguments], capture_output=True, text=True, check=False, timeout=AWS_CALL_SECONDS)
+    except FileNotFoundError:
+        raise Refused("the aws command line is not installed on the runner") from None
+    except subprocess.TimeoutExpired:
+        raise Refused(f"aws {arguments[1]} did not answer within {AWS_CALL_SECONDS} seconds") from None
     return done.returncode, done.stdout, done.stderr
 
 
 def check_inputs(args, env):
     for name, value, pattern in (
         ("--digest", args.digest, DIGEST), ("--tag", args.tag, TAG), ("--revision", args.revision, REVISION),
-        ("--image", args.image, IMAGE), ("--run-id", args.run_id, RUN_ID),
+        ("--image", args.image, IMAGE), ("--run-id", args.run_id, RUN_ID), ("--run-url", args.run_url, RUN_URL),
     ):
         if not pattern.fullmatch(value or ""):
             raise Refused(f"{name} is missing or malformed")
@@ -191,30 +203,43 @@ def wait(command_id, instance, clock, sleep):
         sleep(POLL_SECONDS)
 
 
+def output_lines(invocation, key):
+    text = invocation.get(key)
+    return text.splitlines() if isinstance(text, str) else []
+
+
 def fixed_lines(invocation):
-    """The script's own fixed lines in the invocation's output, and nothing else from it."""
-    lines = []
-    for key in ("StandardOutputContent", "StandardErrorContent"):
-        text = invocation.get(key)
-        if isinstance(text, str):
-            lines += [line.strip() for line in text.splitlines() if line.strip() in KNOWN_LINES]
-    return lines
+    """The script's own fixed lines in the invocation's output, exactly as written, and nothing else from it."""
+    return [
+        line
+        for key in ("StandardOutputContent", "StandardErrorContent")
+        for line in output_lines(invocation, key)
+        if line in KNOWN_LINES
+    ]
 
 
 def read_result(invocation):
-    """('deployed' | 'already deployed', lines) or Refused with what to read; prints only fixed text."""
+    """('deployed' | 'already deployed', lines) or Refused with what to read; prints only fixed text.
+
+    A pass needs status Success, response code 0 (an integer), the deployed or already-deployed line on the
+    script's standard output, and no failure line anywhere.
+    """
     status = invocation.get("Status")
     response = invocation.get("ResponseCode")
     lines = fixed_lines(invocation)
     for line in lines:
         print(line)
-    if status != "Success" or response != 0:
-        shown = response if isinstance(response, int) and not isinstance(response, bool) else "unknown"
+    code_ok = isinstance(response, int) and not isinstance(response, bool)
+    if status != "Success" or not code_ok or response != 0:
+        shown = response if code_ok else "unknown"
         known = " The script's fixed line is printed above." if lines else " No fixed line of the script was in the output."
         raise Refused(f"the command ended {status if isinstance(status, str) and status.isalpha() else 'unreadable'} with response code {shown}.{known}")
-    if DEPLOYED in lines:
+    if FAILURES & set(lines):
+        raise Refused("the command succeeded but the script printed a failure line")
+    stdout = output_lines(invocation, "StandardOutputContent")
+    if DEPLOYED in stdout:
         return "deployed", lines
-    if ALREADY in lines:
+    if ALREADY in stdout:
         return "already deployed", lines
     raise Refused("the command succeeded but did not report a deploy")
 
@@ -254,9 +279,9 @@ def make_record(args, result, command_id, finished):
     return record
 
 
-def write_summary(path, record, health):
+def write_summary(path, record, health, line):
     rows = [
-        ("Environment", record["environment"]), ("Result", record["result"]), ("Digest", f"`{record['digest']}`"),
+        ("Environment", record["environment"]), ("Result", record["result"]), ("Script's line", f"`{line}`"), ("Digest", f"`{record['digest']}`"),
         ("Tag", f"`{record['tag']}`"), ("Revision", f"`{record['revision']}`"), ("Command id", f"`{record['command_id']}`"),
         ("Health check", health), ("Run", record["run_url"]),
     ]
@@ -273,6 +298,7 @@ def deploy(args, env, clock=time.monotonic, sleep=time.sleep, now=None):
     invocation = wait(command_id, instance, clock, sleep)
     finished = (now or (lambda: datetime.datetime.now(datetime.timezone.utc)))().strftime("%Y-%m-%dT%H:%M:%SZ")
     result, _ = read_result(invocation)
+    line = DEPLOYED if result == "deployed" else ALREADY
     check_health(url, sleep)
     record = make_record(args, result, command_id, finished)
     with open(args.record, "w", encoding="utf-8") as handle:
@@ -280,7 +306,7 @@ def deploy(args, env, clock=time.monotonic, sleep=time.sleep, now=None):
         handle.write("\n")
     summary = args.summary or env.get("GITHUB_STEP_SUMMARY")
     if summary:
-        write_summary(summary, record, "200")
+        write_summary(summary, record, "200", line)
     print(f"dev is running {args.digest} ({result})")
     return 0
 

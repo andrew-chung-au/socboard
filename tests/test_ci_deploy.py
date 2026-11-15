@@ -241,9 +241,8 @@ def test_a_poll_that_never_ends_stops_at_twenty_minutes(world):
     assert 1200 <= world.clock.now < 1210 and world.record() is None
 
 
-@pytest.mark.parametrize("exit_code", range(2, 11))
-def test_each_failure_exit_code_is_red_with_the_scripts_fixed_line(world, capsys, exit_code):
-    line = sorted(ci.FAILURES)[exit_code - 2]
+@pytest.mark.parametrize(("exit_code", "line"), [(code, line) for code, lines in ci.FAILURE_LINES.items() for line in lines])
+def test_each_failure_exit_code_is_red_with_the_scripts_fixed_line(world, capsys, exit_code, line):
     stub = Stub([inv("Failed", exit_code, f"{line}\n{CANARY}\n", f"log tail with {CANARY}\n")])
     with pytest.raises(ci.Refused) as raised:
         world.go(stub)
@@ -448,3 +447,165 @@ def test_deploy_from_the_command_line_refuses_with_exit_1_and_no_traceback(capsy
     assert ci.main(argv, {"DEPLOY_INSTANCE_ID": INSTANCE, "DEPLOY_URL": URL}) == 1
     err = capsys.readouterr().err
     assert err.startswith("ci_deploy: --digest") and "Traceback" not in err
+
+
+# --- after the two QA passes ---------------------------------------------------------------------
+
+# #237's failure table as its body states it (sha256 a9508b1e...), so a change to either side fails here.
+TABLE_237 = {
+    2: "socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.",
+    3: "socboard-deploy: the application secret could not be read or is not usable. The current release was not changed.",
+    4: "socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.",
+    5: "socboard-deploy: db-init, migrate or seed failed. The current release was not changed.",
+    6: "socboard-deploy: the new app container did not become healthy. The current release was not changed.",
+    8: "socboard-deploy: another run is in progress. Nothing was changed.",
+    9: "socboard-deploy: the new release failed after the swap and the previous release could not be restored.",
+    10: "socboard-deploy: the stack network's gateway is not the configured proxy address. The current release was not changed.",
+}
+
+
+def test_the_failure_lines_are_237s_table_by_exit_code():
+    for code, line in TABLE_237.items():
+        assert ci.FAILURE_LINES[code] == (line,), code
+    assert set(ci.FAILURE_LINES) == set(range(2, 11))
+    assert ci.FAILURE_LINES[7] == (
+        "socboard-deploy: the new release failed after the swap; the previous release was restored.",
+        "socboard-deploy: the new release failed after the swap; there was no previous release to restore.",
+    )
+
+
+SERVER_SCRIPT = ROOT / "terraform" / "server" / "socboard-deploy.sh"
+
+
+def server_script_lines(text):
+    """Every fixed line the server script can print: its say literals, with text_for 7's two endings filled in."""
+    literals = re.findall(r"say '(socboard-deploy: [^']*)'", text) + re.findall(r'say "(socboard-deploy: [^"]*)"', text)
+    endings = re.findall(r"text_for 7 '([^']*)'", text)
+    found = set()
+    for literal in literals:
+        if "$2" in literal:
+            found |= {literal.replace("$2", ending) for ending in endings}
+        else:
+            found.add(literal)
+    return found
+
+
+def test_the_lines_match_the_server_script_once_it_is_on_main():
+    if not SERVER_SCRIPT.exists():
+        # #237's stage (a) (PR #270) is not merged; the table above is the contract until then.
+        assert not (ROOT / "terraform" / "server" / "deploy_document.tf").exists()
+        return
+    assert server_script_lines(SERVER_SCRIPT.read_text(encoding="utf-8")) == ci.KNOWN_LINES
+
+
+def test_the_server_script_reader_finds_every_form():
+    text = """
+    2) say 'socboard-deploy: refused: x.' ;;
+    7) say "socboard-deploy: the new release failed after the swap; $2." ;;
+    10) say "socboard-deploy: the stack network's gateway is wrong." ;;
+  text_for 7 'there was no previous release to restore'
+  text_for 7 'the previous release was restored'
+    say 'socboard-deploy: deployed.'
+"""
+    assert server_script_lines(text) == {
+        "socboard-deploy: refused: x.",
+        "socboard-deploy: the new release failed after the swap; there was no previous release to restore.",
+        "socboard-deploy: the new release failed after the swap; the previous release was restored.",
+        "socboard-deploy: deployed.",
+        "socboard-deploy: the stack network's gateway is wrong.",
+    }
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        f"{ci.DEPLOYED} {CANARY}\n",
+        f"{CANARY} {ci.DEPLOYED}\n",
+        f"  {ci.DEPLOYED}\n",
+        f"{ci.DEPLOYED}\t\n",
+    ],
+    ids=["secret after", "secret before", "leading spaces", "trailing tab"],
+)
+def test_a_fixed_line_with_anything_else_on_it_is_neither_printed_nor_accepted(world, capsys, out):
+    with pytest.raises(ci.Refused, match="did not report a deploy"):
+        world.go(Stub([inv(out=out)]))
+    captured = capsys.readouterr()
+    assert CANARY not in captured.out + captured.err
+
+
+def test_crlf_line_endings_still_give_the_deployed_line(world):
+    assert world.go(Stub([inv(out=f"step one\r\n{ci.DEPLOYED}\r\n")])) == 0
+
+
+def test_a_failure_line_in_standard_error_is_printed_and_nothing_else_from_it(world, capsys):
+    line = ci.FAILURE_LINES[3][0]
+    with pytest.raises(ci.Refused):
+        world.go(Stub([inv("Failed", 3, "", f"{CANARY}\n{line}\n")]))
+    printed = capsys.readouterr().out
+    assert line in printed and CANARY not in printed
+
+
+def test_the_deployed_line_only_in_standard_error_is_not_a_deploy(world):
+    with pytest.raises(ci.Refused, match="did not report a deploy"):
+        world.go(Stub([inv(out="", err=f"{ci.DEPLOYED}\n")]))
+
+
+def test_success_with_a_failure_line_is_red_even_with_the_deployed_line(world):
+    with pytest.raises(ci.Refused, match="printed a failure line"):
+        world.go(Stub([inv(out=f"{ci.FAILURE_LINES[7][0]}\n{ci.DEPLOYED}\n")]))
+    assert world.record() is None
+
+
+@pytest.mark.parametrize("code", [False, 0.0, "0", None])
+def test_a_response_code_that_is_not_the_integer_zero_is_red(world, code):
+    with pytest.raises(ci.Refused, match="response code unknown"):
+        world.go(Stub([inv("Success", code)]))
+
+
+def test_failed_with_response_code_zero_is_red(world):
+    with pytest.raises(ci.Refused, match="ended Failed with response code 0"):
+        world.go(Stub([inv("Failed", 0)]))
+
+
+def test_invocation_does_not_exist_is_retried_for_exactly_the_first_minute(world):
+    stub = Stub([(254, "An error occurred (InvocationDoesNotExist)")])
+    with pytest.raises(ci.Refused):
+        world.go(stub)
+    assert 60 <= world.clock.now < 65
+    assert len(stub.calls) == 1 + 13
+
+
+@pytest.mark.parametrize("tag", ["20261116-010203-aaaaaa", "20261116-010203-aaaaaaaa", "2026116-010203-aaaaaaa", "20261116-01023-aaaaaaa"])
+def test_a_tag_of_the_wrong_length_is_refused(world, tag):
+    with pytest.raises(ci.Refused, match="--tag"):
+        world.go(Stub([inv()]), tag=tag)
+
+
+@pytest.mark.parametrize("url", ["https://example.test/x", "http://github.com/o/r/actions/runs/1", "https://github.com/o/r/actions/runs/1/x", "https://github.com/o/r/actions/runs/"])
+def test_a_run_url_that_is_not_a_github_run_link_is_refused(world, url):
+    with pytest.raises(ci.Refused, match="--run-url"):
+        world.go(Stub([inv()]), run_url=url)
+
+
+def test_a_missing_aws_command_line_is_a_clean_refusal(world, monkeypatch):
+    def missing(argv, **kwargs):
+        raise FileNotFoundError("aws")
+
+    monkeypatch.setattr(subprocess, "run", missing)
+    with pytest.raises(ci.Refused, match="not installed"):
+        ci.send(INSTANCE, DIGEST, SHA)
+
+
+def test_an_aws_call_that_hangs_is_a_clean_refusal(world, monkeypatch):
+    def hang(argv, **kwargs):
+        assert kwargs["timeout"] == 60
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    with pytest.raises(ci.Refused, match="did not answer within 60 seconds"):
+        ci.send(INSTANCE, DIGEST, SHA)
+
+
+def test_the_summary_names_the_scripts_result_line(world):
+    world.go(Stub([inv(out=ci.ALREADY + "\n")]))
+    assert ci.ALREADY in (world.tmp / "summary.md").read_text(encoding="utf-8")
