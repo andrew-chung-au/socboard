@@ -67,7 +67,7 @@ No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS
 - **CI makes no IAM change.** The only IAM action any CI role may take is the apply role passing `socboard-instance` to `ec2.amazonaws.com`. Two explicit denies do it: `iam:*` on every resource except the instance role, and every action except `iam:PassRole` on the instance role. (A plain `Deny iam:*` would also block that PassRole, since an explicit deny always wins.) IAM reads are denied too, so D17b must name the instance profile directly and use no IAM data source. The plan and deploy roles deny `iam:*` outright. All three deny `dlm:*` and `budgets:*`: the snapshot schedule and the budgets are human-applied (#162). That PassRole is the single exception to the next section's rule that CI's deny covers `iam:*` including `socboard-instance`. #156 requires it so CI can attach the instance role. `socboard-snapshot` and every other IAM resource stay fully denied. The apply role also denies `ec2:DeleteSnapshot`, `ec2:ModifySnapshotAttribute` and `ec2:DisableSnapshotBlockPublicAccess`, so it cannot delete a backup or share one outside the account.
 - The apply role's EC2 writes are tag-scoped. D17b must put `project=socboard` on the instance, the data volume, the security group and the Elastic IP in the create call, and leave the root volume untagged (the next section's rule for D17b). The root volume a launch creates is therefore not tag-scoped; tags can be added afterwards only to a resource that already has it. AWS cannot tag-scope the reads (`ec2:Describe*`), the image, subnet and network interface a launch refers to, the VPC a security group is made in, a new security group rule, or the network interface named when an Elastic IP is moved; each of those calls also names a tagged resource. The role can still change the tagged instance itself, including its user data, which is how D17b manages the server.
 - The deploy role reads results with `ssm:GetCommandInvocation` only. AWS authorises it on `*` with no condition key, so it cannot be limited to the deploy document or the instance; the role needs a command id and cannot list other commands.
-- The deploy document is created by the CI-applied server part (D17b or D17c), named `socboard-deploy`. This part only names it. The pattern that checks the image digest lives inside the document, not in this role's policy.
+- The deploy document is created by the deploy-script issue (D20), named `socboard-deploy`. This part only names it. The pattern that checks the image digest lives inside the document, not in this role's policy.
 - No access key, user or secret exists here. No `data` source reads a secret, and no output holds a secret value. The three outputs are role ARNs.
 
 ### Outputs
@@ -111,7 +111,7 @@ Destroy this part after D17b's server part, because the CI roles are what CI use
 
 ## The instance's IAM role, the snapshot schedule and the budgets
 
-`iam-and-budgets/` defines the instance role and profile, the daily snapshot schedule of the data volume with its execution role, and three budget notifications. **The human applies it, and only the human**: an agent never runs `init`, `plan`, `apply` or `destroy`, and CI never applies it (Deploy decision 10). Apply it after `state/` and **before D17b** (the CI-applied server part, not filed yet), which needs its output.
+`iam-and-budgets/` defines the instance role and profile, the daily snapshot schedule of the data volume with its execution role, and three budget notifications. **The human applies it, and only the human**: an agent never runs `init`, `plan`, `apply` or `destroy`, and CI never applies it (Deploy decision 10). Apply it after `state/` and **before D17b** (the server part, issue #199, `server/` below), which needs its output.
 
 **Status: not yet run.** Terraform and AWS were not available when this was written, so `fmt` and `validate` have run only in CI. Every "Expected" line below is what the author expects, not something seen. Every AWS argument and behaviour in `iam-and-budgets/main.tf` carries a `VERIFY:` comment until the first apply (Deploy item D19). Decision record: `_docs/decisions/2026-11-14T0907Z-instance-iam-snapshots-budgets.md` (proposed).
 
@@ -119,7 +119,7 @@ Destroy this part after D17b's server part, because the CI roles are what CI use
 
 - Role `socboard-instance` (only `ec2.amazonaws.com` may assume it) with the AWS-managed `AmazonSSMManagedInstanceCore` policy and one inline statement: `secretsmanager:GetSecretValue` on the one secret ARN you set. Nothing else, no write, no other service. Instance profile `socboard-instance` wraps it.
 - **The snapshot schedule lives here, not in D17b.** An Amazon Data Lifecycle Manager policy snapshots every volume tagged `project=socboard` daily at 03:00 UTC and keeps the 7 newest, so it can be applied before the volume exists. Its execution role `socboard-snapshot` (only `dlm.amazonaws.com` may assume it) is here too. The tag must be unique to this deployment. The role's AWS-managed policy is probably account-wide with no tag condition: the tag only chooses what is scheduled (`VERIFY:` the policy's current document at the first apply).
-- **Rule for D17b:** the server part's root volume must not carry the tag `project=socboard`, or it is snapshotted too (unless you accept the extra snapshots knowingly). D17b's issue must carry this as a criterion.
+- **Rule for D17b:** the server part's root volume must not carry the tag `project=socboard`, or it is snapshotted too (unless you accept the extra snapshots knowingly). D17b's issue (#199) carries this as a criterion.
 - One monthly cost budget with notifications at 50, 80 and 100 percent of actual spend, sent to your address.
 - Every resource is tagged `project=socboard`. No secret is read, held or output.
 
@@ -160,3 +160,56 @@ Destroy in this order, because the state bucket holds this part's state: D17b's 
    Expected: `init` says the backend was removed and copies the state to a local `terraform.tfstate`; `terraform state list` shows the 8 resources.
 3. `terraform destroy`.
    Expected: "Destroy complete! Resources: 8 destroyed." Snapshots the schedule already took are not deleted by this, and destroy stops their expiry, so they are billed until you delete them. The schedule copies the volume's tags to its snapshots (`copy_tags`; `VERIFY:` that it does), so list them in the EC2 console (Snapshots) filtered on the tag `project=socboard` and delete them by hand.
+
+## The server (instance, network and data volume)
+
+`server/` defines the one server: an EC2 instance (Ubuntu 24.04 LTS, x86_64) in the default VPC of `us-east-1`, its Elastic IP, its security group and its encrypted data volume. **The human applies it first** (Deploy item D19), after `state/`, `iam-and-budgets/` and `ci-access/`; later CI applies it on `main` with the apply role (D22b). An agent never runs `init` against the backend, `plan`, `apply` or `destroy` here.
+
+**Status: not yet run against AWS.** `fmt`, `validate` and `terraform test` (mock provider, no credential) ran locally with Terraform 1.17.2 and run in the `terraform check` workflow. Nothing has been planned or applied, so every "Expected" line below is what the author expects, not something seen, and every AWS behaviour in `server/*.tf` carries a `VERIFY:` comment until D19. Decision record: `_docs/decisions/2026-11-14T1742Z-server-instance-network-volume.md`.
+
+### What it creates
+
+- One instance, `t3.small` by default (only `t3.micro`, `t3.small` and `t3.medium` are accepted), standard CPU credits, no key pair (access is through Systems Manager only), the instance profile `socboard-instance` from `iam-and-budgets/`, metadata session tokens required with a hop limit of 1 (a container on a bridge network cannot reach the instance's credentials). Its root volume is encrypted gp3, 20 GiB by default (8 to 30), and deleted with the instance. The image is the newest matching Canonical image at the first apply; later images are ignored, so a new upstream image never replaces the server on its own.
+- One Elastic IP associated with the instance, so the address stays the same when the instance is replaced.
+- One security group: TCP 80 and 443 in from anywhere, TCP 80 and 443 out to anywhere, nothing else (no SSH, no app port). Opening a port means editing the list in `server/main.tf`, and the tests fail on it.
+- One data volume for the database: encrypted gp3 with the AWS-managed key, 10 GiB by default (8 to 50), in the instance's zone (`us-east-1a` by default), attached with the instance stopped before any detach. It has `prevent_destroy`, so any plan that would delete or replace it fails.
+- Outputs: `elastic_ip`, `instance_id` and `data_volume_id`. No secret.
+
+Every variable has a default, so no variable file is needed.
+
+### Rules for later changes
+
+- **The tag is a contract.** The instance, the data volume, the security group and the Elastic IP carry `project=socboard` in their create calls; the CI apply role creates nothing without it. The snapshot schedule in `iam-and-budgets/` backs up every volume with that tag (`target_tags`). Removing or renaming the data volume's tag stops the backups with no error, so a change to it needs `iam-and-budgets/` changed and applied by the human in the same sitting. The root volume must stay untagged, or it is snapshotted too: no tags in `root_block_device`, no volume tags on the instance and no provider default tags.
+- **User data never holds a secret.** This part has no user data (D17c adds the bootstrap). The CI plan role can read an instance's user data (`ec2:Describe*`), so a secret placed there is readable by every pull request run. The application reads its secret from Secrets Manager at run time.
+- **No default VPC?** This part uses the default VPC and its default subnet in the chosen zone, and the CI apply role cannot create network resources. If the account has no default VPC in `us-east-1`, the human creates one (step 1).
+
+### Steps for the human (not yet run)
+
+Run each step in `terraform/server/` with AWS credentials for your own account in your shell (never in a file in this repository). `state/`, `iam-and-budgets/` and `ci-access/` must already be applied.
+
+1. Check for a default VPC: `aws ec2 describe-vpcs --region us-east-1 --filters Name=is-default,Values=true --query 'Vpcs[].VpcId'`.
+   Expected: one VPC id. If the list is empty, run `aws ec2 create-default-vpc --region us-east-1` and check again.
+2. Copy `backend.tf.example` to `backend.tf`, then run `terraform init -backend-config="bucket=<your state bucket_name>"`. Commit `backend.tf`: it holds no bucket name and no secret.
+   Expected: "Successfully configured the backend "s3"!" and "Terraform has been successfully initialized!"; `.terraform.lock.hcl` appears.
+3. Before committing `.terraform.lock.hcl`, add the checksums for every platform that will use it: `terraform providers lock -platform=linux_amd64 -platform=<your own platform>` (skip the second if yours is `linux_amd64`). Then commit it.
+   Expected: "Success! Terraform has updated the lock file."
+4. `terraform plan`, and read it: the image name starts `ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-` and its owner is `099720109477`; the instance has no key name and no user data; four security group rules (80 and 443 each way); the root block device has no tags; the data volume has `project = "socboard"`.
+   Expected: "Plan: 9 to add, 0 to change, 0 to destroy." (instance, Elastic IP, security group, four rules, data volume, attachment). Stop on any surprise.
+5. `terraform apply`, answering `yes`.
+   Expected: "Apply complete! Resources: 9 added, 0 changed, 0 destroyed." and the three outputs printed.
+6. Check in the EC2 console: the root volume has no tags and the data volume has `project=socboard`, both encrypted; the instance's metadata shows tokens required and hop limit 1. In Systems Manager (Fleet Manager) the instance shows as online within about ten minutes.
+   Expected: as described. If the instance never comes online, the egress limit (80 and 443 only) is the first suspect (`VERIFY:`); the change goes through a new issue.
+
+Later `init` runs need the same `-backend-config="bucket=<name>"` argument.
+
+### Teardown (the human's step, destructive)
+
+Destroy this part first, then `iam-and-budgets/`, `ci-access/` and `state/` last (Deploy item D23). Run these in `terraform/server/`. All **not yet run**.
+
+1. Remove the `lifecycle { prevent_destroy = true }` block from `aws_ebs_volume.data` in `server/main.tf`. This is the only manual edit teardown needs; without it `destroy` refuses. Take a last snapshot of the data volume first if you want to keep the data.
+   Expected: `terraform plan -destroy` no longer reports "Instance cannot be destroyed".
+2. `terraform destroy`, answering `yes`. The instance is stopped before the data volume is detached.
+   Expected: "Destroy complete! Resources: 9 destroyed."
+3. Snapshots outlive the destroy: the schedule's snapshots of the data volume stay (and are billed) until `iam-and-budgets/` is torn down and they are deleted by hand, as its teardown says.
+   Expected: the EC2 console (Snapshots) filtered on `project=socboard` still lists them.
+4. Restore the `prevent_destroy` block (or do not commit its removal) unless the deployment is gone for good.
