@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Take the AWS account from nothing to the four Terraform parts applied (`state/`, `iam-and-budgets/`, `ci-access/`, `server/`), set the GitHub Environments and repository variables, and record every `VERIFY:` this apply can settle. Issue: #207 (Deploy item D19a).
+Take the AWS account from nothing to the four Terraform parts applied (`state/`, `iam-and-budgets/`, `ci-access/`, `server/`), set the GitHub Environments, the repository secrets and the state bucket variable, and record every `VERIFY:` this apply can settle. Issue: #207 (Deploy item D19a).
 
 **If a row fails:** write in its note what you saw, stop that line of work, and ask for a new issue. Never edit Terraform, a policy or a workflow during the apply to make a check pass; the fix goes through the new issue, and its number goes in the row.
 
@@ -81,18 +81,19 @@ In the repository's settings, in a browser:
 
 1. Environment `infra`: "Required reviewers" on, with you (or the named reviewer) listed; "Allow administrators to bypass configured protection rules" off; "Deployment branches and tags" set to "Selected branches and tags" with one rule, `main`. If you are the only reviewer, leave "Prevent self-review" off, or no deployment can be approved.
 2. Environment `deploy`: "Deployment branches and tags" set to "Selected branches and tags" with one rule, `main`.
-3. Under "Secrets and variables", "Actions", the "Variables" tab (not Secrets): `AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN` and `AWS_DEPLOY_ROLE_ARN` from step 3.3's output, and `TF_STATE_BUCKET` set to the state bucket name.
+3. Under "Secrets and variables", "Actions", the "Secrets" tab, as repository secrets (not variables): `AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN` and `AWS_DEPLOY_ROLE_ARN` from step 3.3's output. A role ARN contains the account number; GitHub Actions logs print variable values in clear text but mask secrets.
+4. On the "Variables" tab: the repository variable `TF_STATE_BUCKET`, set to the state bucket name. It stays a variable because a bucket name does not identify the account, provided you chose one without the account number (`terraform/README.md`, state bucket, step 2).
 
-Expected: the two Environments show the rules above, and the Variables tab lists four repository variables. This covers the #156 task file's "Before you start" items 2 and 3, and the `AWS_PLAN_ROLE_ARN` it asks for in its step 1.
-Risk: changes who may deploy. Undo: edit or delete the Environment or variable in the same page.
+Expected: the two Environments show the rules above, the Secrets tab lists the three role secrets, and the Variables tab lists `TF_STATE_BUCKET`. This covers the #156 task file's "Before you start" items 2 and 3, and the `AWS_PLAN_ROLE_ARN` secret it asks for in its step 1.
+Risk: changes who may deploy. Undo: edit or delete the Environment, secret or variable in the same page.
 
 ### Step 5: The #156 branch check
 
 Do `_human-tasks/2026-11-14T0928Z-human-task-156-engineer-ci-access-apply-and-branch-check.md`, steps 1 to 5. Its "Before you start" is done by steps 3 and 4 above.
 
-Refusal test: steps 2 and 3 of that file, in the GitHub Actions tab and the clean clone: a throwaway branch must not assume the apply role (`infra`) or the deploy role (`deploy`). Risk: if an Environment's branch rule is missing or wrong, the job prints an assumed-role ARN for that role (no key); that file says what to do.
+Refusal test: steps 2 and 3 of that file, in the GitHub Actions tab and the clean clone: a throwaway branch must not assume the apply role (`infra`) or the deploy role (`deploy`). Risk: if an Environment's branch rule is missing or wrong, the job prints "assumed" and that role's name (no key, no account number); that file says what to do.
 
-Expected: that file's own `Expected:` lines. Record its results in its own table, but write ARNs there as "ARN ends in `socboard-ci-plan/probe-plan`", not in full: the full ARN holds the account number, and this repository is public. After recording, delete the probe workflow runs (Actions, the run, "Delete workflow run"), because their logs print that ARN.
+Expected: that file's own `Expected:` lines. Record its results in its own table. Its probes print only "assumed" with the role and session name, or the AWS error code, and the role ARNs come from secrets, which Actions masks, so no log holds the account number.
 
 ### Step 6: Apply `server/`
 
@@ -155,7 +156,7 @@ If different: write the planned change in row 23 and ask for a new issue.
 
 ### Step 8: Refusal test, the plan role cannot write or read the secret
 
-Refusal test: use the GitHub Actions tab and the clean clone, with a copy of the #156 task's step 1 workflow. Risk: if the plan role's policy is wrong, the tag write would be allowed, but it is a dry run (`--dry-run`), so nothing is changed, and the job prints `DryRunOperation`. If the secret deny is missing, the job prints `ResourceNotFoundException` (the secret has no value yet); it never prints a value, because the command asks only for the name. Neither prints the account number: the job prints only the error code.
+Refusal test: use the GitHub Actions tab and the clean clone, with a copy of the #156 task's step 1 workflow. Risk: if the plan role's policy is wrong, the tag write would be allowed, but it is a dry run (`--dry-run`), so nothing is changed, and the job prints `DryRunOperation`. If the secret deny is missing, the job prints `ResourceNotFoundException` (the secret has no value yet); it never prints a value, because the command asks only for the name. The log is public and an AWS error message can name the assumed role's full ARN, so the job prints only "assumed" or the AWS error code, never an error message or an ARN.
 
 On a new branch `oidc-probe-plan-refusals`, add `.github/workflows/oidc-probe-plan-refusals.yml`:
 
@@ -171,25 +172,31 @@ jobs:
     steps:
       - name: Try one write and one secret read with the plan role
         env:
-          ROLE_ARN: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          ROLE_ARN: ${{ secrets.AWS_PLAN_ROLE_ARN }}
           AWS_DEFAULT_REGION: us-east-1
         run: |
+          # Prints only the AWS error code from "An error occurred (<code>) ...", never the message.
+          code() { grep -o -E '\([A-Za-z.]+\)' | head -n 1 | tr -d '()'; }
           TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
           echo "::add-mask::$TOKEN"
-          read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(aws sts assume-role-with-web-identity --role-arn "$ROLE_ARN" --role-session-name probe-plan-refusals --web-identity-token "$TOKEN" --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+          if ! CREDS=$(aws sts assume-role-with-web-identity --role-arn "$ROLE_ARN" --role-session-name probe-plan-refusals --web-identity-token "$TOKEN" --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text 2>&1); then
+            C=$(code <<< "$CREDS"); echo "assume: ${C:-OTHER}"; exit 1
+          fi
+          read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<< "$CREDS"
           echo "::add-mask::$AWS_ACCESS_KEY_ID"
           echo "::add-mask::$AWS_SECRET_ACCESS_KEY"
           echo "::add-mask::$AWS_SESSION_TOKEN"
           export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-          INSTANCE_ID=$(aws ec2 describe-instances --filters Name=tag:project,Values=socboard Name=instance-state-name,Values=running --query 'Reservations[0].Instances[0].InstanceId' --output text)
-          echo "create-tags (dry run): $(aws ec2 create-tags --dry-run --resources "$INSTANCE_ID" --tags Key=probe,Value=refused 2>&1 | grep -o -m1 -E 'UnauthorizedOperation|DryRunOperation' || echo OTHER)"
-          echo "get-secret-value: $(aws secretsmanager get-secret-value --secret-id socboard/app --query Name --output text 2>&1 | grep -o -m1 -E 'AccessDeniedException|ResourceNotFoundException' || echo OTHER)"
+          echo "assume: assumed"
+          INSTANCE_ID=$(aws ec2 describe-instances --filters Name=tag:project,Values=socboard Name=instance-state-name,Values=running --query 'Reservations[0].Instances[0].InstanceId' --output text 2>/dev/null || true)
+          CT=$(aws ec2 create-tags --dry-run --resources "$INSTANCE_ID" --tags Key=probe,Value=refused 2>&1 | code); echo "create-tags (dry run): ${CT:-OTHER}"
+          GS=$(aws secretsmanager get-secret-value --secret-id socboard/app --query Name --output text 2>&1 | code); echo "get-secret-value: ${GS:-OTHER}"
 ```
 
 Push the branch, open a draft pull request, and read the job's log.
 
-Expected: `create-tags (dry run): UnauthorizedOperation` (EC2's form of access denied) and `get-secret-value: AccessDeniedException` (the explicit deny in `terraform/ci-access/plan.tf`).
-If different: `DryRunOperation` or `ResourceNotFoundException` means the refusal failed (row 24 or 25 FAIL). `OTHER` means neither code was seen: re-run the same call by hand with your own credentials only if you understand why, otherwise record NOT SETTLED. Either way, stop and tell the orchestrator.
+Expected: `assume: assumed`, then `create-tags (dry run): UnauthorizedOperation` (EC2's form of access denied) and `get-secret-value: AccessDeniedException` (the explicit deny in `terraform/ci-access/plan.tf`). No other line from the job's commands.
+If different: `DryRunOperation` or `ResourceNotFoundException` means the refusal failed (row 24 or 25 FAIL). Any other code (for example `InvalidID` if no running instance was found), or `OTHER`, means the check did not run as meant: re-run the same call by hand with your own credentials only if you understand why, otherwise record NOT SETTLED. Either way, stop and tell the orchestrator.
 
 Clean up: close the draft pull request, delete the branch and the run.
 
@@ -201,13 +208,14 @@ Expected: the branch is gone; in the Actions tab, delete the run ("Delete workfl
 
 ### Step 9: The next day, the snapshot
 
-After 03:00 UTC the day after the apply:
+After 04:00 UTC on the day after the apply (the schedule is set for 03:00 UTC, and Data Lifecycle Manager can start up to an hour late):
 
 ```
-aws ec2 describe-snapshots --region us-east-1 --owner-ids self --query 'Snapshots[].[VolumeId,StartTime,State,Tags[?Key==`project`].Value|[0]]' --output text
+aws ec2 describe-snapshots --region us-east-1 --owner-ids self --filters Name=tag:project,Values=socboard --query 'Snapshots[].[VolumeId,StartTime,State]' --output text
 ```
 
-Expected: one snapshot per day since the apply, each with the data volume's id (`terraform output data_volume_id` in `terraform/server/`), state `completed` and `socboard` in the last column (the tag was copied, `copy_tags`). No snapshot of the root volume.
+Expected: one snapshot per day since the apply, each with the data volume's id (`terraform output data_volume_id` in `terraform/server/`) and state `completed`. Being listed at all shows the tag was copied (`copy_tags`). No snapshot of the root volume.
+If different: an empty list can mean no snapshot or a snapshot without the tag. Look in the EC2 console (Snapshots) for a snapshot of the data volume and record which (row 28).
 
 ## Record the result
 
@@ -225,7 +233,7 @@ Write PASS, FAIL or NOT SETTLED in each row, with a short note. A FAIL note says
 | 8 | `ci-access/` steps 1 to 6 as expected: 7 resources (6 if the provider was reused), the provider made without `thumbprint_list` | step 3.3; `ci-access/main.tf` | NOT CHECKED | |
 | 9 | The real OIDC subject has the numeric-id form (#156 step 1 passes); if not, the README's "If the subject has no ids" path was followed, never a looser trust | step 5; `ci-access/main.tf`, `ci-access/plan.tf` | NOT CHECKED | |
 | 10 | Branch check: see the #156 task file's own table (steps 2 and 3 refused) | step 5 | NOT CHECKED | |
-| 11 | `infra`: named reviewer, administrators not exempt, `main` only; `deploy`: `main` only; four repository variables set (write "ARN set") | step 4 | NOT CHECKED | |
+| 11 | `infra`: named reviewer, administrators not exempt, `main` only; `deploy`: `main` only; the three role ARNs set as repository secrets (write "ARN set") and `TF_STATE_BUCKET` as a variable | step 4 | NOT CHECKED | |
 | 12 | T3 is offered in the chosen zone (default `us-east-1a`); whether `us-east-1e` is listed | step 6; `server/variables.tf` | NOT CHECKED | |
 | 13 | The `aws_ami` lookup (owner `099720109477`, the noble 24.04 amd64 name pattern) finds an image, and the default subnet of the zone is found | step 6 (README step 4); `server/main.tf` | NOT CHECKED | |
 | 14 | `server/` steps 1 to 6 as expected: 9 resources, three outputs | step 6; `server/main.tf` | NOT CHECKED | |
@@ -244,6 +252,7 @@ Write PASS, FAIL or NOT SETTLED in each row, with a short note. A FAIL note says
 | 27 | The apply role's EC2 list is enough to apply `server/`. Recorded for D22b; expect NOT SETTLED (row 15 is the evidence so far) | `ci-access/apply.tf` | NOT CHECKED | |
 | 28 | The snapshot schedule took a snapshot of the data volume only, not the root volume, with the tag copied | step 9; `iam-and-budgets/main.tf` (`copy_tags`) | NOT CHECKED | |
 | 29 | `backend.tf` and `.terraform.lock.hcl` committed in all four folders | step 3, step 6 | NOT CHECKED | |
+| 30 | Whether Data Lifecycle Manager needs the `socboard-snapshot` role: the lifecycle policy applies with it as its execution role (Lifecycle Manager console, the policy's IAM role) and takes the step 9 snapshot with it | step 3.2, step 9; `iam-and-budgets/main.tf` (`aws_iam_role.snapshot`) | NOT CHECKED | |
 
 Not settled by this apply, so no row: the deploy role's resource split and its AWS-owned-document deny (`ci-access/deploy.tf`; needs the D20 document), the Environment subject form from a `main` run (`ci-access/apply.tf`, `deploy.tf`; D22, unless the #156 task's optional step 4 shows it), fork pull requests getting no token (D18b), and `stop_instance_before_detaching` (seen only at a detach or teardown).
 
@@ -257,4 +266,4 @@ Not repeated here; D23 owns the runbook. Order: `server/` first, then `iam-and-b
 
 ## Risk
 
-Steps 2, 3 and 6 create billed resources in your account, and step 4 changes who may deploy. Steps 5 and 8 run probe workflows that hold short-lived role credentials during the job only; they print error codes or an assumed-role ARN, never a key. A FAIL is fixed through a new issue, never by an edit during the apply.
+Steps 2, 3 and 6 create billed resources in your account, and step 4 changes who may deploy. Steps 5 and 8 run probe workflows that hold short-lived role credentials during the job only; they print only "assumed" (with the role and session name) or an AWS error code, never a key, an ARN or an error message. A FAIL is fixed through a new issue, never by an edit during the apply.

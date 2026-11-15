@@ -23,6 +23,11 @@ dist/
 *.plan
 tfplan
 crash.log
+crash.*.log
+override.tf
+*_override.tf
+.terraformrc
+terraform.rc
 .terraform/
 *.tfvars
 *.tfvars.json
