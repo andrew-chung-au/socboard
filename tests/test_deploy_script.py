@@ -1,10 +1,11 @@
 """The deploy script (#237, D20), run offline with stub programs.
 
 `terraform/server/socboard-deploy.sh` runs as root on the server. Here it runs as an ordinary user
-in a temporary folder: the run directory, the release directory and the lock live under the test's
-folder because the script reads them from SOCBOARD_DEPLOY_RUN_DIR and SOCBOARD_DEPLOY_OPT_DIR (set
-only by this file; the defaults in the script are the real /run/socboard-deploy and /opt/socboard),
-and its waits come from SOCBOARD_DEPLOY_WAIT and SOCBOARD_DEPLOY_POLL.
+in a temporary folder. The real script holds no test hook: its run directory, release directory and
+waits are constants. Each test runs a copy written to the test's folder with exactly those four
+assignments replaced (REAL_ASSIGNMENTS below), so the run directory, the release directory and the
+lock live under the test's folder; a test asserts the copy differs from the real file in those
+lines only.
 
 PATH holds only the stubs (docker, curl, python3 with a fake boto3, flock, systemctl, apt-get, which
 record every argument in one call log) and a folder of links to the few real programs the script may
@@ -17,10 +18,12 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -38,6 +41,10 @@ REVISION = "0123456789abcdef0123456789abcdef01234567"
 APP = "socboard-app-1"
 CAND = "socboard-deploy-candidate"
 TOKEN = "imdsTokenCanary0001"
+
+# The four lines of the real script the test copy replaces: the folders and waits (the ambient-inputs
+# decision record). The replacements are built in Box.copy_lines.
+REAL_ASSIGNMENTS = ["RUN_DIR='/run/socboard-deploy'", "OPT_DIR='/opt/socboard'", "WAIT=90", "POLL=3"]
 
 SECRET_VALUES = {
     "SOCBOARD_TOKEN_SECRET": "canaryTokenSecret.0123456789abcdefABCDEF",
@@ -94,7 +101,7 @@ def compose_tail(line):
 
 def kind(line):
     """A short name for one recorded call, or None for a note line."""
-    if line.startswith(("VARS_MODE", "IMG ", "SMOKE_ENV", "PULL_ENV")):
+    if line.startswith(("VARS_MODE", "IMG ", "SMOKE_ENV", "PULL_ENV", "ENV_SET ")):
         return None
     words = line.split()
     head = words[0]
@@ -209,6 +216,8 @@ case "$1" in
     fi
     if [ -f "$envf" ]; then echo "VARS_MODE $(@STAT@ -c %a "$envf")" >> "$STUB_CALLS"; [ -f "$S/vars-snapshot" ] || @CP@ "$envf" "$S/vars-snapshot"; else echo "VARS_MODE missing" >> "$STUB_CALLS"; fi
     echo "IMG ${STACK_IMAGE-unset}" >> "$STUB_CALLS"
+    # Names only, never values: a variable the script writes into its variable file must not arrive from outside.
+    for n in @WRITTEN@; do [ -n "${!n+set}" ] && echo "ENV_SET $n" >> "$STUB_CALLS"; done
     for last; do :; done
     case "$sub" in
       up)
@@ -301,13 +310,35 @@ class Box:
             folder.mkdir(parents=True)
         (self.base / "py" / "boto3" / "__init__.py").write_text(FAKE_BOTO3, encoding="utf-8")
         # The stubs call their own helpers by absolute path, so the script's PATH stays small.
-        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "REQUIRED": " ".join(compose_variables())}
+        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "REQUIRED": " ".join(compose_variables()), "WRITTEN": " ".join([*SECRET_VALUES, "STACK_PGDATA_DIR"])}
         for name, body in (("docker", DOCKER), ("curl", CURL), ("systemctl", SYSTEMCTL), ("apt-get", APT), ("python3", PYTHON3), ("flock", FLOCK)):
             self.stub(name, body)
         # The only real programs the script may run (everything else is a builtin or a stub).
         for name in ("mkdir", "rm", "mv", "ln", "readlink", "chmod", "sleep", "env"):
             (self.tools / name).symlink_to(real(name))
         self.write_secret(dict(SECRET_VALUES))
+        self.script = base / "socboard-deploy-copy.sh"
+        self.script.write_text("\n".join(self.copy_lines()) + "\n", encoding="utf-8")
+
+    def copy_lines(self):
+        """The real script's lines with exactly the four assignments of REAL_ASSIGNMENTS replaced."""
+        replacements = {
+            REAL_ASSIGNMENTS[0]: f"RUN_DIR={shlex.quote(str(self.run_dir))}",
+            REAL_ASSIGNMENTS[1]: f"OPT_DIR={shlex.quote(str(self.opt))}",
+            REAL_ASSIGNMENTS[2]: "WAIT=1",
+            REAL_ASSIGNMENTS[3]: "POLL=0.05",
+        }
+        lines = SCRIPT.read_text(encoding="utf-8").split("\n")
+        for old in replacements:
+            assert lines.count(old) == 1, f"the real script must hold the line {old!r} exactly once"
+        return [replacements.get(line, line) for line in lines[:-1]]
+
+    def block_link(self, name):
+        """A `ln` or `mv` in the tool folder that fails for the current-release link and runs the real program otherwise."""
+        path = self.tools / name
+        path.unlink()
+        path.write_text(f'#!{real("bash")}\ncase "$*" in *current.new*) exit 1 ;; esac\nexec {real(name)} "$@"\n', encoding="utf-8")
+        path.chmod(0o755)
 
     def stub(self, name, body):
         text = (STUB_HEAD + body).replace("@NAME@", name)
@@ -341,10 +372,6 @@ class Box:
         argv = list(args) if args else ([digest] if use_default_arg else [])
         environment = {
             "PATH": f"{self.bin}:{self.tools}",
-            "SOCBOARD_DEPLOY_RUN_DIR": str(self.run_dir),
-            "SOCBOARD_DEPLOY_OPT_DIR": str(self.opt),
-            "SOCBOARD_DEPLOY_WAIT": "1",
-            "SOCBOARD_DEPLOY_POLL": "0.05",
             "STUB_STATE": str(self.state),
             "STUB_CALLS": str(self.calls),
             "STUB_TOKEN": TOKEN,
@@ -352,7 +379,7 @@ class Box:
             "STUB_PYPATH": str(self.base / "py"),
         }
         environment.update(env or {})
-        proc = subprocess.run([real("bash"), str(SCRIPT), *argv], env=environment, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run([real("bash"), str(self.script), *argv], env=environment, capture_output=True, text=True, timeout=60)
         return Result(self, proc)
 
     def files_left(self):
@@ -416,6 +443,36 @@ def test_the_script_is_a_bash_script_with_one_parameter_reference():
     assert SCRIPT_TEXT.startswith("#!/bin/bash\n")
     assert SCRIPT_TEXT.count("{{") == 1 and "DIGEST_PARAM='{{ digest }}'\n" in SCRIPT_TEXT
     assert len(SCRIPT_TEXT.encode()) < 60_000  # the document's limit is 64 KB
+
+
+def test_the_real_script_holds_no_test_hook_and_its_folders_and_waits_are_constants():
+    assert "SOCBOARD_DEPLOY_" not in SCRIPT_TEXT
+    lines = SCRIPT_TEXT.splitlines()
+    for line in REAL_ASSIGNMENTS:
+        assert lines.count(line) == 1, line
+    assert [line.split("=")[0] for line in REAL_ASSIGNMENTS] == ["RUN_DIR", "OPT_DIR", "WAIT", "POLL"]
+    assert not [line for line in lines if re.match(r"(RUN_DIR|OPT_DIR|WAIT|POLL)=", line) and line not in REAL_ASSIGNMENTS]
+
+
+def test_the_script_unsets_the_ten_names_it_writes_before_the_lock_and_before_any_use():
+    lines = SCRIPT_TEXT.splitlines()
+    unset = 'unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR'
+    assert lines.count(unset) == 1
+    names = re.search(r"^NAMES=\(([^)]*)\)", SCRIPT_TEXT, re.M).group(1).split()
+    assert len(names) == 8 and names == list(SECRET_VALUES)
+    # The lock is the first step, and the first use of any of the ten names comes after it (the image, the secret, the variable file).
+    for later in ('mkdir -p "$RUN_DIR" || die 8', "flock -n 9 || die 8", 'IMAGE="$IMAGE_REPO@$digest"', "S[${line%%=*}]="):
+        assert SCRIPT_TEXT.index(unset) < SCRIPT_TEXT.index(later), later
+
+
+def test_the_test_copy_differs_from_the_real_script_in_the_four_assignments_only(box):
+    real_lines = SCRIPT_TEXT.splitlines()
+    copy_lines = box.script.read_text(encoding="utf-8").splitlines()
+    assert len(copy_lines) == len(real_lines)
+    changed = [(a, b) for a, b in zip(real_lines, copy_lines) if a != b]
+    assert [a for a, _ in changed] == REAL_ASSIGNMENTS
+    assert [b for _, b in changed] == [f"RUN_DIR={shlex.quote(str(box.run_dir))}", f"OPT_DIR={shlex.quote(str(box.opt))}", "WAIT=1", "POLL=0.05"]
+    assert "SOCBOARD_DEPLOY_" not in box.script.read_text(encoding="utf-8")
 
 
 def test_the_script_names_no_account_number_arn_secret_or_real_address():
@@ -1021,6 +1078,125 @@ def test_every_exit_removes_the_variable_file_and_the_candidate_and_releases_the
     assert_candidate_removed(r)
     assert_safe(r)
     assert not [p for p in box.run_dir.iterdir() if p.name != "lock"]
+
+
+# --- inherited variables (#281) -------------------------------------------------------------------------------
+
+EXPORTED = {name: f"EXPORTEDCANARY-{name}" for name in SECRET_VALUES}
+EXPORTED["STACK_IMAGE"] = f"{REPO}@sha256:{'e' * 64}"
+EXPORTED["STACK_PGDATA_DIR"] = "/exported/EXPORTEDCANARY-pgdata"
+
+
+def assert_no_exported_value(r):
+    calls = "\n".join(r.calls)
+    for value in EXPORTED.values():
+        assert value not in r.out and value not in calls, value
+        for path in r.box.files_left():
+            if path.is_file():
+                assert value not in path.read_text(encoding="utf-8", errors="replace"), f"{value} left in {path}"
+    assert "EXPORTEDCANARY" not in (r.box.state / "vars-snapshot").read_text(encoding="utf-8")
+    assert not [line for line in r.calls if line.startswith("ENV_SET ")], "a written name reached a Compose call"
+
+
+def test_exported_names_the_script_writes_cannot_change_what_runs(box):
+    r = box.run(env=EXPORTED)
+    assert_only(r, 0, DEPLOYED)
+    assert (box.state / "app_image").read_text(encoding="utf-8") == IMAGE
+    assert {line for line in r.calls if line.startswith("IMG ")} == {"IMG unset"}
+    lines = (box.state / "vars-snapshot").read_text(encoding="utf-8").splitlines()
+    expected = [f"{name}={value}" for name, value in SECRET_VALUES.items()] + [f"STACK_IMAGE={IMAGE}", "STACK_PGDATA_DIR=/srv/socboard-data"]
+    assert sorted(lines) == sorted(expected)
+    assert_no_exported_value(r)
+    assert_safe(r)
+
+
+def test_an_exported_stack_image_reaches_only_the_restore_swap_as_the_previous_digest(box):
+    box.set_app(PREVIOUS_IMAGE)
+    box.previous_release()
+    r = box.run(env={**EXPORTED, "STUB_NEW_HEALTH": "unhealthy"})
+    assert r.code == 7 and r.lines()[0] == FIXED["7r"]
+    assert [line for line in r.calls if line.startswith("IMG ") and line != "IMG unset"] == [f"IMG {PREVIOUS_IMAGE}"]
+    assert (box.state / "app_image").read_text(encoding="utf-8") == PREVIOUS_IMAGE
+    assert_no_exported_value(r)
+    assert_safe(r)
+
+
+def test_an_exported_data_folder_changes_neither_the_variable_file_nor_any_compose_call(box):
+    r = box.run(env={"STACK_PGDATA_DIR": EXPORTED["STACK_PGDATA_DIR"]})
+    assert_only(r, 0, DEPLOYED)
+    assert "STACK_PGDATA_DIR=/srv/socboard-data" in (box.state / "vars-snapshot").read_text(encoding="utf-8").splitlines()
+    assert_no_exported_value(r)
+
+
+def test_the_test_hook_variables_have_no_effect_on_a_run(box):
+    hooks = {
+        "SOCBOARD_DEPLOY_RUN_DIR": str(box.base / "canary-run"),
+        "SOCBOARD_DEPLOY_OPT_DIR": str(box.base / "canary-opt"),
+        "SOCBOARD_DEPLOY_WAIT": "500",
+        "SOCBOARD_DEPLOY_POLL": "500",
+    }
+    started = time.monotonic()
+    r = box.run(env={**hooks, "STUB_CAND_HEALTH": "starting"})  # a wait that times out: it ends after the copy's 1 second, not 500
+    assert r.code == 6 and r.lines()[0] == FIXED[6]
+    assert time.monotonic() - started < 20
+    assert not (box.base / "canary-run").exists() and not (box.base / "canary-opt").exists()
+    assert (box.run_dir / "lock").exists() and (box.opt / "releases").is_dir()
+
+
+# --- the current-release link (#281) ----------------------------------------------------------------------------
+
+
+def test_a_good_run_prints_the_success_line_only_with_current_naming_the_new_release(box):
+    r = box.run()
+    release = box.opt / "releases" / f"{REVISION}-{'a' * 12}"
+    assert r.code == 0 and r.out == DEPLOYED + "\n"
+    assert os.readlink(box.opt / "current") == str(release)
+    assert not (box.opt / "current.new").exists()
+
+
+@pytest.mark.parametrize("tool", ["ln", "mv"])
+def test_a_failed_link_restores_the_previous_release_and_exits_7_without_the_success_line(box, tool):
+    box.set_app(PREVIOUS_IMAGE)
+    previous = box.previous_release()
+    box.set_logs(APP, numbered())
+    box.block_link(tool)
+    r = box.run()
+    assert r.code == 7 and r.lines() == [FIXED["7r"]] + numbered()[10:]
+    assert DEPLOYED not in r.out
+    assert (box.state / "app_image").read_text(encoding="utf-8") == PREVIOUS_IMAGE
+    assert [line for line in r.calls if line.startswith("IMG ") and line != "IMG unset"] == [f"IMG {PREVIOUS_IMAGE}"]
+    assert r.kinds().count("up-app") == 2
+    assert (box.opt / "current").resolve() == previous.resolve()
+    assert not (box.opt / "current.new").exists()
+    assert_candidate_removed(r)
+    assert_safe(r)
+
+
+@pytest.mark.parametrize("tool", ["ln", "mv"])
+def test_a_failed_link_on_a_first_deploy_stops_the_app_leaves_the_database_and_exits_7(box, tool):
+    box.set_logs(APP, numbered(5))
+    box.block_link(tool)
+    r = box.run()
+    assert r.code == 7 and r.lines() == [FIXED["7n"]] + numbered(5)
+    assert DEPLOYED not in r.out
+    assert r.kinds().count("up-app") == 1 and r.kinds().count("stop-app") == 1
+    assert not {"stop-other", "rm-other"} & set(r.kinds()) and not [k for k in r.kinds() if k.startswith("compose-")]
+    assert not (box.opt / "current").exists() and not (box.opt / "current").is_symlink()
+    assert not (box.opt / "current.new").exists()
+    assert_safe(r)
+
+
+@pytest.mark.parametrize("tool", ["ln", "mv"])
+def test_a_failed_link_and_a_failed_restore_exit_9(box, tool):
+    box.set_app(PREVIOUS_IMAGE)
+    previous = box.previous_release()
+    box.set_logs(APP, numbered())
+    box.block_link(tool)
+    r = box.run(env={"STUB_RESTORE_HEALTH": "unhealthy"})
+    assert r.code == 9 and r.lines() == [FIXED[9]] + numbered()[10:]
+    assert DEPLOYED not in r.out
+    assert (box.opt / "current").resolve() == previous.resolve() and not (box.opt / "current.new").exists()
+    assert_safe(r)
 
 
 # --- the human's task file ---------------------------------------------------------------------------------
