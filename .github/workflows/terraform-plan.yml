@@ -9,7 +9,7 @@
 # - The plan role cannot read a secret value, but the reviewer must refuse a change to terraform/server/outputs.tf
 #   that outputs a secret value, or an output not marked sensitive that could hold one (Deploy record, section F).
 # - Instance user data must never hold a secret: the plan role reads it (ec2:Describe*) in every same-repository run.
-# - tests/test_workflow_triggers.py checks this file; pull_request_target is forbidden in every workflow.
+# - tests/test_terraform_plan_workflow.py checks this file; pull_request_target is forbidden in every workflow.
 name: terraform plan
 
 permissions: {}
