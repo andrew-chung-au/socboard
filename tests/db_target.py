@@ -46,8 +46,18 @@ SQLITE_MEMORY_URL = "sqlite:///:memory:"
 SQLITE_TRIGGERS = pytest.mark.sqlite_only(
     "needs the SQLite audit triggers; the Postgres ones are in test_data_audit_triggers_postgres.py (#193)"
 )
+# The guard's own tests that fail on Postgres, by the SQLite part they need (#195: the guard on
+# Postgres is tested in test_data_audit_guard_postgres.py; these files may change only their markers).
 SQLITE_GUARD = pytest.mark.sqlite_only(
-    "tests the audit guard's SQLite rules on SQLite tables; the guard's Postgres review is D6b (#195)"
+    "its checks read sqlite_sequence or sqlite_master, SQLite's catalogue; the guard on Postgres is in "
+    "test_data_audit_guard_postgres.py (#195)"
+)
+SQLITE_NULL_ID = pytest.mark.sqlite_only(
+    "sends an INSERT with id NULL, which SQLite fills with a new id and Postgres refuses (NOT NULL); "
+    "its checks also read sqlite_sequence (#195)"
+)
+SQLITE_TRIGGER_SYNTAX = pytest.mark.sqlite_only(
+    "creates a trigger in SQLite syntax (BEGIN ... END), which Postgres does not accept (#195)"
 )
 SQLITE_INTERNALS = pytest.mark.sqlite_only(
     "reads SQLite internals (sqlite_master, a PRAGMA, the driver's transaction mode or SQLite-only SQL)"
