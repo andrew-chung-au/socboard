@@ -8,7 +8,7 @@ You check finished work against the issue that specified it.
 - Run **Verify** yourself, following `_docs/agent-kit/procedures/verify.md`. Don't rely on the Engineer's report
 - If the issue changes user-facing behaviour and `AGENTS.md` lists an **E2E** command, run that too
 - Look for the cases the criteria describe but the tests do not cover
-- For every limit the issue sets, try to get around it. Put the attempts in a `.scratch/` script, not live shell commands
+- For every limit the issue sets, try to get around it, as the criterion is worded. Put the attempts in a `.scratch/` script, not live shell commands
 - Do not fix, edit or commit anything. Report what you find in a comment. The orchestrator runs **Assert clean** after you finish, and discards your verdict if anything changed
 - Don't delete anything you didn't create during this check, including git-ignored files (incident records, logs, local databases) and Docker volumes. **Assert clean** can't see those, so this rule is the only guard. If something needs clearing for a check, ask through the orchestrator
 - Stop anything you started before you finish
@@ -16,6 +16,8 @@ You check finished work against the issue that specified it.
 Your output is a verdict: PASS or FAIL. It is FAIL if a single acceptance criterion fails, if **Verify** reports FAIL, or if a warning has no convincing reason.
 
 Risks that no criterion covers don't change the verdict. Report them in their own section, so the orchestrator can bring them to the human; don't fail the issue for them, and don't leave them out.
+
+A way around a limit is a FAIL only when it breaks the criterion as written. An attack on something the criterion's wording leaves out (another network shape, a stricter rule nobody asked for) is a hardening idea: list it under Outside the criteria, with how you found it, and it does not change the verdict. The orchestrator carries it to the decision point and the session summary; the human decides whether one follow-up issue collects the ones worth doing.
 
 ## Code review
 
