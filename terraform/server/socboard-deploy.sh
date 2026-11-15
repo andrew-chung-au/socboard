@@ -124,6 +124,21 @@ compose() {
   docker compose --project-directory "$REL" --env-file "$VARS" -f "$REL/compose.yaml" -f "$REL/deploy.override.yaml" "$@"
 }
 
+# Every variable compose.yaml requires (`${NAME:?...}`) or interpolates without a default. Compose reads the whole file
+# before any command, `pull` included; the secret is not read yet, so the pull sees a fixed placeholder, never a value.
+# tests/test_deploy_script.py fails when compose.yaml needs a name this list lacks.
+PULL_VARS=(SOCBOARD_TOKEN_SECRET SOCBOARD_INGEST_API_KEY SOCBOARD_SEED_PASSWORD_ANALYST_A
+  SOCBOARD_SEED_PASSWORD_ANALYST_B SOCBOARD_SEED_PASSWORD_LEAD STACK_PG_SUPERUSER_PASSWORD
+  STACK_PG_OWNER_PASSWORD STACK_PG_APP_PASSWORD)
+
+# The one call that runs before the variable file exists: no --env-file content, placeholders in this call's environment only.
+compose_pull_db() {
+  local n
+  local -a placeholders=()
+  for n in "${PULL_VARS[@]}"; do placeholders+=("$n=placeholder-not-a-secret"); done
+  env "${placeholders[@]}" docker compose --project-directory "$REL" --env-file /dev/null -f "$REL/compose.yaml" -f "$REL/deploy.override.yaml" pull db
+}
+
 # healthy within $WAIT seconds, counted from the call; a container that is not running fails at once.
 wait_healthy() {
   local c=$1 start=$SECONDS run st
@@ -223,7 +238,7 @@ done
     '    environment:' "      SOCBOARD_TRUSTED_PROXIES: $PROXY_ADDR"
 } >"$REL/deploy.override.yaml" || die 4
 # The database image (pinned by digest in the fetched compose.yaml) is pulled now, so a failure leaves the old app and the secret alone.
-compose pull db >/dev/null 2>&1 || die 4
+compose_pull_db >/dev/null 2>&1 || die 4
 
 # --- 6. the secret ---------------------------------------------------------------------------------
 if ! python3 -c 'import boto3' >/dev/null 2>&1; then

@@ -94,7 +94,7 @@ def compose_tail(line):
 
 def kind(line):
     """A short name for one recorded call, or None for a note line."""
-    if line.startswith(("VARS_MODE", "IMG ", "SMOKE_ENV")):
+    if line.startswith(("VARS_MODE", "IMG ", "SMOKE_ENV", "PULL_ENV")):
         return None
     words = line.split()
     head = words[0]
@@ -198,8 +198,15 @@ case "$1" in
       esac
     done
     sub=$1; shift
-    # The pull runs before the variable file exists, so it records no variable-file note.
-    if [ "$sub" = pull ]; then [ -n "${STUB_COMPOSE_PULL_FAIL:-}" ] && exit 1; exit 0; fi
+    # The pull runs before the variable file exists, so it records no variable-file note. Like real Compose, it fails
+    # when the --env-file path does not exist, and when compose.yaml's required variables are unset or empty.
+    if [ "$sub" = pull ]; then
+      for n in @REQUIRED@; do echo "PULL_ENV $n=${!n-unset}" >> "$STUB_CALLS"; done
+      [ -n "${STUB_COMPOSE_PULL_FAIL:-}" ] && exit 1
+      [ -e "$envf" ] || exit 1
+      for n in @REQUIRED@; do [ -n "${!n:-}" ] || exit 1; done
+      exit 0
+    fi
     if [ -f "$envf" ]; then echo "VARS_MODE $(@STAT@ -c %a "$envf")" >> "$STUB_CALLS"; [ -f "$S/vars-snapshot" ] || @CP@ "$envf" "$S/vars-snapshot"; else echo "VARS_MODE missing" >> "$STUB_CALLS"; fi
     echo "IMG ${STACK_IMAGE-unset}" >> "$STUB_CALLS"
     for last; do :; done
@@ -294,11 +301,11 @@ class Box:
             folder.mkdir(parents=True)
         (self.base / "py" / "boto3" / "__init__.py").write_text(FAKE_BOTO3, encoding="utf-8")
         # The stubs call their own helpers by absolute path, so the script's PATH stays small.
-        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock")}
+        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "REQUIRED": " ".join(compose_variables())}
         for name, body in (("docker", DOCKER), ("curl", CURL), ("systemctl", SYSTEMCTL), ("apt-get", APT), ("python3", PYTHON3), ("flock", FLOCK)):
             self.stub(name, body)
         # The only real programs the script may run (everything else is a builtin or a stub).
-        for name in ("mkdir", "rm", "mv", "ln", "readlink", "chmod", "sleep"):
+        for name in ("mkdir", "rm", "mv", "ln", "readlink", "chmod", "sleep", "env"):
             (self.tools / name).symlink_to(real(name))
         self.write_secret(dict(SECRET_VALUES))
 
@@ -442,17 +449,48 @@ def test_every_compose_up_and_run_never_pulls_and_every_up_never_builds():
             assert "--no-build" in line, line
     # `compose run` has no --no-build option (Compose 2): it builds only a missing image, and --pull never plus the pulled image avoid that.
     assert sum(1 for line in lines if re.search(r"\bcompose (up|run)\b", line)) >= 5
-    # Stricter (new): the only pulls are the app image's `docker pull` and `compose pull db`.
+    # Stricter (new): the only pulls are the app image's `docker pull` and the one database pull (the separate function's line).
     pulls = [line for line in lines if re.search(r"\bpull\b(?! never)", line) and not line.lstrip().startswith("#")]
-    assert [re.sub(r"\s*(>|\|\|).*", "", line.strip()) for line in pulls] == ['docker pull "$IMAGE"', "compose pull db"], pulls
+    assert [re.sub(r"\s*(>|\|\|).*", "", line.strip()) for line in pulls] == [PULL_DB_LINE, 'docker pull "$IMAGE"'], pulls
+
+
+# The one documented form of the database pull: placeholders in this call's environment, no env file content.
+PULL_DB_LINE = (
+    'env "${placeholders[@]}" docker compose --project-directory "$REL" --env-file /dev/null'
+    ' -f "$REL/compose.yaml" -f "$REL/deploy.override.yaml" pull db'
+)
 
 
 def test_compose_pull_runs_only_for_the_database_service():
-    lines = [line for line in logical_lines(SCRIPT_TEXT) if re.search(r"\bcompose pull\b", line)]
-    assert len(lines) == 1, lines
-    assert re.search(r"\bcompose pull db\b(?!\S)", lines[0]), lines[0]
+    lines = [line for line in logical_lines(SCRIPT_TEXT) if re.search(r"\bpull\b(?! never)", line) and "docker compose" in line and not line.lstrip().startswith("#")]
+    assert [line.strip() for line in lines] == [PULL_DB_LINE], lines
+    assert re.search(r"\bpull db$", lines[0].strip()), lines[0]
     assert not re.search(r"\bpull\b.*\b(app|proxy)\b", lines[0]), lines[0]
-    assert not re.search(r"\bcompose pull\s*($|>|\|)", lines[0]), lines[0]
+    # The wrapper never pulls, and the new function is called once, with its output discarded and a failure exiting 4.
+    assert not re.search(r"\bcompose pull\b", SCRIPT_TEXT)
+    calls = [line.strip() for line in logical_lines(SCRIPT_TEXT) if re.search(r"\bcompose_pull_db\b", line) and not line.lstrip().startswith(("#", "compose_pull_db()"))]
+    assert calls == ["compose_pull_db >/dev/null 2>&1 || die 4"], calls
+
+
+def compose_variables():
+    """Every variable compose.yaml requires or interpolates without a default (`${N:?..}`, `${N?..}`, `${N}`, `$N`)."""
+    text = re.sub(r"(?m)^\s*#.*$|\s#.*$", "", (ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    names = {m.group(1) for m in re.finditer(r"\$\{([A-Za-z_]\w*)(?!\w)(?!:?[-+])[^}]*\}", text)}
+    names |= {m.group(1) for m in re.finditer(r"(?<!\$)\$([A-Za-z_]\w*)", text)}
+    return sorted(names)
+
+
+def pull_vars_in_script():
+    match = re.search(r"^PULL_VARS=\(([^)]*)\)", SCRIPT_TEXT, re.M)
+    assert match, "the script has no PULL_VARS array"
+    return match.group(1).split()
+
+
+def test_the_pull_placeholder_list_covers_every_variable_compose_yaml_needs():
+    needed = compose_variables()
+    assert len(needed) >= 8, needed  # the eight secrets at least: the scan found them
+    assert set(needed) <= set(pull_vars_in_script()), sorted(set(needed) - set(pull_vars_in_script()))
+    assert len(pull_vars_in_script()) == len(set(pull_vars_in_script()))
 
 
 def test_the_image_is_always_the_fixed_repository_by_digest():
@@ -677,6 +715,23 @@ def test_a_failed_pull_exits_4_and_the_current_release_keeps_serving(box):
     r = box.run(env={"STUB_PULL_FAIL": "1"})
     refused(r, 4, FIXED[4])
     assert "fetch-compose" not in r.kinds()
+
+
+PLACEHOLDER = "placeholder-not-a-secret"
+
+
+def test_the_database_pull_has_only_placeholders_and_no_secret_and_the_stub_accepts_it(box):
+    r = box.run()
+    assert_only(r, 0, DEPLOYED)  # the stub fails a pull with a missing --env-file path or an unset or empty required variable
+    pull = [line for line in r.calls if line.startswith("docker compose") and line.endswith(" pull db")]
+    assert len(pull) == 1 and "--env-file /dev/null" in pull[0], pull
+    notes = [line for line in r.calls if line.startswith("PULL_ENV ")]
+    assert notes == [f"PULL_ENV {name}={PLACEHOLDER}" for name in compose_variables()], notes
+    for canary in SECRET_VALUES.values():
+        assert canary not in "\n".join([*pull, *notes]), canary
+    # The secret is read after the pull, and the placeholders reach no later call.
+    assert r.kinds().index("pull-db") < r.kinds().index("secret-read")
+    assert PLACEHOLDER not in (box.state / "vars-snapshot").read_text(encoding="utf-8")
 
 
 def test_a_failed_database_image_pull_exits_4_before_the_secret_and_the_old_app_keeps_serving(box):
