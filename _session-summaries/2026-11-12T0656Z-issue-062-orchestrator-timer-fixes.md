@@ -51,7 +51,7 @@ The three frontend files above. This file.
 ## Decisions made by the human
 
 - The shuffled-order criterion met by the human's five-seed run (option 2), not by a config change.
-- Alongside: #71 and #73 approved as recommended; epoch-batch item 8 narrowed to roadmaps, epoch-batch notes and runbooks; Deploy uses Terraform, mirroring vuln-triage (its lessons applied).
+- Alongside: #71 and #73 approved as recommended; epoch-batch item 8 narrowed to roadmaps, epoch-batch notes and runbooks; Deploy uses Terraform.
 
 ## Mismatches with the spec or design docs
 

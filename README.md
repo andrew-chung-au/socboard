@@ -207,4 +207,4 @@ Real log sources, real customer data, automated response actions and any AI-gene
 
 ## Planned Future Development
 
-A LangGraph triage step that suggests severity and a summary for an analyst to confirm, n8n for intake and escalation, and an MCP server for querying cases and checking VulnTriage for known exposures.
+A LangGraph triage step that suggests severity and a summary for an analyst to confirm, n8n for intake and escalation, and an MCP server for querying cases and checking a vulnerability tracker for known exposures.
