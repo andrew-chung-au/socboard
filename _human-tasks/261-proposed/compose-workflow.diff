@@ -1,9 +1,0 @@
---- a/.github/workflows/compose.yml
-+++ b/.github/workflows/compose.yml
-@@ -33,0 +34,6 @@
-+      - name: The stack network's gateway is the pinned one (#261)
-+        run: |
-+          gateway="$(docker network inspect socboard_stack --format '{{(index .IPAM.Config 0).Gateway}}')"
-+          echo "gateway $gateway"
-+          test "$gateway" = "10.231.77.1"
-+

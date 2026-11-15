@@ -31,6 +31,12 @@ jobs:
       - name: Start the stack
         run: make compose-up
 
+      - name: The stack network's gateway is the pinned one (#261)
+        run: |
+          gateway="$(docker network inspect socboard_stack --format '{{(index .IPAM.Config 0).Gateway}}')"
+          echo "gateway $gateway"
+          test "$gateway" = "10.231.77.1"
+
       - name: Health through the proxy and on the app's own port
         run: |
           make smoke URL=http://127.0.0.1:8080 HEALTH_ONLY=1
