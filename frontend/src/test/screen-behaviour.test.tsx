@@ -89,77 +89,101 @@ afterEach(() => {
 });
 
 describe("queue", () => {
-  it("shows cases in the order the service returns them, not by severity or age", async () => {
-    signIn(ANA);
-    const row = (id: string, title: string, severity: CaseSummary["severity"], alertTimestamp: string): CaseSummary => ({
-      ...makeCase({ id, title, severity, alertTimestamp, status: "New", owner: null }),
-    });
-    // Deliberately out of severity order (Low, Critical, Medium) and out of age order.
-    const served = [
-      row("C-9001", "Order test low", "Low", "2026-01-01T00:00:00.000Z"),
-      row("C-9002", "Order test critical", "Critical", "2026-01-03T00:00:00.000Z"),
-      row("C-9003", "Order test medium", "Medium", "2026-01-02T00:00:00.000Z"),
-    ];
-    vi.spyOn(api, "getQueue").mockResolvedValue({ cases: served, servedAt: "2026-01-04T00:00:00.000Z" });
+  it(
+    "shows cases in the order the service returns them, not by severity or age",
+    async () => {
+      signIn(ANA);
+      const row = (
+        id: string,
+        title: string,
+        severity: CaseSummary["severity"],
+        alertTimestamp: string,
+      ): CaseSummary => ({
+        ...makeCase({ id, title, severity, alertTimestamp, status: "New", owner: null }),
+      });
+      // Deliberately out of severity order (Low, Critical, Medium) and out of age order.
+      const served = [
+        row("C-9001", "Order test low", "Low", "2026-01-01T00:00:00.000Z"),
+        row("C-9002", "Order test critical", "Critical", "2026-01-03T00:00:00.000Z"),
+        row("C-9003", "Order test medium", "Medium", "2026-01-02T00:00:00.000Z"),
+      ];
+      vi.spyOn(api, "getQueue").mockResolvedValue({
+        cases: served,
+        servedAt: "2026-01-04T00:00:00.000Z",
+      });
 
-    renderAt("/");
+      renderAt("/");
 
-    await screen.findByText("Order test low", undefined, WAIT);
-    const shown = screen.getAllByTitle(/^Order test /).map((el) => el.textContent);
-    expect(shown).toEqual(["Order test low", "Order test critical", "Order test medium"]);
-  }, TEST_TIMEOUT);
+      await screen.findByText("Order test low", undefined, WAIT);
+      const shown = screen.getAllByTitle(/^Order test /).map((el) => el.textContent);
+      expect(shown).toEqual(["Order test low", "Order test critical", "Order test medium"]);
+    },
+    TEST_TIMEOUT,
+  );
 });
 
 describe("close dialog", () => {
-  it("cannot submit without a reason, and submits once with the chosen reason", async () => {
-    signIn(ANA);
-    serveCase(() => makeCase({ status: "Investigating", owner: ANA }));
-    const transition = vi
-      .spyOn(api, "transitionCase")
-      .mockResolvedValue(makeCase({ status: "Closed", closingReason: "false_positive" }));
-    await openCasePage();
+  it(
+    "cannot submit without a reason, and submits once with the chosen reason",
+    async () => {
+      signIn(ANA);
+      serveCase(() => makeCase({ status: "Investigating", owner: ANA }));
+      const transition = vi
+        .spyOn(api, "transitionCase")
+        .mockResolvedValue(makeCase({ status: "Closed", closingReason: "false_positive" }));
+      await openCasePage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Close case…" }, WAIT));
-    const dialog = await screen.findByRole("dialog", undefined, WAIT);
-    const submit = within(dialog).getByRole("button", { name: "Close case" });
+      fireEvent.click(await screen.findByRole("button", { name: "Close case…" }, WAIT));
+      const dialog = await screen.findByRole("dialog", undefined, WAIT);
+      const submit = within(dialog).getByRole("button", { name: "Close case" });
 
-    // No reason chosen: the submit control is disabled and a click does nothing.
-    expect(submit).toBeDisabled();
-    fireEvent.click(submit);
-    expect(transition).not.toHaveBeenCalled();
+      // No reason chosen: the submit control is disabled and a click does nothing.
+      expect(submit).toBeDisabled();
+      fireEvent.click(submit);
+      expect(transition).not.toHaveBeenCalled();
 
-    fireEvent.click(within(dialog).getByRole("radio", { name: "False positive" }));
-    expect(submit).toBeEnabled();
-    fireEvent.click(submit);
+      fireEvent.click(within(dialog).getByRole("radio", { name: "False positive" }));
+      expect(submit).toBeEnabled();
+      fireEvent.click(submit);
 
-    await waitFor(() => expect(transition).toHaveBeenCalledTimes(1), WAIT);
-    expect(transition).toHaveBeenCalledWith(CASE_ID, "Closed", "false_positive");
-  }, TEST_TIMEOUT);
+      await waitFor(() => expect(transition).toHaveBeenCalledTimes(1), WAIT);
+      expect(transition).toHaveBeenCalledWith(CASE_ID, "Closed", "false_positive");
+    },
+    TEST_TIMEOUT,
+  );
 });
 
 describe("claim refused with 409", () => {
-  it("shows the server's message and does not show the viewer as the owner", async () => {
-    signIn(ANA);
-    // The case is unowned when the page loads; Ben's claim lands first, so the server refuses
-    // Ana's claim and a later read shows Ben as the owner.
-    let owner: User | null = null;
-    serveCase(() => makeCase({ status: "New", owner }));
-    const claim = vi.spyOn(api, "claimCase").mockImplementation(async () => {
-      owner = BEN;
-      throw new ApiError(409, "already_claimed", "Case is already owned by Ben Okafor.");
-    });
-    await openCasePage();
-    expect(await screen.findByText("owner: Unclaimed", undefined, WAIT)).toBeInTheDocument();
+  it(
+    "shows the server's message and does not show the viewer as the owner",
+    async () => {
+      signIn(ANA);
+      // The case is unowned when the page loads; Ben's claim lands first, so the server refuses
+      // Ana's claim and a later read shows Ben as the owner.
+      let owner: User | null = null;
+      serveCase(() => makeCase({ status: "New", owner }));
+      const claim = vi.spyOn(api, "claimCase").mockImplementation(async () => {
+        owner = BEN;
+        throw new ApiError(409, "already_claimed", "Case is already owned by Ben Okafor.");
+      });
+      await openCasePage();
+      expect(await screen.findByText("owner: Unclaimed", undefined, WAIT)).toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Claim case" }, WAIT));
+      fireEvent.click(await screen.findByRole("button", { name: "Claim case" }, WAIT));
 
-    // The message can also appear in a toast, so allow more than one match.
-    const messages = await screen.findAllByText(/Case is already owned by Ben Okafor\./, undefined, WAIT);
-    expect(messages.length).toBeGreaterThan(0);
-    expect(claim).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText("owner: Ben Okafor", undefined, WAIT)).toBeInTheDocument();
-    expect(screen.queryByText("owner: Ana Alvarez")).toBeNull();
-  }, TEST_TIMEOUT);
+      // The message can also appear in a toast, so allow more than one match.
+      const messages = await screen.findAllByText(
+        /Case is already owned by Ben Okafor\./,
+        undefined,
+        WAIT,
+      );
+      expect(messages.length).toBeGreaterThan(0);
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText("owner: Ben Okafor", undefined, WAIT)).toBeInTheDocument();
+      expect(screen.queryByText("owner: Ana Alvarez")).toBeNull();
+    },
+    TEST_TIMEOUT,
+  );
 });
 
 describe("Lead-only actions", () => {
@@ -215,7 +239,11 @@ describe("VITE_FEATURE_REASSIGN: the Reassign control for a Lead on a claimed op
 
   it.each<[string, Vars, boolean]>([
     ["true with the mock on shows it", { flag: "true", mock: undefined }, true],
-    ["true with the mock off hides it: no backend route (#131)", { flag: "true", mock: "false" }, false],
+    [
+      "true with the mock off hides it: no backend route (#131)",
+      { flag: "true", mock: "false" },
+      false,
+    ],
     ["false hides it", { flag: "false", mock: undefined }, false],
     ["false with the mock off hides it", { flag: "false", mock: "false" }, false],
     ["unset follows the mock: on in mock mode", { flag: undefined, mock: undefined }, true],
@@ -248,14 +276,18 @@ describe("VITE_FEATURE_REASSIGN: the Reassign control for a Lead on a claimed op
 describe("401 after login", () => {
   // The token below is one the mock does not know, so its own check answers 401 and clears the
   // session, as the real client does. The page must then return to /login.
-  it.each([["/"], ["/cases/C-1001"]])("from %s returns to /login and clears the session", async (path) => {
-    session.set({ token: "mock-token-u99", user: ANA });
-    expect(window.sessionStorage.getItem("socboard.session")).not.toBeNull();
+  it.each([["/"], ["/cases/C-1001"]])(
+    "from %s returns to /login and clears the session",
+    async (path) => {
+      session.set({ token: "mock-token-u99", user: ANA });
+      expect(window.sessionStorage.getItem("socboard.session")).not.toBeNull();
 
-    renderAt(path);
+      renderAt(path);
 
-    expect(await screen.findByRole("heading", { name: "Sign in" }, WAIT)).toBeInTheDocument();
-    expect(window.sessionStorage.getItem("socboard.session")).toBeNull();
-    expect(session.get()).toBeNull();
-  }, TEST_TIMEOUT);
+      expect(await screen.findByRole("heading", { name: "Sign in" }, WAIT)).toBeInTheDocument();
+      expect(window.sessionStorage.getItem("socboard.session")).toBeNull();
+      expect(session.get()).toBeNull();
+    },
+    TEST_TIMEOUT,
+  );
 });

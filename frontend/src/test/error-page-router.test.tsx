@@ -48,7 +48,9 @@ describe("error page through the router", () => {
 
     const { container } = render(<RouterProvider router={router} />);
 
-    expect(await screen.findByRole("heading", { name: "This page didn't load" }, WAIT)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "This page didn't load" }, WAIT),
+    ).toBeInTheDocument();
     expect(screen.getByText(MESSAGE)).toBeInTheDocument();
     expect(container.querySelector("img")).toBeNull();
     expect(document.body.querySelector("img")).toBeNull();

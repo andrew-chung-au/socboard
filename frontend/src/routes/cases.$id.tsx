@@ -10,12 +10,30 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useSession } from "@/lib/auth";
 import { fmt } from "@/lib/time";
-import { api, ApiError, CLOSING_REASON_LABELS, config, type CaseDetail, type ClosingReason } from "@/services";
+import {
+  api,
+  ApiError,
+  CLOSING_REASON_LABELS,
+  config,
+  type CaseDetail,
+  type ClosingReason,
+} from "@/services";
 
 export const Route = createFileRoute("/cases/$id")({
   head: ({ params }) => ({
@@ -42,11 +60,21 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Panel({ title, children, right }: { title: string; children: ReactNode; right?: ReactNode }) {
+function Panel({
+  title,
+  children,
+  right,
+}: {
+  title: string;
+  children: ReactNode;
+  right?: ReactNode;
+}) {
   return (
     <section className="rounded-md border bg-card">
       <header className="flex items-center justify-between border-b px-3 py-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </h2>
         {right}
       </header>
       <div className="p-3">{children}</div>
@@ -62,7 +90,12 @@ function CasePage() {
   const caseQ = useQuery({ queryKey: ["case", id], queryFn: () => api.getCase(id), retry: false });
   const isLead = me?.role === "lead";
   // The audit trail is Lead-only (the backend answers an Analyst with 403), so it is not requested.
-  const auditQ = useQuery({ queryKey: ["audit", id], queryFn: () => api.getAudit(id), enabled: isLead, retry: false });
+  const auditQ = useQuery({
+    queryKey: ["audit", id],
+    queryFn: () => api.getAudit(id),
+    enabled: isLead,
+    retry: false,
+  });
   // The user list feeds only the Reassign control, so it is asked for only when that can show (#131).
   const usersQ = useQuery({
     queryKey: ["users"],
@@ -96,12 +129,20 @@ function CasePage() {
     },
   });
 
-  if (!hydrated || caseQ.isPending) return <div className="rounded-md border bg-card p-8 text-center text-muted-foreground">Loading case…</div>;
+  if (!hydrated || caseQ.isPending)
+    return (
+      <div className="rounded-md border bg-card p-8 text-center text-muted-foreground">
+        Loading case…
+      </div>
+    );
   if (caseQ.isError)
     return (
       <div className="space-y-3">
         <BackLink />
-        <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive">
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive"
+        >
           {(caseQ.error as Error).message}
         </div>
       </div>
@@ -150,15 +191,26 @@ function CasePage() {
           <div className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-xs text-muted-foreground">
             <span>{c.id}</span>·<StatusBadge status={c.status} />·
             <span>owner: {c.owner ? c.owner.displayName : "Unclaimed"}</span>
-            {closed && <>· <ReasonBadge reason={c.closingReason} /></>}
+            {closed && (
+              <>
+                · <ReasonBadge reason={c.closingReason} />
+              </>
+            )}
           </div>
         </div>
       </div>
 
       {actionError && (
-        <div role="alert" className="flex items-start justify-between gap-3 rounded-sm border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <span><strong>Server refused the action:</strong> {actionError}</span>
-          <button className="text-xs underline" onClick={() => setActionError(null)}>Dismiss</button>
+        <div
+          role="alert"
+          className="flex items-start justify-between gap-3 rounded-sm border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
+          <span>
+            <strong>Server refused the action:</strong> {actionError}
+          </span>
+          <button className="text-xs underline" onClick={() => setActionError(null)}>
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -167,17 +219,30 @@ function CasePage() {
           <Panel title="Alert">
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
               <Field label="Source">{c.source}</Field>
-              <Field label="Type"><span className="font-mono text-xs">{c.alertType}</span></Field>
-              <Field label="Asset">
-                <span className="font-mono text-xs">{c.asset}</span> <Criticality value={c.assetCriticality} />
+              <Field label="Type">
+                <span className="font-mono text-xs">{c.alertType}</span>
               </Field>
-              <Field label="Alert time"><span className="font-mono text-xs">{fmt(c.alertTimestamp)}</span></Field>
-              <Field label="Ingested"><span className="font-mono text-xs">{fmt(c.ingestedAt)}</span></Field>
-              <Field label="Severity rule"><span className="font-mono text-xs">{c.severityRule}</span></Field>
+              <Field label="Asset">
+                <span className="font-mono text-xs">{c.asset}</span>{" "}
+                <Criticality value={c.assetCriticality} />
+              </Field>
+              <Field label="Alert time">
+                <span className="font-mono text-xs">{fmt(c.alertTimestamp)}</span>
+              </Field>
+              <Field label="Ingested">
+                <span className="font-mono text-xs">{fmt(c.ingestedAt)}</span>
+              </Field>
+              <Field label="Severity rule">
+                <span className="font-mono text-xs">{c.severityRule}</span>
+              </Field>
             </dl>
             <div className="mt-3">
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Description</div>
-              <p className="mt-1 whitespace-pre-wrap break-words rounded-sm border bg-muted/50 p-2 font-mono text-xs">{c.description}</p>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Description
+              </div>
+              <p className="mt-1 whitespace-pre-wrap break-words rounded-sm border bg-muted/50 p-2 font-mono text-xs">
+                {c.description}
+              </p>
             </div>
           </Panel>
 
@@ -207,87 +272,140 @@ function CasePage() {
                   run.mutate(() => api.addNote(c.id, text).then(() => setNoteText("")));
                 }}
               >
-                <Label htmlFor="note" className="sr-only">Add note</Label>
-                <Textarea id="note" rows={3} placeholder="Add a note…" value={noteText} onChange={(e) => setNoteText(e.target.value)} />
-                <Button type="submit" size="sm" disabled={busy || !noteText.trim()}>Add note</Button>
+                <Label htmlFor="note" className="sr-only">
+                  Add note
+                </Label>
+                <Textarea
+                  id="note"
+                  rows={3}
+                  placeholder="Add a note…"
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value)}
+                />
+                <Button type="submit" size="sm" disabled={busy || !noteText.trim()}>
+                  Add note
+                </Button>
               </form>
             )}
           </Panel>
 
           {isLead && (
-          <Panel title="Audit trail">
-            {auditQ.isPending ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
-            ) : auditQ.isError ? (
-              <p role="alert" className="text-sm text-destructive">{(auditQ.error as Error).message}</p>
-            ) : auditQ.data.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No entries.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] text-xs">
-                  <thead>
-                    <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                      <th className="py-1.5 pr-3 font-medium">When</th>
-                      <th className="py-1.5 pr-3 font-medium">Who</th>
-                      <th className="py-1.5 pr-3 font-medium">Action</th>
-                      <th className="py-1.5 font-medium">Detail</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {auditQ.data.map((a) => (
-                      <tr key={a.id} className="border-b last:border-0 align-top">
-                        <td className="whitespace-nowrap py-1.5 pr-3 font-mono">{fmt(a.at)}</td>
-                        <td className="py-1.5 pr-3">{a.actor === "system" ? <span className="italic text-muted-foreground">system</span> : a.actor.displayName}</td>
-                        <td className="py-1.5 pr-3 font-mono">{a.action}</td>
-                        <td className="whitespace-pre-wrap break-words py-1.5">{a.detail}</td>
+            <Panel title="Audit trail">
+              {auditQ.isPending ? (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              ) : auditQ.isError ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {(auditQ.error as Error).message}
+                </p>
+              ) : auditQ.data.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No entries.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[520px] text-xs">
+                    <thead>
+                      <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                        <th className="py-1.5 pr-3 font-medium">When</th>
+                        <th className="py-1.5 pr-3 font-medium">Who</th>
+                        <th className="py-1.5 pr-3 font-medium">Action</th>
+                        <th className="py-1.5 font-medium">Detail</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Panel>
+                    </thead>
+                    <tbody>
+                      {auditQ.data.map((a) => (
+                        <tr key={a.id} className="border-b last:border-0 align-top">
+                          <td className="whitespace-nowrap py-1.5 pr-3 font-mono">{fmt(a.at)}</td>
+                          <td className="py-1.5 pr-3">
+                            {a.actor === "system" ? (
+                              <span className="italic text-muted-foreground">system</span>
+                            ) : (
+                              a.actor.displayName
+                            )}
+                          </td>
+                          <td className="py-1.5 pr-3 font-mono">{a.action}</td>
+                          <td className="whitespace-pre-wrap break-words py-1.5">{a.detail}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Panel>
           )}
         </div>
 
         <aside>
           <Panel title="Actions">
             <div className="space-y-2">
-                {closed && <p className="text-sm text-muted-foreground">This case is closed and read-only.</p>}
-                <Action id="claim" reason={canClaim ? null : claimReason} busy={busy}
-                  onClick={() => run.mutate(() => api.claimCase(c.id))}>
-                  Claim case
-                </Action>
-                <Action id="start" variant="secondary" reason={startReason} busy={busy}
-                  onClick={() => run.mutate(() => api.transitionCase(c.id, "Investigating"))}>
-                  Start investigating
-                </Action>
-                <Action id="close" variant="secondary" reason={closeReason} busy={busy}
-                  onClick={() => { setReason(""); setCloseOpen(true); }}>
-                  Close case…
-                </Action>
-                {!closed && !canChangeStatus && (
-                  <p className="text-xs text-muted-foreground">Only the owner or a Lead can change status.</p>
-                )}
-                {canReassign && (
-                  <div className="space-y-1.5 border-t pt-2">
-                    <Label className="text-xs">Reassign to</Label>
-                    <div className="flex gap-2">
-                      <Select value={reassignTo} onValueChange={setReassignTo}>
-                        <SelectTrigger className="h-8"><SelectValue placeholder="Choose user" /></SelectTrigger>
-                        <SelectContent>
-                          {(usersQ.data ?? []).filter((u) => u.id !== c.owner?.id).map((u) => (
-                            <SelectItem key={u.id} value={u.id}>{u.displayName} ({u.role})</SelectItem>
+              {closed && (
+                <p className="text-sm text-muted-foreground">This case is closed and read-only.</p>
+              )}
+              <Action
+                id="claim"
+                reason={canClaim ? null : claimReason}
+                busy={busy}
+                onClick={() => run.mutate(() => api.claimCase(c.id))}
+              >
+                Claim case
+              </Action>
+              <Action
+                id="start"
+                variant="secondary"
+                reason={startReason}
+                busy={busy}
+                onClick={() => run.mutate(() => api.transitionCase(c.id, "Investigating"))}
+              >
+                Start investigating
+              </Action>
+              <Action
+                id="close"
+                variant="secondary"
+                reason={closeReason}
+                busy={busy}
+                onClick={() => {
+                  setReason("");
+                  setCloseOpen(true);
+                }}
+              >
+                Close case…
+              </Action>
+              {!closed && !canChangeStatus && (
+                <p className="text-xs text-muted-foreground">
+                  Only the owner or a Lead can change status.
+                </p>
+              )}
+              {canReassign && (
+                <div className="space-y-1.5 border-t pt-2">
+                  <Label className="text-xs">Reassign to</Label>
+                  <div className="flex gap-2">
+                    <Select value={reassignTo} onValueChange={setReassignTo}>
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="Choose user" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(usersQ.data ?? [])
+                          .filter((u) => u.id !== c.owner?.id)
+                          .map((u) => (
+                            <SelectItem key={u.id} value={u.id}>
+                              {u.displayName} ({u.role})
+                            </SelectItem>
                           ))}
-                        </SelectContent>
-                      </Select>
-                      <Button size="sm" variant="outline" disabled={busy || !reassignTo}
-                        onClick={() => run.mutate(() => api.reassignCase(c.id, reassignTo).then(() => setReassignTo("")))}>
-                        Reassign
-                      </Button>
-                    </div>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy || !reassignTo}
+                      onClick={() =>
+                        run.mutate(() =>
+                          api.reassignCase(c.id, reassignTo).then(() => setReassignTo("")),
+                        )
+                      }
+                    >
+                      Reassign
+                    </Button>
                   </div>
-                )}
+                </div>
+              )}
             </div>
           </Panel>
         </aside>
@@ -299,7 +417,11 @@ function CasePage() {
             <DialogTitle>Close case {c.id}</DialogTitle>
             <DialogDescription>A closing reason is required.</DialogDescription>
           </DialogHeader>
-          <RadioGroup value={reason} onValueChange={(v) => setReason(v as ClosingReason)} className="gap-2">
+          <RadioGroup
+            value={reason}
+            onValueChange={(v) => setReason(v as ClosingReason)}
+            className="gap-2"
+          >
             {(Object.keys(CLOSING_REASON_LABELS) as ClosingReason[]).map((r) => (
               <div key={r} className="flex items-center gap-2">
                 <RadioGroupItem id={`r-${r}`} value={r} />
@@ -308,13 +430,17 @@ function CasePage() {
             ))}
           </RadioGroup>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setCloseOpen(false)}>Cancel</Button>
-            <Button disabled={!reason || busy}
+            <Button variant="ghost" onClick={() => setCloseOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!reason || busy}
               onClick={() => {
                 if (!reason) return;
                 setCloseOpen(false);
                 run.mutate(() => api.transitionCase(c.id, "Closed", reason));
-              }}>
+              }}
+            >
               Close case
             </Button>
           </DialogFooter>
@@ -326,7 +452,12 @@ function CasePage() {
 
 /** An action button that is always shown; when `reason` is set it is disabled and the reason is shown under it. */
 function Action({
-  id, reason, busy, onClick, variant, children,
+  id,
+  reason,
+  busy,
+  onClick,
+  variant,
+  children,
 }: {
   id: string;
   reason: string | null;
@@ -361,7 +492,10 @@ function Action({
 /** Back to the list: a link (not a button), styled like the page's other secondary controls (#131). */
 function BackLink({ closed }: { closed?: boolean }) {
   return (
-    <Link to={closed ? "/closed" : "/"} className={buttonVariants({ variant: "outline", size: "sm" })}>
+    <Link
+      to={closed ? "/closed" : "/"}
+      className={buttonVariants({ variant: "outline", size: "sm" })}
+    >
       <ArrowLeft className="h-3.5 w-3.5" /> {closed ? "Closed cases" : "Queue"}
     </Link>
   );
