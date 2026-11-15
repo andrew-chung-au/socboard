@@ -302,3 +302,12 @@ run: ## Start the whole local stack in the background: migrate, seed, backend, f
 
 stop: ## Stop the stack that make run started (frontend, then backend); refuses a process the stack did not start
 	@$(MAKE) --no-print-directory frontend-stop; f=$$?; $(MAKE) --no-print-directory backend-stop || exit 1; exit $$f
+
+# --- Compose stack (issue #221) ----------------------------------------------
+
+compose-up: ## Start Postgres, the app and a local proxy with Docker Compose (needs Docker); the first run makes local secrets in compose.secrets without printing them; waits until the app is healthy
+	uv run --locked python scripts/compose_secrets.py
+	docker compose --env-file compose.secrets up --build --wait --wait-timeout 300
+
+compose-down: ## Stop the Compose stack: containers and network are removed, the Postgres data is kept
+	docker compose --env-file compose.secrets down
