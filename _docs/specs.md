@@ -99,7 +99,7 @@ This release is the whole graded project, aiming for full marks on every criteri
 - Synthetic alert generator and Lead reassignment (the Should-haves), if not already pulled into Core.
 - A LangGraph triage step that *suggests* a severity and a summary for an analyst to confirm — advisory only, never in the critical scoring path.
 - n8n for intake and escalation workflows.
-- An MCP server for querying cases and checking VulnTriage for known exposures.
+- An MCP server for querying cases and checking a vulnerability tracker for known exposures.
 
 ## 7. Non-goals (Won't have — this release)
 
