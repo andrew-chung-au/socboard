@@ -5,7 +5,7 @@
 # exits non-zero. Decision record: _docs/decisions/*-deploy-script.md.
 #
 # Order: lock, digest check, "already deployed" check, pull by digest and label check, the release's
-# compose.yaml and compose/db_init.py, the secret, the stack's variable file, db, db-init, migrate
+# compose.yaml and compose/db_init.py, the database image pull, the secret, the stack's variable file, db, db-init, migrate
 # and seed, a candidate app on a spare loopback port, the swap, the checks after it, clean-up.
 # Nothing before the swap touches the running app. The swap is not zero downtime.
 #
@@ -70,7 +70,7 @@ text_for() {
   case "$1" in
     2) say 'socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.' ;;
     3) say 'socboard-deploy: the application secret could not be read or is not usable. The current release was not changed.' ;;
-    4) say "socboard-deploy: the image or the Compose files could not be fetched, or are not this repository's. The current release was not changed." ;;
+    4) say "socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed." ;;
     5) say 'socboard-deploy: db-init, migrate or seed failed. The current release was not changed.' ;;
     6) say 'socboard-deploy: the new app container did not become healthy. The current release was not changed.' ;;
     7) say "socboard-deploy: the new release failed after the swap; $2." ;;
@@ -222,6 +222,8 @@ done
   printf '%s\n' 'services:' '  db:' '    restart: unless-stopped' '  app:' '    restart: unless-stopped' \
     '    environment:' "      SOCBOARD_TRUSTED_PROXIES: $PROXY_ADDR"
 } >"$REL/deploy.override.yaml" || die 4
+# The database image (pinned by digest in the fetched compose.yaml) is pulled now, so a failure leaves the old app and the secret alone.
+compose pull db >/dev/null 2>&1 || die 4
 
 # --- 6. the secret ---------------------------------------------------------------------------------
 if ! python3 -c 'import boto3' >/dev/null 2>&1; then

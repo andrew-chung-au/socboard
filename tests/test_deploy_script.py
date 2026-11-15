@@ -54,7 +54,7 @@ OTHER_CANARIES = [TOKEN, "BODYCANARY", "DENIEDCANARY"]
 FIXED = {
     2: "socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.",
     3: "socboard-deploy: the application secret could not be read or is not usable. The current release was not changed.",
-    4: "socboard-deploy: the image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.",
+    4: "socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.",
     5: "socboard-deploy: db-init, migrate or seed failed. The current release was not changed.",
     6: "socboard-deploy: the new app container did not become healthy. The current release was not changed.",
     "7r": "socboard-deploy: the new release failed after the swap; the previous release was restored.",
@@ -142,6 +142,8 @@ def kind(line):
         return f"up-{service}"
     if verb == "run":
         return "run-candidate" if "--name" in words else f"run-{service}"
+    if verb == "pull":
+        return f"pull-{service}"
     return f"compose-{verb}"
 
 
@@ -196,6 +198,8 @@ case "$1" in
       esac
     done
     sub=$1; shift
+    # The pull runs before the variable file exists, so it records no variable-file note.
+    if [ "$sub" = pull ]; then [ -n "${STUB_COMPOSE_PULL_FAIL:-}" ] && exit 1; exit 0; fi
     if [ -f "$envf" ]; then echo "VARS_MODE $(@STAT@ -c %a "$envf")" >> "$STUB_CALLS"; [ -f "$S/vars-snapshot" ] || @CP@ "$envf" "$S/vars-snapshot"; else echo "VARS_MODE missing" >> "$STUB_CALLS"; fi
     echo "IMG ${STACK_IMAGE-unset}" >> "$STUB_CALLS"
     for last; do :; done
@@ -438,6 +442,17 @@ def test_every_compose_up_and_run_never_pulls_and_every_up_never_builds():
             assert "--no-build" in line, line
     # `compose run` has no --no-build option (Compose 2): it builds only a missing image, and --pull never plus the pulled image avoid that.
     assert sum(1 for line in lines if re.search(r"\bcompose (up|run)\b", line)) >= 5
+    # Stricter (new): the only pulls are the app image's `docker pull` and `compose pull db`.
+    pulls = [line for line in lines if re.search(r"\bpull\b(?! never)", line) and not line.lstrip().startswith("#")]
+    assert [re.sub(r"\s*(>|\|\|).*", "", line.strip()) for line in pulls] == ['docker pull "$IMAGE"', "compose pull db"], pulls
+
+
+def test_compose_pull_runs_only_for_the_database_service():
+    lines = [line for line in logical_lines(SCRIPT_TEXT) if re.search(r"\bcompose pull\b", line)]
+    assert len(lines) == 1, lines
+    assert re.search(r"\bcompose pull db\b(?!\S)", lines[0]), lines[0]
+    assert not re.search(r"\bpull\b.*\b(app|proxy)\b", lines[0]), lines[0]
+    assert not re.search(r"\bcompose pull\s*($|>|\|)", lines[0]), lines[0]
 
 
 def test_the_image_is_always_the_fixed_repository_by_digest():
@@ -572,7 +587,7 @@ def test_the_same_digest_running_unhealthy_continues_as_a_normal_deploy(box):
 
 SUCCESS_ORDER = [
     "flock", "inspect-image", "rm-cand", "pull", "label-source", "label-revision", "fetch-compose", "fetch-db-init",
-    "boto3-check", "secret-read", "up-db", "network", "run-db-init", "run-migrate", "run-seed", "run-candidate",
+    "pull-db", "boto3-check", "secret-read", "up-db", "network", "run-db-init", "run-migrate", "run-seed", "run-candidate",
     "inspect-running", "inspect-health", "rm-cand", "up-app", "inspect-running", "inspect-health", "smoke",
     "caddy-active", "imds-token", "imds-ip", "https-health",
 ]
@@ -662,6 +677,17 @@ def test_a_failed_pull_exits_4_and_the_current_release_keeps_serving(box):
     r = box.run(env={"STUB_PULL_FAIL": "1"})
     refused(r, 4, FIXED[4])
     assert "fetch-compose" not in r.kinds()
+
+
+def test_a_failed_database_image_pull_exits_4_before_the_secret_and_the_old_app_keeps_serving(box):
+    box.set_app(PREVIOUS_IMAGE)
+    r = box.run(env={"STUB_COMPOSE_PULL_FAIL": "1"})
+    refused(r, 4, FIXED[4])
+    kinds = r.kinds()
+    assert kinds[-1] == "pull-db", kinds
+    assert not {"boto3-check", "secret-read", "up-db", "run-candidate"} & set(kinds), kinds
+    assert not (box.run_dir / "stack-vars").exists()
+    assert not [line for line in r.calls if line.startswith("VARS_MODE")]
 
 
 @pytest.mark.parametrize(

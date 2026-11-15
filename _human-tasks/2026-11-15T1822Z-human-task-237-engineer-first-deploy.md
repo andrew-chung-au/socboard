@@ -85,7 +85,7 @@ aws ssm send-command --region us-east-1 --document-name socboard-deploy --parame
 ```
 
 Expected: a reply with a `CommandId`. Use it below.
-Risk: runs the deploy on the server: pulls the image, migrates the database, swaps the app (a short outage). A failed step leaves the current release serving, or restores it; the first deploy has none to restore, so a failure after the swap leaves the app stopped and the database running.
+Risk: runs the deploy on the server: pulls the image (from `ghcr.io`) and the pinned Postgres image (from Docker Hub's registry endpoints), migrates the database, swaps the app (a short outage). A failed step leaves the current release serving, or restores it; the first deploy has none to restore, so a failure after the swap leaves the app stopped and the database running.
 
 ```
 aws ssm get-command-invocation --region us-east-1 --command-id <command id> --instance-id <instance id>
@@ -135,7 +135,7 @@ Risk: none to the running release; the script stops after the failed pull (exit 
 aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=sha256:0000000000000000000000000000000000000000000000000000000000000000 --targets Key=tag:project,Values=socboard
 ```
 
-Read the result as in step 5. Expected: exit code 4 and the text `socboard-deploy: the image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.`; then the curl of step 6 still prints `200`.
+Read the result as in step 5. Expected: exit code 4 and the text `socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.`; then the curl of step 6 still prints `200`.
 If different: record the output; stop.
 
 ### Step 10: reboot the server and open the URL again
