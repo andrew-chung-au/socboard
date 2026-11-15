@@ -4,21 +4,26 @@ Rules for two Kiro Web sessions that work the Deploy issues at the same time, wi
 
 ## Roles
 
-- **Session A** is the controller. It plans, grooms (the PM work), sets the merge order, tests branches against each other before the human merges, and works the **infrastructure lane**.
-- **Session B** works the **application lane**.
-- **The human** labels, approves protected-file diffs, merges, pushes from the clean clone, and relays between the sessions. Neither session talks to the other directly.
+The lanes as of 2026-11-16 (the maintainer's split). The two-session setup this file started with (Session A and Session B) is replaced by the table below; the rules further down still apply to every lane.
 
-Both sessions run the same orchestrator process on their own issues: Engineer, then QA, then (Heavy) a second independent QA, then the Reviewer, then the decision point.
+- **Planning** is the controller. It plans, grooms when asked, sets the merge order, keeps the roadmaps and the reviewer evidence, and writes the maintainer's step-by-step instructions.
+- Every other lane runs the orchestrator process on its own issues: Engineer, then QA, then (Heavy) a second independent QA, then the decision point.
+- **The maintainer** labels, approves protected-file diffs, merges, applies Terraform, runs the human tasks and relays between the sessions. No session talks to another directly.
 
 ## Who owns what (file ownership is what prevents collisions)
 
-| Lane | Session | Issues | Files |
-|---|---|---|---|
-| Application | B | #140, #142, #141, #143, then D5b, D6a, D6b, D7, D8, D9, D10 to D14 and D24 as they are filed | `socboard/`, `tests/`, `frontend/`, `Dockerfile` and the Compose file, the image CI job |
-| Infrastructure | A | #154, #155, #156, then D17a to D17c, D18b, D19 to D23 as they are filed | `terraform/`, `.github/workflows/terraform-*.yml`, the infrastructure decision records |
-| Planning and records | A | the proposal, roadmap, drafts and this file; #139 | `_docs/planning/`, `_docs/decisions/` for the Deploy record |
+| Lane | Issues now | Files |
+|---|---|---|
+| Planning | the roadmaps, this file, the README reviewer section, the evidence timeline | `_docs/planning/`, `README.md` (reviewer section only), `_docs/records/` for evidence |
+| Terraform A (server) | #256, #236, #266 | `terraform/server/`, the bootstrap, `terraform/README.md` (the server and bootstrap sections), the human tasks for the server applies |
+| Terraform B (access) | #268 | `terraform/ci-access/`, `terraform/iam-and-budgets/`, `terraform/README.md` (the CI access and IAM sections) |
+| Application | #281, #267, #240 | `socboard/` (except the instrumentation), `tests/` for the app, `frontend/`, `terraform/server/socboard-deploy.sh` and its document and tests |
+| Compose and CI | #209, #269 | `compose.yaml`, `compose/`, `.github/workflows/` (all, including `terraform-*.yml`), `e2e/`, the image |
+| DevOps | the Phase 3 roadmap and its issues, once filed | `compose.observability.yaml` (layered on `compose.yaml`), `observability/`, the telemetry code in `socboard/`, their tests, and the observability CI checks (as diffs for the Compose and CI lane or the maintainer, since workflows are protected) |
 
-Adding a new issue to a lane is A's call, announced to the human; the issue's Claim comment fixes the owner.
+`terraform/README.md` is shared: each Terraform lane edits only its own sections and merges `origin/main` before marking a pull request ready. `socboard/` is shared between Application and DevOps: DevOps adds telemetry only, and says which files it touched in its claim.
+
+Adding a new issue to a lane is the Planning lane's call, announced to the maintainer; the issue's Claim comment fixes the owner.
 
 ## Rules
 
