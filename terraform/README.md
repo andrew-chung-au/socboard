@@ -170,17 +170,18 @@ Destroy in this order, because the state bucket holds this part's state: D17b's 
 ### What it creates
 
 - One instance, `t3.small` by default (only `t3.micro`, `t3.small` and `t3.medium` are accepted), standard CPU credits, no key pair (access is through Systems Manager only), the instance profile `socboard-instance` from `iam-and-budgets/`, metadata session tokens required with a hop limit of 1 (a container on a bridge network cannot reach the instance's credentials). Its root volume is encrypted gp3, 20 GiB by default (8 to 30), and deleted with the instance. The image is the newest matching Canonical image at the first apply; later images are ignored, so a new upstream image never replaces the server on its own.
-- One Elastic IP associated with the instance, so the address stays the same when the instance is replaced.
+- One Elastic IP and its association with the instance (a separate resource, because the bootstrap's hostname names the address), so the address stays the same when the instance is replaced.
+- The instance's user data: the bootstrap (next section), which installs Docker, the Compose plugin and Caddy and mounts the data volume.
 - One security group: TCP 80 and 443 in from anywhere, TCP 80 and 443 out to anywhere, nothing else (no SSH, no app port). Opening a port means editing the list in `server/main.tf`, and the tests fail on it.
 - One data volume for the database: encrypted gp3 with the AWS-managed key, 10 GiB by default (8 to 50), in the instance's zone (`us-east-1a` by default), attached with the instance stopped before any detach. It has `prevent_destroy`, so any plan that would delete or replace it fails.
-- Outputs: `elastic_ip`, `instance_id` and `data_volume_id`. No secret.
+- Outputs: `elastic_ip`, `hostname`, `instance_id` and `data_volume_id`. No secret.
 
 Every variable has a default, so no variable file is needed.
 
 ### Rules for later changes
 
 - **The tag is a contract.** The instance, the data volume, the security group and the Elastic IP carry `project=socboard` in their create calls; the CI apply role creates nothing without it. The snapshot schedule in `iam-and-budgets/` backs up every volume with that tag (`target_tags`). Removing or renaming the data volume's tag stops the backups with no error, so a change to it needs `iam-and-budgets/` changed and applied by the human in the same sitting. The root volume must stay untagged, or it is snapshotted too: no tags in `root_block_device`, no volume tags on the instance and no provider default tags.
-- **User data never holds a secret.** This part has no user data (D17c adds the bootstrap). The CI plan role can read an instance's user data (`ec2:Describe*`), so a secret placed there is readable by every pull request run. The application reads its secret from Secrets Manager at run time.
+- **User data never holds a secret.** The user data is the bootstrap (`server/bootstrap.sh.tftpl`), which holds none. The CI plan role can read an instance's user data (`ec2:Describe*`), so a secret placed there is readable by every pull request run. The application reads its secret from Secrets Manager at run time.
 - **No default VPC?** This part uses the default VPC and its default subnet in the chosen zone, and the CI apply role cannot create network resources. If the account has no default VPC in `us-east-1`, the human creates one (step 1).
 
 ### Steps for the human (not yet run)
@@ -193,10 +194,10 @@ Run each step in `terraform/server/` with AWS credentials for your own account i
    Expected: "Successfully configured the backend "s3"!" and "Terraform has been successfully initialized!"; `.terraform.lock.hcl` appears.
 3. Before committing `.terraform.lock.hcl`, add the checksums for every platform that will use it: `terraform providers lock -platform=linux_amd64 -platform=<your own platform>` (skip the second if yours is `linux_amd64`). Then commit it.
    Expected: "Success! Terraform has updated the lock file."
-4. `terraform plan`, and read it: the image name starts `ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-` and its owner is `099720109477`; the instance has no key name and no user data; four security group rules (80 and 443 each way); the root block device has no tags; the data volume has `project = "socboard"`.
-   Expected: "Plan: 9 to add, 0 to change, 0 to destroy." (instance, Elastic IP, security group, four rules, data volume, attachment). Stop on any surprise.
+4. `terraform plan`, and read it: the image name starts `ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-` and its owner is `099720109477`; the instance has no key name, its user data is the bootstrap and `user_data_replace_on_change` is true; four security group rules (80 and 443 each way); the root block device has no tags; the data volume has `project = "socboard"`. If this part was already applied without the bootstrap (D19a, #207), follow "The bootstrap", D19b steps, instead.
+   Expected: "Plan: 10 to add, 0 to change, 0 to destroy." (instance, Elastic IP, its association, security group, four rules, data volume, attachment). Stop on any surprise.
 5. `terraform apply`, answering `yes`.
-   Expected: "Apply complete! Resources: 9 added, 0 changed, 0 destroyed." and the three outputs printed.
+   Expected: "Apply complete! Resources: 10 added, 0 changed, 0 destroyed." and the four outputs printed.
 6. Check in the EC2 console: the root volume has no tags and the data volume has `project=socboard`, both encrypted; the instance's metadata shows tokens required and hop limit 1. In Systems Manager (Fleet Manager) the instance shows as online within about ten minutes.
    Expected: as described. If the instance never comes online, the egress limit (80 and 443 only) is the first suspect (`VERIFY:`); the change goes through a new issue.
 
@@ -209,7 +210,46 @@ Destroy this part first, then `iam-and-budgets/`, `ci-access/` and `state/` last
 1. Remove the `lifecycle { prevent_destroy = true }` block from `aws_ebs_volume.data` in `server/main.tf`. This is the only manual edit teardown needs; without it `destroy` refuses. Take a last snapshot of the data volume first if you want to keep the data.
    Expected: `terraform plan -destroy` no longer reports "Instance cannot be destroyed".
 2. `terraform destroy`, answering `yes`. The instance is stopped before the data volume is detached.
-   Expected: "Destroy complete! Resources: 9 destroyed."
+   Expected: "Destroy complete! Resources: 10 destroyed."
 3. Snapshots outlive the destroy: the schedule's snapshots of the data volume stay (and are billed) until `iam-and-budgets/` is torn down and they are deleted by hand, as its teardown says.
    Expected: the EC2 console (Snapshots) filtered on `project=socboard` still lists them.
 4. Restore the `prevent_destroy` block (or do not commit its removal) unless the deployment is gone for good.
+
+## The bootstrap (host setup, Caddy and the data volume)
+
+`server/bootstrap.sh.tftpl` is the server's user data (issue #233, Deploy item D17c). Terraform renders it in `server/main.tf`; cloud-init runs it once, as root, at the instance's first boot. It is part of `server/`, so it is applied with it, by the human first (D19b) and later by CI. An agent never runs `init` against the backend, `plan`, `apply` or `destroy`.
+
+**Status: not yet run.** The rendered script passed `bash -n`, and `terraform test` (mock provider) checks its key lines, but it has never run on a host. Every "Expected" line below is what the author expects, not something seen, and every AWS or Ubuntu detail carries `VERIFY:` in the file until D19b.
+
+### What it does
+
+- **Packages:** `docker.io` and `docker-compose-v2` (the Compose plugin) from Ubuntu's own archive, signed by the Ubuntu archive key the image already trusts; `caddy` from Caddy's repository on Cloudsmith, whose signing key is refused unless its fingerprint is `65760C51EDEA2017CEA2CA15155B6D79CA56EA34` (`VERIFY:` the package names on noble, and that Cloudsmith serves this key). A package is installed only when missing; the bootstrap never upgrades one (Ubuntu's unattended upgrades patch them, `VERIFY:` that they are on in the image).
+- **Docker:** log rotation of 10 MB per file and 3 files per container (`/etc/docker/daemon.json`); a weekly `docker image prune --all --filter until=168h` (`/etc/cron.d/socboard-docker-prune`), which removes only images no container uses, so never one a running container uses; Docker enabled at boot. Containers come back after a reboot only if the Compose file gives them a restart policy (D11 or D20 sets it; this part assumes `restart: unless-stopped` on `db` and `app`).
+- **The data volume:** found by its volume id (`/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol...`, `VERIFY:` the link name), never by a guessed device name. It is formatted as ext4 only when `blkid -p` finds no signature at all, so a volume with data is never formatted. It is mounted by file-system UUID with `nofail` (a missing volume does not stop the boot) at **`/srv/socboard-data`, the value `STACK_PGDATA_DIR` takes on the server** (root README, "Compose stack"), owned by uid 999, the image's `postgres` user; Postgres writes its `pgdata` subdirectory there. The bare directory under the mount point is made immutable, so nothing writes to the root disk while the volume is missing. The script waits up to 10 minutes for the volume, which Terraform attaches after the instance starts.
+- **Caddy:** `/etc/caddy/Caddyfile` serves the output `hostname` (the Elastic IP through sslip.io, for example `203-0-113-10.sslip.io`, Deploy decision 6; `VERIFY:` the name format) over HTTPS and proxies to `127.0.0.1:8000` only. The admin endpoint is off. The certificate comes from the ACME directory in the variable `acme_ca`: Let's Encrypt production by default, or its staging directory for testing. The account has no contact address (decision 6: a real address or none; `VERIFY:` that Let's Encrypt accepts that). Caddy's certificate and account live on the data volume (`/srv/socboard-data/caddy`), so a replaced instance keeps them, and Caddy does not start without the volume.
+- **The forwarded address (for D20):** Caddy replaces any `X-Forwarded-For` the caller sent with the caller's address. The app sees the Compose network's gateway as the peer, `10.231.77.1` for the `stack` network in `compose.yaml` (`VERIFY:` at D19b, and that Docker's port publishing does not show another address). D20 sets `SOCBOARD_TRUSTED_PROXIES=10.231.77.1`, sets `STACK_PGDATA_DIR=/srv/socboard-data`, leaves `FORWARDED_ALLOW_IPS` at its default, and does not start the compose `proxy` service: host Caddy is the one proxy.
+- **Idempotent:** each step carries its own check (a package only when missing, a file only when its content differs, a format only of a blank volume, the fstab line only when the mount point has none, a restart only when a file changed), so a second run changes nothing. Re-run by hand: `sudo bash /var/lib/cloud/instance/scripts/part-001` (`VERIFY:` the path).
+- **Never held:** no secret in the script or the Caddy file, none written, none read (no Secrets Manager call). It does not deliver `compose.yaml`, the environment file or the deploy script (D20). The security group is unchanged: TCP 80 and 443 only, no port 22.
+
+### Changed user data replaces the instance
+
+`user_data_replace_on_change = true`. cloud-init runs user data once per instance, so without it a change would stop and start the same instance and never run the new script. With it, any change to the bootstrap or to `acme_ca` replaces the instance. The data volume and the Elastic IP are separate resources and survive: the old instance is stopped before the volume is detached (`stop_instance_before_detaching`), the new one mounts the same volume without formatting it, Caddy finds its certificate there, and the hostname stays. What is lost is the root disk: D20's Compose file and environment file on it, so D20 deploys again after a replacement. A replacement also takes the newest Canonical image (the `ignore_changes` on `ami` applies only to an ordinary plan).
+
+### Steps for the human in D19b (not yet run)
+
+Run in `terraform/server/` as in the server section (same backend). These are for a server D19a (#207) already applied without the bootstrap; on a first apply with the bootstrap, follow the server section's steps instead.
+
+1. `terraform plan`, and read it: `aws_instance.server` "must be replaced" because of `user_data`; `aws_volume_attachment.data` is replaced with it; `aws_eip_association.server` is new; the data volume and the Elastic IP are neither replaced nor destroyed.
+   Expected: "Plan: 3 to add, 0 to change, 2 to destroy." (`VERIFY:` the Elastic IP may show as 1 to change while its association moves to the new resource). Stop if the data volume or the Elastic IP is to be destroyed.
+2. For the first try, consider `terraform apply -var acme_ca=https://acme-staging-v02.api.letsencrypt.org/directory`, so a failure does not use up the production rate limit; then apply again without it (a second replacement).
+   Expected: "Apply complete! Resources: 3 added, 0 changed, 2 destroyed." and the four outputs, including `hostname`.
+3. In Systems Manager (Session Manager) on the new instance, read `/var/log/cloud-init-output.log`.
+   Expected: it ends with `socboard-bootstrap: done`; `findmnt /srv/socboard-data` shows the volume by UUID; `stat -c %u /srv/socboard-data` prints `999`; `docker compose version` and `caddy version` print versions.
+4. Run the bootstrap a second time (the re-run command above).
+   Expected: it prints no `wrote` line and ends with `socboard-bootstrap: done`.
+5. Reboot the instance from the console.
+   Expected: the volume is mounted again and Caddy is running (`systemctl is-active caddy`). Then, after D20 has deployed, `https://<hostname>/api/health` answers from your browser with a valid certificate (a staging certificate shows as untrusted).
+
+### Teardown
+
+Nothing separate: the bootstrap goes with the instance (server teardown above). Caddy's certificate data stays on the data volume until the volume itself is destroyed.

@@ -1,0 +1,203 @@
+#!/bin/bash
+# The host bootstrap of the socboard server (issue #233, Deploy item D17c). Terraform renders this
+# file into the instance's user data (main.tf); cloud-init runs it once per instance, as root, at the
+# first boot. A shell script rather than cloud-config: every step carries its own check, so the same
+# file can be re-run by hand and the order (packages, then the volume, then Caddy) is plain to read.
+#
+# Idempotent: a second run on the same host changes nothing. Packages are installed only when
+# missing (never upgraded here; Ubuntu's unattended upgrades patch them), a file is replaced only
+# when its content differs, the volume is formatted only when it holds no signature at all, the
+# fstab line is added only when the mount point has none, and a service restarts only when one of
+# its files changed. Re-run by hand: sudo bash /var/lib/cloud/instance/scripts/part-001
+# (VERIFY: the path cloud-init keeps it at on noble).
+#
+# Never held: this file holds no secret, writes none and reads none. It makes no Secrets Manager
+# call (the instance role may read the one application secret; this script does not), and it does
+# not deliver compose.yaml, the environment file or the deploy script: D20 does.
+#
+# What it assumes of the Compose file (D11, D20): the services that must come back after a reboot
+# carry a restart policy (for example `restart: unless-stopped`); this script only makes Docker
+# itself start at boot. The compose `proxy` service is not started on this host: Caddy below is
+# the one proxy (issue #233, decision option 1).
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+
+# STACK_PGDATA_DIR on this host: the data volume's mount point. Postgres keeps its files in the
+# `pgdata` subdirectory and Caddy its certificates and account in `caddy`.
+DATA_DIR='${data_dir}'
+# The data volume by its NVMe serial, which is the volume id: a stable name, not a guessed device
+# (#199 attaches it as /dev/sdf, which shows as an NVMe device on a Nitro instance).
+# VERIFY: udev on noble makes this link for an EBS volume.
+DATA_DEV='${data_device}'
+
+# Caddy's apt repository (the vendor's, on Cloudsmith) and the fingerprint of its signing key.
+# The key is refused unless its primary key has exactly this fingerprint. VERIFY: the repository
+# serves this key (the fingerprint was read from keyserver.ubuntu.com on 2026-11-15, user id
+# "Caddy Web Server", not from Cloudsmith).
+CADDY_REPO='https://dl.cloudsmith.io/public/caddy/stable'
+CADDY_KEY_FPR='65760C51EDEA2017CEA2CA15155B6D79CA56EA34'
+CADDY_KEYRING='/usr/share/keyrings/caddy-stable-archive-keyring.gpg'
+
+say() { echo "socboard-bootstrap: $*"; }
+
+# put PATH MODE: write standard input to PATH when it differs; succeeds only when the file changed.
+put() {
+  tmp=$(mktemp)
+  cat >"$tmp"
+  if [ -f "$1" ] && cmp -s "$tmp" "$1"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  install -D -m "$2" "$tmp" "$1"
+  rm -f "$tmp"
+  say "wrote $1"
+}
+
+# --- Docker's log rotation, written before Docker is installed so its first start uses it ---------
+# 10 MB per file, 3 files per container. Applies to containers created after the change.
+if put /etc/docker/daemon.json 0644 <<'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+EOF
+then
+  if systemctl is-active -q docker; then systemctl restart docker; fi
+fi
+
+# --- Caddy's repository ---------------------------------------------------------------------------
+if [ ! -s "$CADDY_KEYRING" ]; then
+  gnupghome=$(mktemp -d)
+  curl -fsSL "$CADDY_REPO/gpg.key" | gpg --homedir "$gnupghome" --dearmor >"$CADDY_KEYRING.new"
+  fpr=$(gpg --homedir "$gnupghome" --show-keys --with-colons "$CADDY_KEYRING.new" | awk -F: '$1 == "fpr" { print $10; exit }')
+  rm -rf "$gnupghome"
+  if [ "$fpr" != "$CADDY_KEY_FPR" ]; then
+    rm -f "$CADDY_KEYRING.new"
+    say "the Caddy signing key has fingerprint '$fpr', not $CADDY_KEY_FPR; stopping"
+    exit 1
+  fi
+  mv "$CADDY_KEYRING.new" "$CADDY_KEYRING"
+  chmod 0644 "$CADDY_KEYRING"
+fi
+put /etc/apt/sources.list.d/caddy-stable.list 0644 <<EOF || true
+deb [signed-by=$CADDY_KEYRING] $CADDY_REPO/deb/debian any-version main
+EOF
+
+# --- Packages ---------------------------------------------------------------------------------------
+# docker.io and docker-compose-v2 (the Compose plugin) come from Ubuntu's own archive (noble
+# universe), signed by the Ubuntu archive key the image already trusts
+# (/usr/share/keyrings/ubuntu-archive-keyring.gpg). caddy comes from the vendor's repository above,
+# because noble's own caddy is an old release. VERIFY: the three package names on noble.
+missing=''
+for p in docker.io docker-compose-v2 caddy; do
+  dpkg-query -W -f '$${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing="$missing $p"
+done
+if [ -n "$missing" ]; then
+  apt-get update -q
+  # shellcheck disable=SC2086
+  apt-get install -y -q $missing
+fi
+systemctl enable --now docker
+
+# --- Weekly image prune ---------------------------------------------------------------------------
+# `docker image prune --all` removes only images no container uses, running or stopped, so an image
+# a running container uses is never removed; `until=168h` also keeps anything pulled this week.
+put /etc/cron.d/socboard-docker-prune 0644 <<'EOF' || true
+# socboard (#233): weekly removal of images no container uses, older than 7 days.
+23 4 * * 0 root /usr/bin/docker image prune --all --force --filter until=168h >/dev/null
+EOF
+
+# --- The data volume ----------------------------------------------------------------------------------
+# Terraform attaches the volume after the instance is running, so wait up to 10 minutes for it.
+for _ in $(seq 60); do
+  [ -e "$DATA_DEV" ] && break
+  sleep 10
+done
+if [ ! -e "$DATA_DEV" ]; then
+  say "the data volume $DATA_DEV is not attached after 10 minutes; re-run this script once it is"
+  exit 1
+fi
+
+# Formats only a device with no signature at all: blkid -p exits 2 when it finds none. Any other
+# answer but 0 (a file system or partition table found) stops, so a volume with data is never formatted.
+rc=0
+blkid -p "$DATA_DEV" >/dev/null || rc=$?
+if [ "$rc" -eq 2 ]; then
+  say "formatting the empty data volume"
+  mkfs.ext4 -q -L socboard-data "$DATA_DEV"
+elif [ "$rc" -ne 0 ]; then
+  say "blkid could not read $DATA_DEV (exit $rc); not formatting, stopping"
+  exit 1
+fi
+
+uuid=$(blkid -s UUID -o value "$DATA_DEV")
+if [ -z "$uuid" ]; then
+  say "the data volume has no file-system UUID; stopping"
+  exit 1
+fi
+# By UUID, with nofail: a missing volume does not stop the boot (the wait for it is 30 seconds).
+if ! awk -v d="$DATA_DIR" '$2 == d { found = 1 } END { exit !found }' /etc/fstab; then
+  echo "UUID=$uuid $DATA_DIR ext4 defaults,nofail,x-systemd.device-timeout=30s 0 2" >>/etc/fstab
+  systemctl daemon-reload
+  say "added the data volume to /etc/fstab"
+fi
+
+mkdir -p "$DATA_DIR"
+if ! mountpoint -q "$DATA_DIR"; then
+  # The bare directory is made immutable, so while the volume is not mounted nothing (Postgres
+  # starting on the root disk, say) can write into it.
+  chattr +i "$DATA_DIR"
+  mount "$DATA_DIR"
+fi
+# The postgres user of the official image (README, "Compose stack", data directory).
+chown 999:999 "$DATA_DIR"
+
+# --- Caddy ----------------------------------------------------------------------------------------------
+# Its data lives on the volume, so a replaced instance keeps its certificate and account.
+if [ "$(id -u caddy)" = 999 ]; then
+  say "the caddy user has uid 999, the Postgres container's; stopping"
+  exit 1
+fi
+install -d -o caddy -g caddy -m 0700 "$DATA_DIR/caddy"
+
+restart_caddy=0
+# Caddy does not start without the volume, so it never writes a certificate to the root disk.
+if put /etc/systemd/system/caddy.service.d/socboard.conf 0644 <<'EOF'
+[Unit]
+RequiresMountsFor=${data_dir}
+EOF
+then
+  systemctl daemon-reload
+  restart_caddy=1
+fi
+
+# The hostname comes from the Elastic IP through the wildcard-DNS service (Deploy decision 6).
+# No contact address: the certificate authority's account is made without one (decision 6: a real
+# address or none). The admin endpoint is off, so the unit's reload cannot work: restart instead.
+#
+# Forwarded address: Caddy replaces any X-Forwarded-For the caller sent with the caller's address
+# (it trusts no proxy before it). The app is published on the host's loopback only, so Caddy's
+# connection reaches it through Docker's port publishing and the app sees the Compose network's
+# gateway as the peer: 10.231.77.1 for the `stack` network of compose.yaml (subnet 10.231.77.0/24).
+# D20 sets SOCBOARD_TRUSTED_PROXIES to that address and leaves FORWARDED_ALLOW_IPS at its default.
+# VERIFY: at D19b, the peer address the app logs for a request through Caddy.
+if put /etc/caddy/Caddyfile 0644 <<'EOF'
+{
+	admin off
+	acme_ca ${acme_ca}
+	storage file_system {
+		root ${data_dir}/caddy
+	}
+}
+
+${hostname} {
+	reverse_proxy 127.0.0.1:8000
+}
+EOF
+then
+  restart_caddy=1
+fi
+
+systemctl enable --now caddy
+if [ "$restart_caddy" = 1 ]; then systemctl restart caddy; fi
+say "done"

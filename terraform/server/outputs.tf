@@ -5,6 +5,11 @@ output "elastic_ip" {
   value       = aws_eip.server.public_ip
 }
 
+output "hostname" {
+  description = "The public hostname Caddy serves, derived from the Elastic IP (Deploy decision 6)."
+  value       = local.hostname
+}
+
 output "instance_id" {
   description = "The instance id, for Systems Manager and the deploy role."
   value       = aws_instance.server.id
