@@ -62,8 +62,9 @@ locals {
 
   # Reading a secret's value is denied to all three roles (only the instance reads the secret).
   # The application secret lives in Secrets Manager (Deploy decision 5), so these two are the
-  # actions that return a value. Parameter Store reads are not denied: D17b may look up a public
-  # image id there. VERIFY: both action names.
+  # actions that return a value. No role allows `ssm:GetParameter` (plan: three document reads;
+  # apply: document management; deploy: SendCommand and GetCommandInvocation), so Parameter Store
+  # is not reachable; D17b (#199) uses an `aws_ami` lookup instead. VERIFY: both action names.
   secret_value_actions = [
     "secretsmanager:GetSecretValue",
     "secretsmanager:BatchGetSecretValue",
