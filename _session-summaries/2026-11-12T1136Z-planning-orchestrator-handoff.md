@@ -20,13 +20,12 @@ A long orchestrator session (2026-11-11 to 2026-11-12) closed #9, #10, #74, #60,
 - #11 is the fifth control issue, so **epoch batch 1** lands next, as one batch: #63 first, the kit edits (items 1 to 5, 8), #65 and #49 together, items 6 and 6b (contract-check in verify), #80, then item 7 (`KIT_VERSION` 1.10+socboard.2) and a new epoch-start record. Drafts, rulings and patches: `_docs/planning/epoch-batch-1/README.md`. Each protected diff needs the human's approval at landing.
 - Then **#12, #13, #14**, already checked ahead against the contract and #10's code, re-groomed and confirmed (hashes `b06f8f35…`, `a0b0f61c…`, `30807dfb…`); #13 and #14 are Heavy. #86 (ingest limits in the contract) is merged.
 - Supporting issues, in order: see `_docs/planning/roadmap-1-core.md`. Next among them: #59 (needs the human's browser check; a good one for Claude in the dev container), #75 then #31, #71 with #73, #54, #93 (next epoch batch).
-- **Deploy:** `_docs/planning/roadmap-3-deploy.md` (status next, 20 tasks, the seven decisions written in; the spec's Deploy part passes the definition of ready). Terraform on AWS; the earlier project may be referenced, never copied (`.kiro/steering/previous-projects.md`).
+- **Deploy:** `_docs/planning/roadmap-3-deploy.md` (status next, 20 tasks, the seven decisions written in; the spec's Deploy part passes the definition of ready). Terraform on AWS.
 
 ### Rules from this session (in `.kiro/steering/`)
 - `delivery-pace.md`: CI is the test loop; one PR per issue (summary on the issue branch); groom the next two or three Core issues ahead; one small supporting issue alongside; the Heavy second QA launch is a new session (item 6, in PR #97).
 - `gate-blocks.md`: when a script blocks on mechanics, say the work is done, explain, offer the hand option, wait.
 - `backlog-order.md`: every filed issue is placed in the supporting list with a trigger; groomed issues get a `[groomed]` title prefix.
-- `previous-projects.md`: reference earlier course projects, never copy them.
 - QA's first line must start `QA: PASS` or `QA: FAIL` (`make issue-close` reads only that line); put it in every QA launch message.
 - Run git steps one at a time, never in parallel: parallel git calls in this session put commits on the wrong branch three times.
 

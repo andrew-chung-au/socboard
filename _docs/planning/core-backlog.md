@@ -139,4 +139,4 @@ This file exists because the sandbox can't create issues directly. Once issues a
 - Synthetic alert generator (Should) and Lead reassignment (Should) — pull into Core only if time allows, else first Target Enhancements.
 - Observability / alerting / on-call agent — devops process.
 - Deployment to a public URL + CI/CD — deployment + devops processes.
-- LangGraph advisory triage, n8n, MCP/VulnTriage — Target Enhancements.
+- LangGraph advisory triage, n8n, MCP server — Target Enhancements.
