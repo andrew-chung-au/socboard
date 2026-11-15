@@ -2,7 +2,7 @@
 
 Order and status only. Acceptance criteria live on the issues; open/closed is read from the tracker. Scope and reasons: `_docs/specs.md` (§3 journey 3, §4 Deploy stories, §5 invariants, §6 Phase 2). Method: `_docs/planning/03_deployment.md` (course material for this project, followed here). Roadmap 1 (Core) is `roadmap-1-core.md`; DevOps becomes roadmap 4.
 
-- **Status:** next (Core is now). It starts when Core ends and when the Deploy spec changes (human-approved 2026-11-12) are committed to `_docs/specs.md`. Tasks are proposed issues without numbers; each is filed after the human approves the backlog proposal and gets its number then.
+- **Status:** in progress (Core ended; see the status block under Tasks). Tasks without an issue number are not filed yet; each is filed after the human approves it and gets its number then.
 - **Revision, 2026-11-13 (human-approved recommendations):** the task list below is superseded in detail by `_docs/planning/deploy-backlog-proposal.md` (D1 to D23). Changes: task 4 is split (Postgres support, then the append-only audit rule on Postgres); login and ingest limiting are added; task 3 gains the token secret and treats the poll interval as a build argument; #100 is a prerequisite of the image; the image build joins CI with the Dockerfile. Region: deployment `us-east-1` (the human's own account, home region `ap-southeast-2`). Wave 1 is filed: #139 (decision record), #140 (serve the build), #141 (deployed-mode settings), #142 (container bind opt-in), #143 (Postgres). Later items are filed as wave 1 progresses.
 - **Goal:** SOCBoard runs from one container image with Postgres, starts with one Docker Compose command, is covered by integration and end-to-end tests, is reachable at a public HTTPS URL on AWS created by Terraform, and is deployed by CI/CD only when the tests pass.
 - **Who:** **CI** = GitHub Actions can run it; **Human** = needs the human (AWS account, `terraform apply`, GitHub settings, secrets); **Eng** = the Engineer in the sandbox (no Docker, Terraform, AWS credentials or push).
@@ -37,19 +37,27 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
 
 ## Tasks, in order (D-labels; the issue text is in `_docs/planning/deploy-backlog-proposal.md` and the draft files beside it)
 
-Order and status only. An item with an issue number is filed; open or closed is read from the tracker. The earlier 20-task list is replaced by this one (changes and reasons: the proposal, sections 2 and 9). No item starts before the human approves its issue.
+Order and status only. An item with an issue number is filed; open or closed is read from the tracker. The status block below is a snapshot of 2026-11-15 and goes stale; the tracker wins. No item starts before the human approves its issue.
 
-- **Before and beside:** #22 (the last Core task) and #104; #100 (CI Python pin), #144 (NUL-byte password), #107 (audit guard simplification) and #131 (frontend follow-ups) are prerequisites named below.
-- **Groomed, waiting for the human's approval (2026-11-13; each carries the `[groomed]` title prefix and a `PM:` comment with its body hash):** #139 (D1), #140 (D2), #142 (D4), #100 (CI Python pin) and #144 (NUL-byte password). #141 (D3) and #143 (D5a) wait for #104 and are not groomed yet.
-- **D0** Dev-container Postgres service: a human sitting between issues, before D5a (`_human-tasks/2026-11-13T1500Z-human-task-orchestrator-d0-dev-container-postgres.md`).
-- **D1** (#139) Record the Deploy decisions. First; unlocks D5a onward and the Terraform lane.
-- **Lane A, application:** **D2** (#140) serve the built frontend; **D3** (#141) deployed-mode settings (after #104 and #22's variable list); **D4** (#142) container bind opt-in; **D5a** (#143) Postgres driver, schema and CI job (needs D0, D1, #104, #100); **D5b** Postgres test fixtures; **D6a** Postgres append-only triggers; **D6b** guard review (after #107; before D20); **D7** single ownership on Postgres; **D10** one container image and a CI build; **D11** Compose stack (needs #22); **D12** integration tests against Compose (needs #22); **D13** end-to-end browser test (needs #131); **D14** CI: build, integration, E2E and image push.
-- **Lane B, hardening (after D3 and #144):** **D8** login attempt limiting; **D9** ingest rate limiting.
-- **Lane C, infrastructure (the human applies):** **D15** state bucket; **D16** CI access roles; **D17a** (#162) instance IAM, budgets and the daily snapshot schedule; **D17b** instance, network and volume; **D17c** bootstrap and Caddy; **D18a** CI format and validate (after D15 only); **D19** first apply (human); **D18b** CI plan (after D19).
-- **Join:** **D21** smoke check (before D20); **D20** deploy script and first deploy (needs D6a, D6b, D7 to D9, #144, D14, D17c, D19, D21, #22); **D22a** deploy from CI; **D22b** Terraform apply from CI; **D23** deploy and teardown runbook; **D24** reset a seeded user's password.
-- **Needs #22:** D11, D12, D13 (via D11), D20. Everything else can start without it.
-- **Needs the human:** D0, D1 (approve), D4, D10, D11 and D21 (protected files), D15 to D17c (apply), D19, D20 (first run), D22a and D22b (variables, Environment approval), D23 (teardown).
-- **Draft bodies:** wave 1 in `deploy-draft/wave-1-issue-drafts.md` (filed); wave 2 (D6a, D6b, D8, D9, D10, D15, D16, D17a to D17c, D18a, D18b, D21, D24) in `deploy-draft/wave-2-issue-drafts.md` (not filed); D11 to D14, D19, D20, D22 and D23 are outlines in the proposal.
+**Status at 2026-11-15 (from `origin/main` and the tracker)**
+- **Merged and closed:** D0 (PR #179), D1 (#139), D2 (#140), D3 (#141), D4 (#142), D5a (#143), D5b (#192), D6a (#193), D6b (#195), D7 (#194), D8 (#178), D9 (#183), D10 (#190), D11 (#221), D15 (#154), D16 (#156), D17a (#162), D17b (#199), D18a (#155), D21 (#191), D24 (#185), #22, #100, #104, #107, #131, #144, #175, #212.
+- **Merged, issue open:** D12 (#229, close-out pending). Its Makefile target, `AGENTS.md` line and CI step are protected-file diffs in `_human-tasks/229-proposed/` that the human has not applied; `make test-stack` is not on `main` until they are.
+- **In review:** #31 (PR #232).
+- **Approved, not started:** #207 (D19a; the Engineer's checklist is finished locally on `claude/207-first-apply-checklist` but not pushed), #209 (D18b), #93, #65, #49.
+- **Filed and groomed, waiting for the human's label (2026-11-15):** #233 (D17c), #234 (D13), #235 (D14). Also groomed and unlabelled: #214, #215, #218.
+- **Filed as outlines, not groomed (do not start):** #236 (D19b), #237 (D20), #238 (D22a), #239 (D22b), #240 (D23).
+- **Open follow-ups, not on the path:** #208 (docs), #203, #205 (decide when D20 is groomed: if the deploy cannot migrate through Compose's `migrate` service, build it), #226, #160, #164, #153, #122, #112, #110, #103.
+
+**Lanes (who takes what)**
+- **Terraform lane** (the human applies; an agent never runs `apply`): push #207's checklist and, after the human's run (stage b), #209 (D18b); then D17c (#233); then D19b (#236, a human step). Later D22b (#239).
+- **Compose and CI lane** (owns `compose.yaml`, the workflows, `e2e/`): D13 (#234), then D14 (#235), then the human's apply of the #229 diffs if they are still pending; later D22a (#238).
+- **Application and tests lane** (Postgres, frontend, audit guard): #31, #93, #214, #215 once labelled. D20's script (#237) when groomed. No Postgres feature work is left.
+- **Human steps:** label #233, #234, #235 (and #214, #215); apply the `_human-tasks/229-proposed/` diffs; run #207 stage b; set the registry package public after D14's first push; D19b; D20's first run; D22a and D22b variables and Environment approval; D23's teardown.
+
+**Order to the first deploy:** `#207 (human run) -> #209` and `D17c (#233) -> D19b (#236)` run beside `D13 (#234) -> D14 (#235)`; all of D19b, D14 and D21 (done) then feed `D20 (#237) -> D22a (#238) -> D22b (#239) -> D23 (#240)`.
+
+- **Needs the human:** D0 (done), D1 (done), D4, D10, D11 and D21 (protected files, done), D12, D13, D14 (protected-file diffs), D15 to D17c (apply), D19a, D19b, D20 (first run), D22a and D22b (variables, Environment approval), D23 (teardown).
+- **Draft bodies:** wave 1 in `deploy-draft/wave-1-issue-drafts.md` (filed); wave 2 in `deploy-draft/wave-2-issue-drafts.md` (D6a, D6b, D8, D9, D10, D15, D16, D17a to D17c, D18a, D18b, D21 and D24 are filed; D17c as #233). D13, D14 and D17c were written at filing from the code, not from the drafts. D19b, D20, D22a, D22b and D23 have outline bodies on their issues.
 - **Spec notes pending the human:** A (token secret in the secrets invariant) and B (poll interval is set at build): `deploy-draft/spec-notes-a-b.patch`.
 
 - **Not in this phase:** separate dev and production environments, promotion and rollback (DevOps, `_docs/planning/04_devops.md`); metrics, tracing, alerting; managed or replicated database, autoscaling, load balancing, high availability; custom domain; scheduled server stop; SSH access; synthetic alert generator and Lead reassignment (Should-haves); Target Enhancements. Login attempt limiting and ingest rate limiting are in this phase (D8 and D9; spec §4 Deploy stories).
