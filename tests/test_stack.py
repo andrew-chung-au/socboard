@@ -31,7 +31,8 @@ LIMIT_FAILURES = 5  # the default of SOCBOARD_LOGIN_MAX_FAILURES; compose.yaml s
 
 
 @pytest.mark.parametrize(
-    "value", ["http://127.0.0.1:8080", "http://localhost:8080/", "http://[::1]:8080", "http://127.0.0.1"]
+    "value",
+    ["http://127.0.0.1:8080", "http://localhost:8080/", "http://[::1]:8080", "http://127.0.0.1", "HTTP://LOCALHOST:8080"],
 )
 def test_a_loopback_http_address_is_accepted(value):
     assert stack.checked_url("SOCBOARD_BASE_URL", value) == value.rstrip("/")
@@ -56,6 +57,12 @@ def test_a_loopback_http_address_is_accepted(value):
         "http://127.0.0.1 :8080",
         "127.0.0.1:8080",
         "ftp://127.0.0.1",
+        "http://localhost.:8080",
+        "http://[::ffff:127.0.0.1]:8080",
+        "http://127.1:8080",
+        "http://127.0.0.1@evil.example:8080",
+        "http://evil.example@127.0.0.1:8080",
+        "http://127.0.0.1:8080\n",
     ],
 )
 def test_any_other_address_is_refused_without_printing_it(value):
@@ -115,7 +122,7 @@ def test_a_schema_with_a_method_removed_is_reported(tmp_path):
     schema["paths"][path] = {**schema["paths"][path]}
     del schema["paths"][path][method]
     found = operation_differences(stack.load_schema_file(write_schema(tmp_path, schema)), load_contract())
-    assert any("only in openapi.yaml" in line for line in found)
+    assert any("only in openapi.yaml" in line and path in line and repr(method) in line for line in found)
 
 
 def test_a_schema_with_an_operation_id_changed_is_reported(tmp_path):
@@ -138,6 +145,26 @@ def test_a_schema_file_that_is_not_a_schema_fails_naming_the_variable(tmp_path, 
 def test_a_missing_schema_file_fails_naming_the_variable(tmp_path):
     with pytest.raises(stack.StackSettingError, match="STACK_SCHEMA_FILE"):
         stack.load_schema_file({"STACK_SCHEMA_FILE": str(tmp_path / "absent.json")})
+
+
+# --- the journeys never touch a database themselves ---------------------------------------------------
+
+IN_PROCESS_NAMES = {"copy_of", "new_template_url", "migrate", "seed", "create_app"}
+IN_PROCESS_FIXTURES = {"seeded_template", "client"}
+
+
+def test_the_journeys_use_the_database_helpers_only_in_the_two_fixtures_that_build_the_in_process_app():
+    import ast
+
+    tree = ast.parse((ROOT / "tests" / "test_journeys.py").read_text(encoding="utf-8"))
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    assert IN_PROCESS_FIXTURES <= {function.name for function in functions}
+    for function in functions:
+        used = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
+        if function.name in IN_PROCESS_FIXTURES:
+            assert used & IN_PROCESS_NAMES, function.name  # the check is not looking at the wrong thing
+        else:
+            assert not used & IN_PROCESS_NAMES, (function.name, sorted(used & IN_PROCESS_NAMES))
 
 
 # --- the marker ---------------------------------------------------------------------------------

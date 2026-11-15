@@ -16,7 +16,7 @@ The clean clone, on the branch `issue-229-stack-integration-tests` (steps 1 and 
 ls _human-tasks/229-proposed
 ```
 
-Expected: `agents.diff`, `compose-workflow.diff` and `makefile.diff`.
+Expected: `agents.diff`, `compose-workflow.diff`, `makefile.diff` and `test_stack_make.py` (a test that runs `make test-stack` with no address and expects it to refuse; it can only pass once the Makefile has the target, so it goes into `tests/` in the same commit).
 
 ## Steps
 
@@ -34,14 +34,15 @@ If different: stop and tell the orchestrator what was printed (the branch may ha
 ### Step 2: remove the proposals, commit the protected paths and push
 
 ```
+git mv _human-tasks/229-proposed/test_stack_make.py tests/test_stack_make.py
 git rm -r --quiet _human-tasks/229-proposed
-git add Makefile AGENTS.md .github/workflows/compose.yml
+git add Makefile AGENTS.md .github/workflows/compose.yml tests/test_stack_make.py
 git status --short
 HUMAN_APPROVED=1 git commit -m "Add make test-stack, its AGENTS.md line and the stack test steps of the Compose job (#229)"
 git push origin issue-229-stack-integration-tests
 ```
 
-`git status --short` should list exactly the three modified paths and the deleted folder's three files. Tell the orchestrator once it is pushed. The orchestrator then reads the `socboard compose` run on the new head. If the stack tests fail there, the job fails at "Integration tests against the stack"; send the step's log lines.
+`git status --short` should list the three modified protected paths, the new `tests/test_stack_make.py`, and the three deleted diff files. Tell the orchestrator once it is pushed. The orchestrator then reads the `socboard compose` run on the new head. If the stack tests fail there, the job fails at "Integration tests against the stack"; send the step's log lines.
 
 Expected: the job passes, with `stack_only: 4 marked, 0 deselected (live stack)` in the log.
 

@@ -94,4 +94,5 @@ def live_client(environ: Mapping[str, str] | None = None, url: str | None = None
     """An HTTP client for the stack: a timeout, no redirect followed."""
     import httpx2
 
-    return httpx2.Client(base_url=url or base_url(environ), timeout=10, follow_redirects=False)
+    # trust_env=False: the key and the passwords must not go through a proxy named in the environment.
+    return httpx2.Client(base_url=url or base_url(environ), timeout=10, follow_redirects=False, trust_env=False)
