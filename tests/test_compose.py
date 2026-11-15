@@ -169,6 +169,16 @@ def problems(doc, text, env=None):
     doc = expand(raw, env)
     prefix = env.get("STACK_NET") or default_prefix
     found = []
+    if env.get("STACK_NET") or env.get("STACK_PROJECT"):  # a second stack: nothing may be shared with dev
+        try:
+            overlaps = ipaddress.IPv4Network(f"{prefix}.0/24").overlaps(ipaddress.IPv4Network(f"{default_prefix}.0/24"))
+        except ValueError:
+            found.append(f"STACK_NET {prefix!r} is not the first three octets of an IPv4 address")
+        else:
+            if overlaps:
+                found.append(f"the second stack's subnet {prefix}.0/24 overlaps dev's {default_prefix}.0/24; Docker refuses two such networks")
+        if (env.get("STACK_PROJECT") or default_name) == default_name:
+            found.append("the second stack has dev's project name, so it would adopt dev's containers and volumes")
     if doc.get("name") != (env.get("STACK_PROJECT") or default_name):
         found.append(f"the project name is {doc.get('name')}, not {env.get('STACK_PROJECT') or default_name}")
     services = doc["services"]
@@ -541,11 +551,30 @@ def test_a_trusted_proxy_variable_reaches_the_app_and_nothing_else():
     assert server["services"]["proxy"]["networks"]["stack"]["ipv4_address"] == "10.231.77.10"
 
 
-def test_a_second_stack_on_dev_s_prefix_is_refused_as_overlapping():
-    doc, _ = load()
-    dev = ipaddress.IPv4Network(expand(doc, {})["networks"]["stack"]["ipam"]["config"][0]["subnet"])
-    clash = ipaddress.IPv4Network(expand(doc, {"STACK_NET": "10.231.77"})["networks"]["stack"]["ipam"]["config"][0]["subnet"])
-    assert dev.overlaps(clash)  # the check the prod issues apply to the values they choose
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({"STACK_PROJECT": "socboard-prod", "STACK_NET": "10.231.77"}, "overlaps dev's"),
+        ({"STACK_PROJECT": "socboard-prod", "STACK_NET": "10.231.77."}, "not the first three octets"),
+        ({"STACK_PROJECT": "socboard", "STACK_NET": "10.231.78"}, "dev's project name"),
+        ({"STACK_NET": "10.231.78"}, "dev's project name"),
+    ],
+    ids=["same prefix as dev", "prefix with a dot", "dev's project name", "prefix only"],
+)
+def test_a_second_stack_that_shares_dev_s_network_or_name_is_refused(env, expected):
+    doc, text = load()
+    found = problems(doc, text, env)
+    assert any(expected in line for line in found), found
+
+
+def test_an_empty_variable_means_the_default_as_composes_colon_dash_does():
+    doc, text = load()
+    assert problems(doc, text, {"STACK_NET": "", "STACK_PROJECT": "", "STACK_TRUSTED_PROXIES": ""}) == []
+    mutated = text.replace("${STACK_NET:-10.231.77}", "${STACK_NET-10.231.77}")
+    assert mutated != text
+    # With a set but empty STACK_NET, the no-colon form gives an empty prefix: the expansion no longer matches.
+    expanded = expand(yaml.safe_load(mutated), {"STACK_NET": ""})
+    assert expanded["networks"]["stack"]["ipam"]["config"][0]["subnet"] == ".0/24"
 
 
 @pytest.mark.parametrize("where", ["subnet", "ip_range", "gateway", "proxy", "name"])

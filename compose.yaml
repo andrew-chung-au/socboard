@@ -132,7 +132,7 @@ networks:
   stack:
     ipam:
       config:
-        # The default 10.231.77.0/24: Docker's default address pools are 172.17 to 172.31 and 192.168, so this
+        # 10.231.77.0/24: Docker's default address pools are 172.17 to 172.31 and 192.168, so this
         # range avoids them; a VPN that uses it would collide. Other containers get addresses from
         # the upper half, so the proxy's .10 is never taken.
         # The gateway is pinned: with an ip_range and no gateway, Docker takes the range's first
