@@ -33,6 +33,7 @@ from sqlalchemy import (
     delete,
     func,
     insert,
+    lambda_stmt,
     literal,
     literal_column,
     select,
@@ -40,11 +41,14 @@ from sqlalchemy import (
     text,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import DropIndex
-from test_data_audit_triggers import guards_disabled
+from sqlalchemy.sql.dml import Insert
+from sqlalchemy.sql.lambdas import StatementLambdaElement
+from test_data_audit_triggers import _lambda_delete, _lambda_replace, _lambda_update, _lambda_upsert, guards_disabled
 
 from socboard import audit_guard, migrate
 from socboard.audit import append_audit
@@ -890,3 +894,234 @@ def test_the_replace_upsert_and_lightweight_index_rules_refuse_without_an_id(): 
     assert refused_statement(insert(AUDIT).prefix_with("OR REPLACE").values(**row))
     assert refused_statement(sqlite_insert(AUDIT).values(**row).on_conflict_do_update(set_={"detail": "x"}))
     assert refused_statement(DropIndex(Index("ix_other", light.c.case_id)))
+
+
+# --- #214: a lambda_stmt is refused or allowed exactly as the statement it builds -------------------
+# Each lambda below has its own code, so SQLAlchemy caches them apart; the closure-cache test is the
+# one place where one lambda is reused on purpose.
+
+
+def _lambda_row(seeded):
+    """The non-id columns as locals, which a lambda may capture (a dict is not allowed)."""
+    return seeded["case_id"], seeded["user_id"], NOW
+
+
+def _lambda_id_7(seeded):
+    case_id, actor_id, at = _lambda_row(seeded)
+    return lambda_stmt(
+        lambda: insert(AUDIT).values(id=7, case_id=case_id, actor_id=actor_id, action="claimed", detail="new", at=at)
+    )
+
+
+def _lambda_id_big(seeded):
+    case_id, actor_id, at = _lambda_row(seeded)
+    return lambda_stmt(
+        lambda: insert(AUDIT).values(
+            id=2**63 - 1, case_id=case_id, actor_id=actor_id, action="claimed", detail="new", at=at
+        )
+    )
+
+
+def _lambda_id_captured(seeded, eid):
+    case_id, actor_id, at = _lambda_row(seeded)
+    return lambda_stmt(
+        lambda: insert(AUDIT).values(id=eid, case_id=case_id, actor_id=actor_id, action="claimed", detail="new", at=at)
+    )
+
+
+def _lambda_id_added(seeded, eid):
+    """Built with `+=`: the id arrives in a second lambda."""
+    case_id, actor_id, at = _lambda_row(seeded)
+    statement = lambda_stmt(lambda: insert(AUDIT))
+    statement += lambda s: s.values(id=eid, case_id=case_id, actor_id=actor_id, action="claimed", detail="new", at=at)
+    return statement
+
+
+def _lambda_no_id(seeded):
+    case_id, actor_id, at = _lambda_row(seeded)
+    return lambda_stmt(
+        lambda: insert(AUDIT).values(case_id=case_id, actor_id=actor_id, action="claimed", detail="new", at=at)
+    )
+
+
+def _lambda_literal_none_id(seeded):
+    case_id, actor_id, at = _lambda_row(seeded)
+    return lambda_stmt(
+        lambda: insert(AUDIT).values(
+            id=None, case_id=case_id, actor_id=actor_id, action="claimed", detail="new", at=at
+        )
+    )
+
+
+def _lambda_bare_insert():
+    return lambda_stmt(lambda: insert(AUDIT))
+
+
+LAMBDA_IDS = {
+    "literal_7": lambda s: _lambda_id_7(s),
+    "literal_big": lambda s: _lambda_id_big(s),
+    "captured_7": lambda s: _lambda_id_captured(s, 7),
+    "captured_big": lambda s: _lambda_id_captured(s, BIG),
+}
+
+
+@pytest.mark.parametrize("sink", [_conn, _session])
+@pytest.mark.parametrize("name", LAMBDA_IDS)
+@SQLITE_GUARD
+def test_a_lambda_insert_with_an_explicit_id_is_refused(seeded, name, sink):
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError, match=IMMUTABLE_MESSAGE):
+        sink(seeded["engine"], LAMBDA_IDS[name](seeded))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+@pytest.mark.parametrize("value", [7, BIG])
+@SQLITE_GUARD
+def test_a_lambda_insert_built_with_plus_equals_and_an_id_is_refused(seeded, value):
+    before = snapshot(seeded["engine"])
+    for sink in (_conn, _session):
+        with pytest.raises(AuditImmutableError):
+            sink(seeded["engine"], _lambda_id_added(seeded, value))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+@pytest.mark.parametrize("sink", [_conn, _session])
+@pytest.mark.parametrize("value", [7, BIG])
+@SQLITE_GUARD
+def test_a_lambda_insert_with_an_id_in_the_execute_parameters_is_refused(seeded, value, sink):
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError):
+        sink(seeded["engine"], _lambda_bare_insert(), _row(seeded, id=value))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+@pytest.mark.parametrize("sink", [_conn, _session])
+@pytest.mark.parametrize("extra", [{"id": None}, {}])
+@SQLITE_NULL_ID
+def test_a_lambda_insert_with_a_none_or_no_id_parameter_gets_the_next_id(seeded, extra, sink):
+    engine = seeded["engine"]
+    before_rows, before_seq, _ = snapshot(engine)
+    if sink is _session:  # a Session commits only when told to; `_conn` rolls back, so use `begin`
+        with Session(engine) as session:
+            session.execute(_lambda_bare_insert(), _row(seeded, **extra))
+            session.commit()
+    else:
+        with engine.begin() as conn:
+            conn.execute(_lambda_bare_insert(), _row(seeded, **extra))
+    rows, seq, _ = snapshot(engine)
+    assert rows == [*before_rows, (before_seq + 1, "new")]
+    assert seq == before_seq + 1
+
+
+@pytest.mark.parametrize("sink", [_conn, _session])
+@SQLITE_NULL_ID
+def test_a_lambda_insert_with_a_literal_none_id_or_no_id_is_not_refused(seeded, sink):
+    engine = seeded["engine"]
+    for build in (_lambda_no_id, _lambda_literal_none_id):
+        before_rows, before_seq, _ = snapshot(engine)
+        if sink is _session:
+            with Session(engine) as session:
+                session.execute(build(seeded))
+                session.commit()
+        else:
+            with engine.begin() as conn:
+                conn.execute(build(seeded))
+        rows, seq, _ = snapshot(engine)
+        assert rows == [*before_rows, (before_seq + 1, "new")]
+        assert seq == before_seq + 1
+
+
+def test_the_guard_function_refuses_a_lambda_insert_with_an_id_and_passes_the_same_without():
+    captured = 7
+    added = lambda_stmt(lambda: insert(AUDIT))
+    added += lambda s: s.values(id=7, case_id=1, actor_id=1, action="a", detail="d", at=NOW)
+    refused = [
+        lambda_stmt(lambda: insert(AUDIT).values(id=7, case_id=1, actor_id=1, action="a", detail="d", at=NOW)),
+        lambda_stmt(lambda: insert(AUDIT).values(id=captured, case_id=1, actor_id=1, action="a", detail="d", at=NOW)),
+        added,
+        lambda_stmt(lambda: sqlite_insert(AUDIT).values(id=7, case_id=1, actor_id=1, action="a", detail="d", at=NOW)),
+        lambda_stmt(
+            lambda: postgresql_insert(AUDIT).values(id=7, case_id=1, actor_id=1, action="a", detail="d", at=NOW)
+        ),
+    ]
+    assert all(refused_statement(s) for s in refused)
+    allowed = [
+        lambda_stmt(lambda: insert(AUDIT).values(case_id=1, actor_id=1, action="a", detail="d", at=NOW)),
+        lambda_stmt(lambda: insert(AUDIT).values(id=None, case_id=1, actor_id=1, action="a", detail="d", at=NOW)),
+        lambda_stmt(lambda: select(AUDIT)),
+        lambda_stmt(lambda: insert(table("users", column("id"), column("detail"))).values(id=5, detail="d")),
+    ]
+    assert not any(refused_statement(s) for s in allowed)
+
+
+def test_a_lambda_cached_with_a_none_id_and_then_called_with_an_id_is_refused_both_times():
+    def build(eid):  # one code object: SQLAlchemy reuses the cached lambda for the second call
+        return lambda_stmt(lambda: insert(AUDIT).values(id=eid, case_id=1, actor_id=1, action="a", detail="d", at=NOW))
+
+    with_none, with_five = build(None), build(5)
+    assert with_none.closure_cache_key == with_five.closure_cache_key  # the cache is shared
+    assert refused_statement(with_five)
+    assert refused_statement(with_none)  # a captured None is a bindparam, refused like any (#107)
+
+
+@SQLITE_GUARD
+def test_a_lambda_insert_with_an_id_is_still_refused_inside_allow_schema_changes(seeded):
+    before = snapshot(seeded["engine"])
+    with allow_schema_changes():
+        for sink in (_conn, _session):
+            with pytest.raises(AuditImmutableError):
+                sink(seeded["engine"], _lambda_id_7(seeded))
+    assert snapshot(seeded["engine"]) == before
+
+
+def _lambda_sequence_write():
+    return lambda_stmt(lambda: update(_sequence_table("sqlite_sequence")).values(seq=BIG))
+
+
+LAMBDA_OTHER_RULES = {
+    "update": lambda s: _lambda_update(),
+    "delete": lambda s: _lambda_delete(),
+    "or_replace_insert": _lambda_replace,
+    "on_conflict_do_update": _lambda_upsert,
+    "sqlite_sequence": lambda s: _lambda_sequence_write(),
+}
+
+
+@pytest.mark.parametrize("sink", [_conn, _session])
+@pytest.mark.parametrize("name", LAMBDA_OTHER_RULES)
+@SQLITE_GUARD
+def test_every_other_rule_refuses_a_lambda_before_the_database_does(seeded, name, sink):
+    before = snapshot(seeded["engine"])
+    with pytest.raises(AuditImmutableError, match=IMMUTABLE_MESSAGE):
+        sink(seeded["engine"], LAMBDA_OTHER_RULES[name](seeded))
+    assert snapshot(seeded["engine"]) == before
+    assert_append_audit_works(seeded)
+
+
+def _break_resolved(monkeypatch, how):
+    """Make `_resolved` missing (`how="missing"`) or failing on read (`how="raises"`) on the class."""
+
+    def fail(self):
+        raise (AttributeError("_resolved") if how == "missing" else RuntimeError("cannot resolve"))
+
+    # a data descriptor, so it wins over the value SQLAlchemy memoizes on an instance
+    monkeypatch.setattr(StatementLambdaElement, "_resolved", property(fail))
+    if how == "missing":  # without this, SQLAlchemy's `__getattr__` would ask `_resolved` again
+        monkeypatch.setattr(StatementLambdaElement, "__getattr__", lambda self, key: fail(self))
+
+
+@pytest.mark.parametrize("how", ["missing", "raises"])
+def test_a_lambda_that_cannot_be_read_is_refused(monkeypatch, how):
+    _break_resolved(monkeypatch, how)
+    assert refused_statement(_lambda_no_id({"case_id": 1, "user_id": 1}))
+    assert refused_statement(lambda_stmt(lambda: select(AUDIT)))
+
+
+def test_canary_sqlalchemy_still_exposes_resolved_on_a_lambda_statement():
+    """If an upgrade renames `_resolved`, this fails by name (the guard would refuse every lambda)."""
+    resolved = lambda_stmt(lambda: insert(AUDIT))._resolved
+    assert isinstance(resolved, Insert)
+    assert not refused_statement(lambda_stmt(lambda: insert(AUDIT).values(case_id=1, actor_id=1, action="a")))
