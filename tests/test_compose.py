@@ -6,6 +6,7 @@ small copy that breaks it, and one test that the real file passes. Every value h
 
 import copy
 import importlib.util
+import ipaddress
 import re
 from pathlib import Path
 
@@ -42,6 +43,37 @@ def load():
 
 def flat(value):
     return yaml.safe_dump(value)
+
+
+GATEWAY = "10.231.77.1"  # what terraform/README.md ("The forwarded address") and the deploy script assume (#261)
+
+
+def gateway_problems(config, proxy_address):
+    """The stack network's pinned gateway (#261): set, the documented address, inside the subnet, outside ip_range."""
+    gateway = config.get("gateway")
+    if gateway is None or str(gateway).strip() == "":
+        return ["the stack network has no gateway pinned"]
+    try:
+        address = ipaddress.IPv4Address(str(gateway))
+        subnet = ipaddress.IPv4Network(str(config["subnet"]))
+        pool = ipaddress.IPv4Network(str(config["ip_range"]))
+        proxy = ipaddress.IPv4Address(str(proxy_address))
+    except (ValueError, KeyError):
+        return ["the gateway, the subnet, the ip_range or the proxy address is not a valid IPv4 value"]
+    found = []
+    if str(address) != GATEWAY:
+        found.append(f"the gateway is {address}, not {GATEWAY}")
+    if address not in subnet:
+        found.append("the gateway is outside the subnet")
+    if address in pool:
+        found.append("the gateway is inside ip_range, where Docker hands out container addresses")
+    if address in (subnet.network_address, subnet.broadcast_address):
+        found.append("the gateway is the network or the broadcast address")
+    if address == proxy:
+        found.append("the gateway is the proxy's address")
+    if proxy in pool:
+        found.append("the proxy's address is inside ip_range, so Docker could give it to another container")
+    return found
 
 
 def problems(doc, text):
@@ -98,6 +130,7 @@ def problems(doc, text):
         found.append("app does not trust exactly the proxy's address")
     if not proxy_address.startswith("10.231.77.") or not doc["networks"]["stack"]["ipam"]["config"][0]["subnet"].startswith("10.231.77."):
         found.append("the proxy's address is outside the network's fixed subnet")
+    found += gateway_problems(doc["networks"]["stack"]["ipam"]["config"][0], proxy_address)
     mounts = services["db"]["volumes"]
     if mounts != ["${STACK_PGDATA_DIR:-socboard-pgdata}:/var/lib/postgresql/data"]:
         found.append("db's data directory is not the configurable one")
@@ -258,3 +291,86 @@ def test_the_database_image_is_the_tag_the_postgres_job_uses():
     workflow = (ROOT / ".github" / "workflows" / "postgres.yml").read_text(encoding="utf-8")
     tag = re.search(r"image: (postgres:16\.\d+)", workflow).group(1)
     assert doc["services"]["db"]["image"].startswith(tag + "@sha256:")
+
+
+# --- the stack network's gateway (#261) ----------------------------------------------------------
+
+
+def set_ipam(**changes):
+    def change(doc, text):
+        config = doc["networks"]["stack"]["ipam"]["config"][0]
+        for key, value in changes.items():
+            if value is None:
+                config.pop(key, None)
+            else:
+                config[key] = value
+
+    return change
+
+
+def test_the_real_gateway_is_pinned_to_the_documented_address_outside_the_pool():
+    doc, _ = load()
+    config = doc["networks"]["stack"]["ipam"]["config"][0]
+    assert config["gateway"] == GATEWAY == "10.231.77.1"
+    assert config["ip_range"] == "10.231.77.128/25" and config["subnet"] == "10.231.77.0/24"
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (set_ipam(gateway=None), "no gateway pinned"),
+        (set_ipam(gateway=""), "no gateway pinned"),
+        (set_ipam(gateway="10.231.77.2"), "not 10.231.77.1"),
+        (set_ipam(gateway="10.231.78.1"), "outside the subnet"),
+        (set_ipam(gateway="10.231.77.128"), "inside ip_range"),
+        (set_ipam(gateway="10.231.77.200"), "inside ip_range"),
+        (set_ipam(gateway="10.231.77.10"), "the proxy's address"),
+        (set_ipam(gateway="10.231.77.0"), "network or the broadcast"),
+        (set_ipam(gateway="10.231.77.255"), "network or the broadcast"),
+        (set_ipam(gateway="10.231.77"), "not a valid IPv4"),
+        (set_ipam(gateway="a.b.c.d"), "not a valid IPv4"),
+        (set_ipam(gateway="10.231.77.1/24"), "not a valid IPv4"),
+    ],
+    ids=["missing", "empty", "other address", "other subnet", "measured value", "in the pool", "the proxy", "network address", "broadcast address", "short", "letters", "with a prefix"],
+)
+def test_a_gateway_that_breaks_a_rule_is_refused(change, expected):
+    assert any(expected in line for line in broken(change)), broken(change)
+
+
+def test_a_proxy_address_inside_the_pool_is_refused():
+    def change(doc, text):
+        doc["services"]["proxy"]["networks"]["stack"]["ipv4_address"] = "10.231.77.130"
+        doc["services"]["app"]["environment"]["SOCBOARD_TRUSTED_PROXIES"] = "10.231.77.130"
+
+    found = broken(change)
+    assert any("proxy's address is inside ip_range" in line for line in found), found
+
+
+def readme_gateway_problems(readme_text):
+    paragraph = next((line for line in readme_text.splitlines() if "The forwarded address" in line), "")
+    if f"`{GATEWAY}`" in paragraph:
+        return []
+    return [
+        f"terraform/README.md's 'The forwarded address' paragraph does not name {GATEWAY}; "
+        "change compose.yaml's gateway, GATEWAY in tests/test_compose.py and that paragraph together (#261)"
+    ]
+
+
+def test_the_terraform_readme_names_the_same_gateway_as_compose_yaml():
+    assert readme_gateway_problems((ROOT / "terraform" / "README.md").read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "- **The forwarded address (for D20):** the app sees the gateway.",
+        "- **The forwarded address (for D20):** the app sees `10.231.77.128`.",
+        "- **The forwarded address (for D20):** the app sees 10.231.77.1 with no backticks.",
+        "an unrelated line naming `10.231.77.1`",
+    ],
+    ids=["empty", "no address", "the measured address", "no backticks", "another paragraph"],
+)
+def test_a_readme_that_does_not_name_the_gateway_in_its_forwarded_address_paragraph_is_refused(text):
+    found = readme_gateway_problems(text)
+    assert found and "compose.yaml's gateway" in found[0]
