@@ -25,9 +25,11 @@ on:
 jobs:
   find:
     # A pull request, a fork, another branch, or a publish run that failed ends here: the job is skipped.
-    # A publish run's own event is always `workflow_run` (it is started by the other workflows), so the
-    # push is proven by its artifact: the publish job runs, and leaves `published-image`, only for a push
-    # to main (scripts/publish_gate.py). The branch and repository here are those of the commit.
+    # A publish run's own event is always `workflow_run` (it is started by the other workflows), and its
+    # branch and repository are always main and this repository, so these two lines are a backstop. The
+    # real guards are the conclusion (a pull request's publish run ends `skipped`), the artifact (the
+    # publish job runs, and leaves `published-image`, only for a push to main, scripts/publish_gate.py)
+    # and the find step's check that the published commit is still the head of main.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'workflow_run' &&

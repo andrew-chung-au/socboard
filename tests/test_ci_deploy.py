@@ -464,6 +464,11 @@ TABLE_237 = {
 }
 
 
+def test_the_success_lines_are_237s():
+    assert ci.DEPLOYED == "socboard-deploy: deployed."
+    assert ci.ALREADY == "socboard-deploy: already deployed. Nothing was changed."
+
+
 def test_the_failure_lines_are_237s_table_by_exit_code():
     for code, line in TABLE_237.items():
         assert ci.FAILURE_LINES[code] == (line,), code
