@@ -62,3 +62,21 @@ variable "deploy_environment" {
   type        = string
   default     = "deploy"
 }
+
+variable "deploy_prod_environment" {
+  description = "Name of the GitHub Environment whose jobs may also assume the deploy role, for the prod stack (issue #268). The human restricts it to main in GitHub, with a required reviewer. The trust names it exactly; no pattern."
+  type        = string
+  default     = "deploy-prod"
+
+  # An exact name only: no `*`, `?` or `:` can reach the trust's subject string. It must differ from the
+  # other two Environment names, or the trust would list one subject twice and name no new one.
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]+$", var.deploy_prod_environment))
+    error_message = "deploy_prod_environment must be one or more letters, digits, hyphens or underscores, with no wildcard."
+  }
+
+  validation {
+    condition     = var.deploy_prod_environment != var.deploy_environment && var.deploy_prod_environment != var.apply_environment
+    error_message = "deploy_prod_environment must differ from deploy_environment and apply_environment."
+  }
+}

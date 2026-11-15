@@ -2,12 +2,17 @@
 # The document (created by the CI-applied server part) is a fixed script with one parameter, the
 # image digest, checked by a pattern in the document itself. This role has no generic shell
 # document, so it cannot run an arbitrary command on the host. It is assumed only by a job in the
-# `deploy` GitHub Environment; the branch limit is that Environment's own setting (D19).
+# `deploy` GitHub Environment (dev) or in the `deploy-prod` one (prod, issue #268); the branch limit
+# is each Environment's own setting (D19). The role cannot tell the two apart: its rights are the
+# same for both, and the deploy document's parameter picks the stack (decision record for #268).
 
 resource "aws_iam_role" "deploy" {
   name = "socboard-ci-deploy"
 
   # VERIFY: the `sub` value for a job that names an Environment is `<prefix>:environment:<name>`.
+  # VERIFY: a list of two exact strings under `StringEquals` is an OR (either subject matches), and
+  # `terraform apply` changes this role's trust in place (the role's unique ID does not change).
+  # Exact strings only: no `StringLike`, no wildcard, so no other Environment can match.
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -17,7 +22,10 @@ resource "aws_iam_role" "deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = local.oidc_audience
-          "token.actions.githubusercontent.com:sub" = "${local.sub_prefix}:environment:${var.deploy_environment}"
+          "token.actions.githubusercontent.com:sub" = [
+            "${local.sub_prefix}:environment:${var.deploy_environment}",
+            "${local.sub_prefix}:environment:${var.deploy_prod_environment}",
+          ]
         }
       }
     }]

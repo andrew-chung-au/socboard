@@ -56,11 +56,11 @@ No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS
 |---|---|---|---|
 | `socboard-ci-plan` | any pull request run in this repository (subject ends `:pull_request`) | read the server state under `server/` in the state bucket, `ec2:Describe*`, read the deploy document | write anything, any `iam:*`, `dlm:*` or `budgets:*` action, read a secret value |
 | `socboard-ci-apply` | a job in the `infra` Environment (subject ends `:environment:infra`) | read and write the server state under `server/`, create EC2 resources in `us-east-1` only with the tag `project=socboard`, change only resources that carry it, manage the one deploy document, pass the instance role to EC2 | any IAM action but that one PassRole (explicit deny on `iam:*`, so it cannot change its own role or policy, or pass any other role), any `dlm:*` or `budgets:*` action, tag an existing untagged resource, read a secret value |
-| `socboard-ci-deploy` | a job in the `deploy` Environment (subject ends `:environment:deploy`) | send the one deploy document to instances tagged `project=socboard`, read a command's result by its id | run any AWS-owned document (so no generic shell), any `iam:*`, `dlm:*` or `budgets:*` action, read a secret value |
+| `socboard-ci-deploy` | a job in the `deploy` Environment (dev) or the `deploy-prod` Environment (prod); the subject ends `:environment:deploy` or `:environment:deploy-prod`, nothing else | send the one deploy document to instances tagged `project=socboard`, read a command's result by its id | run any AWS-owned document (so no generic shell), any `iam:*`, `dlm:*` or `budgets:*` action, read a secret value |
 
 - The provider is made here unless `reuse_oidc_provider_arn` is set. AWS allows one provider per URL in an account, so an account that already has one must reuse it.
 - Every trust condition requires the audience `sts.amazonaws.com` and one exact subject. The subject starts with `repo:<owner>@<owner id>/<repo>@<repo id>`, which is the form GitHub reported for this repository on 2026-11-14 (its API said `use_immutable_subject: true`). The numeric ids are therefore part of every trust, and a repository that was renamed or recreated cannot reuse a role. `VERIFY:` that a real token has this shape (D19).
-- **The branch limit is not in AWS.** For a job that names an Environment, the subject carries the Environment name, not the branch. A workflow on any branch that names `infra` or `deploy` could assume the role unless the Environment lets only `main` deploy. That is the human's setting in GitHub (D19), and the check in `_human-tasks/2026-11-14T0928Z-human-task-156-engineer-ci-access-apply-and-branch-check.md` is the evidence. The Engineer has not checked it.
+- **The branch limit is not in AWS.** For a job that names an Environment, the subject carries the Environment name, not the branch. A workflow on any branch that names `infra`, `deploy` or `deploy-prod` could assume the role unless the Environment lets only `main` deploy. That is the human's setting in GitHub (D19), and the check in `_human-tasks/2026-11-14T0928Z-human-task-156-engineer-ci-access-apply-and-branch-check.md` is the evidence. The Engineer has not checked it.
 - **The plan role is open to every pull request**, including a pull request that edits a workflow. That is why it is read-only and cannot read a secret value. Pull requests from forks get no OIDC token from GitHub by default (`VERIFY:` in D18b).
 - The state bucket is shared by every part. The plan and apply roles reach only the `server/` prefix, so the CI-applied server part (D17b) must set its backend `key` under `server/`. The state of this part and of `iam-and-budgets/` lives outside that prefix, so the CI roles can neither read nor change it. A read-only plan cannot write the native lock file, so the plan job runs with `-lock=false` (D18b).
 - The apply role's EC2 list is a first guess at D17b's needs. If the first CI apply is refused an action, the human adds that one action and applies this part by hand. That is the intended cost of keeping IAM out of CI's reach.
@@ -98,6 +98,16 @@ Later `init` runs need the same `-backend-config="bucket=<name>"` argument.
 
 If a real token's subject is `repo:<owner>/<repo>:...` without the numeric ids (for example if this repository was set to the old format), every assume-role attempt is refused, because the trust names the id form. Do not loosen the trust. Either switch the repository to the immutable format in GitHub, or change `local.sub_prefix` in `ci-access/main.tf` to the name-only form and note the weaker guarantee in the decision record. The ids cannot be required separately: AWS accepts conditions on the audience and the subject for this provider, not on arbitrary token claims (`VERIFY:`).
 
+### Prod access (the `deploy-prod` Environment, issue #268)
+
+Prod is a second Compose stack on the same server (`_docs/decisions/2026-11-15T1840Z-dev-prod-one-server.md`). The deploy role `socboard-ci-deploy` trusts two exact subjects, `:environment:deploy` (dev, unchanged) and `:environment:deploy-prod`, both with the audience `sts.amazonaws.com` and the numeric-id prefix, as a list under one `StringEquals`. There is no pattern, so no other Environment, branch or pull request can match. The apply and plan roles, the role's permission policy and the outputs are unchanged. Decision record: `_docs/decisions/2026-11-15T2328Z-prod-deploy-trust-and-secret.md` (proposed).
+
+- **One role serves both stacks, so AWS cannot tell a dev job from a prod job.** The deploy script's environment parameter picks the stack, not the role. The gate on prod is the `deploy-prod` Environment's required reviewer, which applies only to a job that names it. Like `deploy`, its branch limit (`main` only) is a GitHub setting, not AWS: a missing rule means any branch that names `deploy-prod` can assume the role.
+- **Masking the role's unique ID.** The credentials action prints it (it starts `AROA`) in clear, and GitHub masks only registered values. Both Environments use the same role, so one repository secret, `AWS_DEPLOY_ROLE_ID`, covers both (step 5 of the task file). A workflow masks it only if it references the secret before the credentials step; that edit is in the workflows, not here. A trust change in place keeps the role's ID (`VERIFY:`).
+- **Already done by the maintainer, 2026-11-16:** the empty secret `socboard/app-prod` and the Environment `deploy-prod` (reviewer: the maintainer, administrators not exempt through `can_admins_bypass`, branches limited to `main`). `can_admins_bypass` is verified as the GitHub field name (maintainer, 2026-11-16).
+- **Steps for the human (not yet run):** the re-apply of this part (plan first; expected `Plan: 0 to add, 1 to change, 0 to destroy.`, the role `socboard-ci-deploy`'s trust in place), the masking secret and the refused-branch check are step-by-step in `_human-tasks/2026-11-15T2328Z-human-task-268-engineer-prod-access-apply.md`, steps 3, 5 and 6. If the first apply (above) has not run yet, it already includes this change and its counts stay as written.
+- **Evidence for reviewers:** the result table in that task file, and the refused-branch run and its positive-control run, linked there by run URL. Not yet run, so both are empty (`NOT CHECKED`). The URLs of a deployed server are not live after teardown; the runs and the file are.
+
 ### Teardown (the human's step, destructive)
 
 Destroy this part after D17b's server part, because the CI roles are what CI uses for that part, and before the state bucket (Deploy item D23). Before the state bucket is emptied, this part's state must be back in a local file. Run these in `terraform/ci-access/`. All **not yet run**.
@@ -117,7 +127,7 @@ Destroy this part after D17b's server part, because the CI roles are what CI use
 
 ### What it creates
 
-- Role `socboard-instance` (only `ec2.amazonaws.com` may assume it) with the AWS-managed `AmazonSSMManagedInstanceCore` policy and one inline statement: `secretsmanager:GetSecretValue` on the one secret ARN you set. Nothing else, no write, no other service. Instance profile `socboard-instance` wraps it.
+- Role `socboard-instance` (only `ec2.amazonaws.com` may assume it) with the AWS-managed `AmazonSSMManagedInstanceCore` policy and one inline statement: `secretsmanager:GetSecretValue` on the two secret ARNs you set (dev's and prod's). Nothing else, no write, no other service. Instance profile `socboard-instance` wraps it.
 - **The snapshot schedule lives here, not in D17b.** An Amazon Data Lifecycle Manager policy snapshots every volume tagged `project=socboard` daily at 03:00 UTC and keeps the 7 newest, so it can be applied before the volume exists. Its execution role `socboard-snapshot` (only `dlm.amazonaws.com` may assume it) is here too. The tag must be unique to this deployment. The role's AWS-managed policy is probably account-wide with no tag condition: the tag only chooses what is scheduled (`VERIFY:` the policy's current document at the first apply).
 - **Rule for D17b:** the server part's root volume must not carry the tag `project=socboard`, or it is snapshotted too (unless you accept the extra snapshots knowingly). D17b's issue (#199) carries this as a criterion.
 - One monthly cost budget with notifications at 50, 80 and 100 percent of actual spend, sent to your address.
@@ -135,13 +145,13 @@ A later change to the instance's permissions, the snapshot schedule or its reten
 
 Run each step in `terraform/iam-and-budgets/` with AWS credentials for your own account in your shell (never in a file in this repository). The state bucket from `state/` must already exist, and you create the Secrets Manager secret yourself, outside Terraform.
 
-1. Copy `terraform.tfvars.example` to `terraform.tfvars` (git-ignored). Set `app_secret_arn` to your secret's ARN, `monthly_budget_usd` to your monthly limit and `notification_email` to your address.
+1. Copy `terraform.tfvars.example` to `terraform.tfvars` (git-ignored). Set `app_secret_arn` to your secret's ARN, `app_prod_secret_arn` to the ARN of `socboard/app-prod` (issue #268), `monthly_budget_usd` to your monthly limit and `notification_email` to your address.
    Expected: `git status` does not list `terraform.tfvars`.
 2. Copy `backend.tf.example` to `backend.tf`, then run `terraform init -backend-config="bucket=<your state bucket_name>"`. Commit `backend.tf`: it holds no bucket name and no secret.
    Expected: "Successfully configured the backend "s3"!" and "Terraform has been successfully initialized!"; `.terraform.lock.hcl` appears.
 3. Before committing `.terraform.lock.hcl`, add the checksums for every platform that will use it: `terraform providers lock -platform=linux_amd64 -platform=<your own platform>` (skip the second if yours is `linux_amd64`). Then commit it.
    Expected: "Success! Terraform has updated the lock file."
-4. `terraform plan`, and read it: the role's inline policy must name exactly your one secret ARN.
+4. `terraform plan`, and read it: the role's inline policy must name exactly your two secret ARNs.
    Expected: "Plan: 8 to add, 0 to change, 0 to destroy." (2 roles, 2 role policy attachments, 1 inline role policy, 1 instance profile, 1 lifecycle policy, 1 budget). Stop on any surprise.
 5. `terraform apply`, answering `yes`.
    Expected: "Apply complete! Resources: 8 added, 0 changed, 0 destroyed." and the output `instance_profile_name = "socboard-instance"`. The budget address may get a confirmation mail. If the snapshot lifecycle policy fails with a role error on the first apply, run `terraform apply` again: a new IAM role can take seconds to become usable (`VERIFY:`).
@@ -149,6 +159,13 @@ Run each step in `terraform/iam-and-budgets/` with AWS credentials for your own 
    Expected: as described. Whether the managed policy is wider than the agent needs is a `VERIFY:` for you to judge here. Also read the current document of `AWSDataLifecycleManagerServiceRole`: it is probably account-wide with no tag condition (`VERIFY:`).
 
 Later `init` runs need the same `-backend-config="bucket=<name>"` argument.
+
+### Prod secret (issue #268)
+
+The inline policy `read-app-secret` allows `secretsmanager:GetSecretValue` on exactly two ARNs: `app_secret_arn` (dev's `socboard/app`) and the new required variable `app_prod_secret_arn` (`socboard/app-prod`, prod's). The variable accepts only the exact secret name in `us-east-1` (name, dash, the six characters Secrets Manager adds), so a wildcard, another region, `socboard/app` and the same ARN twice are refused. No other statement, action or resource is added, and no secret is read, held or output. Nothing in this part creates the secret: the maintainer created it, empty, on 2026-11-16 (its value is set by the prod deploy issue). Decision record: `_docs/decisions/2026-11-15T2328Z-prod-deploy-trust-and-secret.md` (proposed).
+
+- **Steps for the human (not yet run):** put the secret's ARN in `terraform.tfvars` as `app_prod_secret_arn` (without printing it), then re-apply this part (plan first; expected `Plan: 0 to add, 1 to change, 0 to destroy.`, the inline policy in place, `VERIFY:`): `_human-tasks/2026-11-15T2328Z-human-task-268-engineer-prod-access-apply.md`, steps 1 and 2. If the first apply (above) has not run yet, set the variable in its step 1 and its counts stay as written.
+- **Evidence for reviewers:** the result table in that task file (rows 1 and 2). Not yet run, so the apply row is empty (`NOT CHECKED`).
 
 ### Teardown (the human's step, destructive)
 
