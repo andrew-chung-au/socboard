@@ -87,6 +87,7 @@ By file. Add project manifests here.
 | `_docs/decisions/2026-11-15T2100Z-deploy-dev-from-ci.md` | Why a green, published push to `main` deploys to dev through a separate `workflow_run` workflow in the `deploy` Environment, only for the newest commit, and leaves the record `deploy-record-dev` for promotion (issue #238) | Approved |
 | `observability/CONTRACT.md` | The signal contract shared by the Phase 3 observability work: resource attributes, metric, span and log names, the trace id format, the alert, the Alertmanager fields and the canary strings that no signal may hold (issue #285) | Current |
 | `openapi.yaml` | The HTTP API contract (OpenAPI 3.1): operations, schemas, refusal codes and the order of checks; checked by `make contract-check` (issue #9) | Current |
+| `_docs/runbooks/deploy-and-teardown.md` | How to deploy dev (by CI and by hand), read a failed run, roll back, hand out and rotate credentials, restore the database from a snapshot, deal with a failed certificate, and tear everything down and confirm nothing still bills; prod is not covered (#240) | Proposed |
 | `_docs/runbooks/kiro-web-to-dev-container-handover.md` | What can and cannot run in Kiro Web, CI and the dev container; the per-issue hand-over map, the hand-over comment layout, and the fallback for when the dev container is not available (Engineer and QA in Kiro Web with CI as the runner; worked example #8) | Current |
 | `pyproject.toml` | Python project metadata and dependencies | Current |
 | `uv.lock` | Resolved dependency versions | Current |
