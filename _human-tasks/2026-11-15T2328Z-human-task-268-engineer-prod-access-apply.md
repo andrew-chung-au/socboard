@@ -8,7 +8,7 @@ Dev is untouched: the Environment `deploy`, the secret `socboard/app` and the ro
 
 ## Where to run it
 
-The clean clone (repository root, on `main` after this pull request merged) with your own AWS credentials for the `socboard` profile in your shell, and a browser for the GitHub Actions tab. Not here: the sandbox where the Engineer worked, which has no AWS access. Never paste a value from a step into a file in the repository or a chat: the steps below print no ARN, token or account number.
+The clean clone (repository root, on `main` after this pull request merged) with your own AWS credentials for the `socboard` profile in your shell, and a browser for the GitHub Actions tab. Not here: the sandbox where the Engineer worked, which has no AWS access. Never paste a value from a step into a file in the repository or a chat. The `aws`, `gh` and probe commands below print no ARN, token or account number, but `terraform plan` and `apply` in steps 2 and 3 show ARNs (the two secrets, the OIDC provider and the three role outputs, all of which contain the account number) on your own terminal. Do not copy that output anywhere; the result table takes only the `Plan:` and `Apply complete!` lines.
 
 If a tool shows a permission prompt, reject one prompt at a time; rejecting ends the agent's turn, so tell it to continue.
 
@@ -34,6 +34,8 @@ Nothing to create. Check that it is in place before step 2. The ARN holds the ac
 ```
 printf '\napp_prod_secret_arn = "%s"\n' "$(aws secretsmanager describe-secret --profile socboard --region us-east-1 --secret-id socboard/app-prod --query ARN --output text)" >> terraform/iam-and-budgets/terraform.tfvars
 ```
+
+Expected: nothing printed. If the secret does not exist, the command appends an empty value and prints an AWS error: delete that last line from the variable file and tell the orchestrator.
 
 Read back:
 
@@ -171,9 +173,14 @@ jobs:
 git add .github/workflows/oidc-probe-deploy-prod.yml
 ```
 
+The repository's pre-commit hook refuses a commit that touches `.github/*` unless you approve it. You are the human approving it, for this one throwaway file:
+
 ```
-git commit -m "Probe: the deploy role from a throwaway branch (#268)"
+HUMAN_APPROVED=1 git commit -m "Probe: the deploy role from a throwaway branch (#268)"
 ```
+
+Expected: one commit on `oidc-probe-deploy-prod` adding the one file.
+If different: if the hook still refuses, read its message and tell the orchestrator; do not use `--no-verify`.
 
 ```
 git push -u origin oidc-probe-deploy-prod

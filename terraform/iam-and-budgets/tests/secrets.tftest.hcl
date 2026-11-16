@@ -71,6 +71,16 @@ run "star_name_prod_arn_is_refused" {
   expect_failures = [var.app_prod_secret_arn]
 }
 
+run "other_name_prod_arn_is_refused" {
+  command = plan
+
+  variables {
+    app_prod_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:socboard/other-GhIjKl"
+  }
+
+  expect_failures = [var.app_prod_secret_arn]
+}
+
 run "other_region_prod_arn_is_refused" {
   command = plan
 
