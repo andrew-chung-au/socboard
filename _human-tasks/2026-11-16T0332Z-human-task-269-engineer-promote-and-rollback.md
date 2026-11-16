@@ -59,8 +59,8 @@ git add .github/workflows/promote-prod.yml
 git status --short
 ```
 
-Expected: exactly two lines, `A  .github/workflows/promote-prod.yml` and `D  _human-tasks/269-proposed/promote-prod.yml`.
-If different: any other line means something else is staged; unstage it with `git restore --staged <path>` before the commit.
+Expected: one line, `R  _human-tasks/269-proposed/promote-prod.yml -> .github/workflows/promote-prod.yml` (git sees an unchanged copy as a rename), or on an older git the pair `A  .github/workflows/promote-prod.yml` and `D  _human-tasks/269-proposed/promote-prod.yml`.
+If different: a line for any other path means something else is staged; unstage only that path with `git restore --staged <path>` before the commit.
 
 The pre-commit hook refuses a commit that touches `.github/*` unless you approve it; you are that approval.
 

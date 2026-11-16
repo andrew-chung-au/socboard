@@ -71,8 +71,12 @@ def zip_of(*files):
     return buffer.getvalue()
 
 
-def entry(identifier, created, name="deploy-record-dev", expired=False, branch="main"):
-    return {"id": identifier, "name": name, "expired": expired, "created_at": created, "workflow_run": {"id": identifier * 10, "head_branch": branch}}
+REPO_ID = 1000
+
+
+def entry(identifier, created, name="deploy-record-dev", expired=False, branch="main", head_repo=REPO_ID):
+    run = {"id": identifier * 10, "head_branch": branch, "repository_id": REPO_ID, "head_repository_id": head_repo}
+    return {"id": identifier, "name": name, "expired": expired, "created_at": created, "workflow_run": run}
 
 
 class Stub:
@@ -231,10 +235,14 @@ def test_a_record_uploaded_by_a_run_on_another_branch_is_ignored(world):
     stub = two_records()
     stub.dev_artifacts.append(entry(12, "2026-11-16T05:00:00Z", branch="feature"))
     stub.dev_artifacts.append({"id": 13, "name": "deploy-record-dev", "expired": False, "created_at": "2026-11-16T05:00:00Z"})
-    stub.zips[12] = stub.zips[13] = zip_of(("r.json", json.dumps(dev_record(digest=DIGEST_UNKNOWN))))
+    # A fork's branch named main (a pull request from a fork runs in this repository's list too).
+    stub.dev_artifacts.append(entry(14, "2026-11-16T05:00:00Z", head_repo=2000))
+    stub.dev_artifacts.append(entry(15, "2026-11-16T05:00:00Z", head_repo=None))
+    for identifier in (12, 13, 14, 15):
+        stub.zips[identifier] = zip_of(("r.json", json.dumps(dev_record(digest=DIGEST_UNKNOWN))))
     code, out = world.resolve(stub)
     assert code == 0 and f"digest={DIGEST_NEW}" in out.splitlines()
-    assert not any("/12/" in path or "/13/" in path for path in stub.gh_paths())
+    assert not any(f"/{identifier}/" in path for path in stub.gh_paths() for identifier in (12, 13, 14, 15))
     code, out = world.resolve(stub, digest=DIGEST_UNKNOWN)
     assert code == 1 and out == ""
 

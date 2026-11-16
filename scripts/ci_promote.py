@@ -70,7 +70,13 @@ def list_artifacts(repository, name):
             # Only a record left by a run on main counts: any workflow run of this repository can upload an
             # artifact with this name, but only the deploy jobs on main write real ones. VERIFY: the list
             # entry's `workflow_run.head_branch` is the branch of the run that uploaded it.
-            if (item.get("workflow_run") or {}).get("head_branch") != "main":
+            # A fork's branch can also be called main, so the run's head repository must be this one.
+            # VERIFY: the entry carries `workflow_run.repository_id` and `workflow_run.head_repository_id`.
+            run = item.get("workflow_run") or {}
+            if run.get("head_branch") != "main":
+                continue
+            head_repo, repo = run.get("head_repository_id"), run.get("repository_id")
+            if not isinstance(repo, int) or isinstance(repo, bool) or head_repo != repo:
                 continue
             identifier, created = item["id"], item["created_at"]
             if isinstance(identifier, bool) or not isinstance(identifier, int) or not isinstance(created, str) or not CREATED_AT.fullmatch(created):
