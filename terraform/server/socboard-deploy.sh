@@ -293,6 +293,9 @@ for f in compose.yaml compose/db_init.py; do
   fi
   mv -f "$REL/$f.part" "$REL/$f" || die 4
 done
+# umask 077 made both files root 0600, and db-init (the app image's uid 10001) reads compose/db_init.py through a bind mount,
+# which keeps the host mode. Both files are public files of this repository: no secret in either (the variable file stays 0600).
+chmod 755 "$REL/compose" && chmod 644 "$REL/compose.yaml" "$REL/compose/db_init.py" || die 4
 # The restart policy and the proxy address are set here, so compose.yaml stays as the repository has it.
 {
   printf '%s\n' 'services:' '  db:' '    restart: unless-stopped' '  app:' '    restart: unless-stopped' \
