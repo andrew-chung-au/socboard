@@ -253,20 +253,255 @@ Destroy this part first, then `iam-and-budgets/`, `ci-access/` and `state/` last
 
 `user_data_replace_on_change = true`. cloud-init runs user data once per instance, so without it a change would stop and start the same instance and never run the new script. With it, any change to the bootstrap or to `acme_ca` replaces the instance. The data volume and the Elastic IP are separate resources and survive: the old instance is stopped before the volume is detached (`stop_instance_before_detaching`), the new one mounts the same volume without formatting it, re-owns `caddy/` to its own `caddy` user, and the hostname stays. Caddy finds its certificate and ACME account for the same hostname in the kept storage and reuses them, with no new issuance (`VERIFY:` at D19b, by the certificate's serial number before and after). A replacement that does re-issue counts against Let's Encrypt's limits: 5 duplicate certificates for the same names in 7 days, and the weekly limit per registered domain, which every sslip.io user shares unless sslip.io is on the Public Suffix List (`VERIFY:` the current figures). Avoid repeated replacements in one week. What is lost is the root disk: D20's Compose file and environment file on it, so D20 deploys again after a replacement. A replacement also takes the newest Canonical image (the `ignore_changes` on `ami` applies only to an ordinary plan).
 
-### Steps for the human in D19b (not yet run)
+### Steps for the human in D19b
 
-Run in `terraform/server/` as in the server section (same backend). These are for a server D19a (#207) already applied without the bootstrap; on a first apply with the bootstrap, follow the server section's steps instead.
+These are the steps to replace the instance of a server whose bootstrap has already run, which is what any change to `bootstrap.sh.tftpl` or `acme_ca` needs (#266 is the next one). The apply ran once, on 2026-11-16 (#256's hardened bootstrap over #233's); its results are in `_human-tasks/2026-11-16T0033Z-human-task-236-engineer-first-apply-part-b.md`. Steps 1 and 2 are new, because that run took no reading before the replacement and the root disk, with its logs, is gone after it; the other steps follow the order of that run. On a first apply with the bootstrap, follow the server section's steps instead.
 
-1. `terraform plan`, and read it: `aws_instance.server` "must be replaced" because of `user_data`; `aws_volume_attachment.data` is replaced with it; `aws_eip_association.server` is new; the data volume and the Elastic IP are neither replaced nor destroyed.
-   Expected: "Plan: 3 to add, 0 to change, 2 to destroy." (`VERIFY:` the Elastic IP may show as 1 to change while its association moves to the new resource). Stop if the data volume or the Elastic IP is to be destroyed.
-2. For the first try, consider `terraform apply -var acme_ca=https://acme-staging-v02.api.letsencrypt.org/directory`, so a failure does not use up the production rate limit; then apply again without it (a second replacement).
-   Expected: "Apply complete! Resources: 3 added, 0 changed, 2 destroyed." and the four outputs, including `hostname`.
-3. In Systems Manager (Session Manager) on the new instance, read `/var/log/cloud-init-output.log`.
-   Expected: it ends with `socboard-bootstrap: done`; `findmnt /srv/socboard-data` shows the volume by UUID; `stat -c %u /srv/socboard-data` prints `999`; `docker compose version` and `caddy version` print versions.
-4. Run the bootstrap a second time (the re-run command above).
-   Expected: it prints no `wrote` line and ends with `socboard-bootstrap: done`.
-5. Reboot the instance from the console.
-   Expected: the volume is mounted again and Caddy is running (`systemctl is-active caddy`). Then, after D20 has deployed, `https://<hostname>/api/health` answers from your browser with a valid certificate (a staging certificate shows as untrusted).
+Run every step in `terraform/server/` in your own shell (same backend and AWS sign-in as the server section, region `us-east-1`), except where a step says "in the session": those commands run in a Systems Manager session on the instance. Never write the AWS account number, an ARN that contains it, a token or a secret value into a file in this repository.
+
+#### Step 1: record what the replacement changes, from outside
+
+```
+terraform output
+```
+
+Expected: four values, `elastic_ip`, `hostname`, `instance_id` and `data_volume_id`. Keep them: step 6 compares them with the same output after the apply.
+If different: fewer than four means the backend is not initialised (the server section's step 2); stop.
+Risk: none, it only reads.
+
+```
+echo | openssl s_client -connect "$(terraform output -raw hostname):443" -servername "$(terraform output -raw hostname)" 2>/dev/null | openssl x509 -noout -serial -issuer -dates
+```
+
+Expected: the certificate's `serial=`, an issuer that names Let's Encrypt, and the two dates. Keep the serial: step 9 compares it.
+If different: no output means no certificate is served yet; write "none" and go on.
+Risk: none, it only reads.
+
+#### Step 2: record what the replacement deletes, on the current instance
+
+Open a session on the instance that is about to be replaced. The suggested default for the instance id is the current output:
+
+```
+aws ssm start-session --region us-east-1 --target "$(terraform output -raw instance_id)"
+```
+
+Expected: a shell prompt on the instance. If `aws` says the Session Manager plugin is missing, use Systems Manager, Session Manager, in the console instead.
+If different: if the instance is not online, skip this step and say so in the record; step 1 still holds.
+Risk: none, it only reads.
+
+The blocks below run in the session.
+
+```
+tail -n 5 /var/log/cloud-init-output.log
+```
+
+Expected: the last lines end with `socboard-bootstrap: done`.
+
+```
+dpkg-query -W docker.io docker-compose-v2 caddy
+```
+
+Expected: three package names with versions. Keep them.
+
+```
+stat -c '%U %u %a %n' /srv/socboard-data /srv/socboard-data/postgres /srv/socboard-data/caddy
+```
+
+Expected: the owners and modes on the volume. A host bootstrapped by #256 or later shows `root 0 755` for the mount root, `uid 999` and `700` for `postgres/`, and the `caddy` user and `700` for `caddy/`. A host bootstrapped by #233 alone shows the mount root owned by 999 and no `postgres/`; the new bootstrap fixes that.
+
+```
+findmnt -no UUID /srv/socboard-data
+```
+
+Expected: the volume's file-system UUID. Keep it: step 8 shows the new instance mounts the same one.
+If different: if the folder is not a mount point, stop: the volume is not attached, and the replacement must wait.
+
+```
+id -u caddy
+```
+
+Expected: the `caddy` user's uid, which may differ on the new instance (the bootstrap re-owns `caddy/`). Then leave the session with `exit`.
+
+#### Step 3: read the plan
+
+```
+terraform plan
+```
+
+Expected: `aws_instance.server` "must be replaced" because of `user_data`, and `aws_volume_attachment.data` and `aws_eip_association.server` replaced with it. The data volume and the Elastic IP are not touched.
+- On 2026-11-16 the plan was "Plan: 4 to add, 0 to change, 3 to destroy.": the three replaced resources and `aws_ssm_document.deploy`, the `socboard-deploy` document, created for the first time.
+- Once that document exists, a replacement alone reads "Plan: 3 to add, 0 to change, 3 to destroy." A pending change to `socboard-deploy.sh` adds "1 to change" for the document. So read the list of resources, not only the counts.
+- (`VERIFY:` if the provider updates the association in place, the plan reads one fewer add and destroy and one change.)
+
+If different: stop, and do not apply, if `aws_ebs_volume.data`, `aws_eip.server` or the security group or its rules is replaced, destroyed or changed. Refusal test: a plan that would destroy or replace the data volume fails with "Instance cannot be destroyed" (its `prevent_destroy`); that error is the expected refusal, not a fault to work around. Tell the issue's owner what the plan listed.
+Risk: none, it only reads.
+
+#### Step 4: apply
+
+```
+terraform apply
+```
+
+Answer `yes` only after step 3 matched. The default certificate authority is Let's Encrypt production.
+
+Expected: "Apply complete!" with the same counts the plan showed (for 2026-11-16: 4 added, 0 changed, 3 destroyed), and the four outputs.
+If different: if the apply stops with an error, do not retry another way; send the error text. If no certificate is issued within 15 minutes (step 9 shows no valid certificate and Caddy's journal, `sudo journalctl -u caddy --no-pager | tail -n 30`, shows ACME errors; the first attempts can fail while the Elastic IP's association is still moving), apply once more with the staging directory to find the cause without using up production attempts, then stop and ask for a new issue:
+
+```
+terraform apply -var acme_ca=https://acme-staging-v02.api.letsencrypt.org/directory
+```
+
+Risk: replaces the instance. The old root disk and every file on it are deleted (Compose files, the environment file, the images and the logs); the data volume and the Elastic IP stay. Both stacks on the host (dev, and prod once it exists) are down until they are deployed again (D20's deploy). The staging command is a second replacement. Let's Encrypt allows 5 duplicate certificates for the same names in 7 days and shares a weekly limit per registered domain with every sslip.io user (`VERIFY:` the current figures), so do not replace more than once or twice in a week. Undo: none; an earlier bootstrap comes back only by reverting the change and replacing again.
+
+#### Step 5: check the outputs
+
+```
+terraform output
+```
+
+Expected: `elastic_ip`, `hostname` and `data_volume_id` equal step 1's; `instance_id` is new (2026-11-16: `i-0a09e0f4996d70859`).
+If different: a changed `elastic_ip` or `hostname` means the address was replaced; stop, because the hostname and the certificate no longer match.
+Risk: none, it only reads.
+
+#### Step 6: update the instance id that CI deploys to
+
+The instance id changed, so every GitHub Environment variable that holds it is stale. `DEPLOY_INSTANCE_ID` on the `deploy` Environment (#238) is one; `DEPLOY_URL` does not change, because the hostname does not. Until the id is updated, every deploy fails at the send step with "the instance id in DEPLOY_INSTANCE_ID may be stale".
+
+```
+gh variable list --env deploy --repo andrew-chung-au/socboard
+```
+
+Expected: a list that includes `DEPLOY_INSTANCE_ID` once #238's steps have run. Check the same for `deploy-prod` when it exists (`--env deploy-prod`), and update every Environment that holds the id.
+If different: if the variable is not listed, #238's first run has not happened; skip the next block, and #238's own steps will read the current output.
+
+```
+gh variable set DEPLOY_INSTANCE_ID --env deploy --repo andrew-chung-au/socboard --body "$(terraform output -raw instance_id)"
+```
+
+Expected: no error. Run `gh variable list --env deploy --repo andrew-chung-au/socboard` again: `DEPLOY_INSTANCE_ID` shows the new id.
+If different: an authentication error means `gh` is not signed in as a repository admin; use the repository's Settings, Environments page instead and type the value from step 5.
+Risk: a wrong value fails the next deploy job before any AWS call, naming the variable. Undo: set it again.
+
+#### Step 7: wait for the instance to come online
+
+```
+aws ssm describe-instance-information --region us-east-1 --filters "Key=InstanceIds,Values=$(terraform output -raw instance_id)" --query 'InstanceInformationList[].PingStatus' --output text
+```
+
+Expected: `Online`, on the first poll or within about ten minutes (2026-11-16: the first poll). Poll again with the same command; do not apply again.
+If different: after ten minutes, the egress limit (TCP 80 and 443 only) is the first suspect (`VERIFY:`); the fix goes through a new issue.
+Risk: none, it only reads.
+
+#### Step 8: check the host
+
+Open a session on the new instance with step 2's first command (it now targets the new id). Run each block below in the session:
+
+```
+cloud-init status
+```
+
+Expected: `status: done`.
+
+```
+tail -n 5 /var/log/cloud-init-output.log
+```
+
+Expected: the last line is `socboard-bootstrap: done`.
+
+```
+grep -c 'formatting the empty data volume' /var/log/cloud-init-output.log
+```
+
+Expected: `0`. A replacement never formats the volume, which already holds a file system.
+If different: `1` means the volume was seen as blank and formatted; stop and send the log. Do not start any stack.
+
+```
+findmnt -no SOURCE,UUID /srv/socboard-data
+```
+
+Expected: the volume's NVMe device (2026-11-16: `/dev/nvme1n1`) and the same UUID as step 2's. The fstab line is by UUID (`grep socboard-data /etc/fstab`).
+
+```
+stat -c '%U %u %a %n' /srv/socboard-data /srv/socboard-data/postgres /srv/socboard-data/caddy
+```
+
+Expected: `root 0 755` for `/srv/socboard-data`; uid 999 and `700` for `postgres/` (the host names uid 999 `dnsmasq`; nothing on the host runs as that uid); the `caddy` user and `700` for `caddy/`.
+
+```
+systemctl is-active docker caddy
+```
+
+Expected: `active` twice.
+
+```
+docker compose version
+```
+
+Expected: a version (2026-11-16: Docker Compose 2.40.3).
+
+```
+caddy version
+```
+
+Expected: a version (2026-11-16: v2.11.9).
+
+#### Step 9: check from outside
+
+```
+curl -sS -o /dev/null -w '%{http_code}\n' "https://$(terraform output -raw hostname)/"
+```
+
+Expected: `502` while nothing is deployed (Caddy answers, nothing is on port 8000), with a valid certificate and no certificate warning. Once the app is deployed again it answers `200` or the app's own status.
+If different: a certificate error, or a connection that times out, means Caddy has not got a certificate yet; wait five minutes and try again, then follow step 4's staging path.
+
+```
+echo | openssl s_client -connect "$(terraform output -raw hostname):443" -servername "$(terraform output -raw hostname)" 2>/dev/null | openssl x509 -noout -serial -issuer -dates
+```
+
+Expected: the same `serial=` as step 1: Caddy found its certificate and account in the kept storage on the data volume and issued nothing new. A different serial is not a failure: note it with the time the issuance took and any early ACME failure, because it counts against Let's Encrypt's limits.
+
+#### Step 10: run the bootstrap a second time
+
+In the session on the new instance:
+
+```
+sudo bash /var/lib/cloud/instance/scripts/part-001
+```
+
+Expected: it prints no `wrote`, `formatting`, `added` or `owner of` line, and ends with `socboard-bootstrap: done` (2026-11-16: it wrote nothing).
+If different: a `wrote` line on a second run means a step is not idempotent; stop and send the output.
+Risk: none when it behaves; a step that is not idempotent rewrites a file and restarts a service. Undo: none; the next replacement starts from the template again.
+
+#### Step 11: reboot
+
+```
+aws ec2 reboot-instances --region us-east-1 --instance-ids "$(terraform output -raw instance_id)"
+```
+
+Expected: no output. About two minutes later, repeat step 7's command until it prints `Online`, then in a new session run `findmnt /srv/socboard-data` and `systemctl is-active docker caddy` (the volume mounted, `active` twice).
+If different: if the volume is not mounted, Docker and Caddy stay stopped on purpose (`RequiresMountsFor`) while Systems Manager still reaches the host; stop and send what `findmnt` and `systemctl status docker` print.
+Risk: both stacks are down for about two minutes. Undo: none needed. Once a stack is deployed, its containers come back only with `restart: unless-stopped` in the Compose file.
+
+#### Step 12: a second plan
+
+```
+terraform plan
+```
+
+Expected: "No changes."
+If different: stop and send the plan. Do not apply. A staging apply in step 4 leaves a plan that wants to set `acme_ca` back; applying that is another replacement, so do it only when you mean it.
+Risk: none, it only reads.
+
+```
+git status --short
+```
+
+Expected: no output; `backend.tf` and `.terraform.lock.hcl` are unchanged.
+
+#### Step 13: record the result once
+
+Write the results (date, what was checked, result, link) into a dated file in `_human-tasks/` named for the issue that asked for the replacement, with a row for each step above, and put one line in `_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md` that links it. Include the old and new instance ids, the plan counts, the old and new certificate serials and the reading of the first-run facts from step 2. The record holds no account number, no ARN with it, no e-mail address and no secret.
+Expected: the row for each step is PASS, FAIL or NOT CHECKED. A FAIL says what you saw, and the fix goes through a new issue, never an edit during the apply. A fix to the bootstrap replaces the instance again, so these steps run again from step 1, and the record says why.
 
 ### Teardown
 
