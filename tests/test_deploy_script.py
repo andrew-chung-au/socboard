@@ -104,7 +104,7 @@ def compose_tail(line):
 
 def kind(line):
     """A short name for one recorded call, or None for a note line."""
-    if line.startswith(("VARS_MODE", "IMG ", "SMOKE_ENV", "PULL_ENV", "ENV_SET ")):
+    if line.startswith(("VARS_MODE", "MODES ", "IMG ", "SMOKE_ENV", "PULL_ENV", "ENV_SET ")):
         return None
     words = line.split()
     head = words[0]
@@ -203,7 +203,8 @@ case "$1" in
     shift; envf=""
     while [ $# -gt 0 ]; do
       case "$1" in
-        --project-directory|-f) shift 2 ;;
+        --project-directory) pd=$2; shift 2 ;;
+        -f) shift 2 ;;
         --env-file) envf=$2; shift 2 ;;
         *) break ;;
       esac
@@ -238,7 +239,11 @@ case "$1" in
       run)
         case " $* " in
           *" --name "*) [ -n "${STUB_CAND_RUN_FAIL:-}" ] && exit 1; : > "$S/cand_exists" ;;
-          *) [ "${STUB_FAIL_SERVICE:-}" = "$last" ] && exit 1 ;;
+          *)
+            # The modes a container would meet now: the folder, compose.yaml and the bind-mounted db_init.py (unquoted on purpose: one line).
+            m=$(@STAT@ -c %a "$pd/compose" "$pd/compose.yaml" "$pd/compose/db_init.py")
+            echo "MODES $last" $m >> "$STUB_CALLS"
+            [ "${STUB_FAIL_SERVICE:-}" = "$last" ] && exit 1 ;;
         esac
         exit 0 ;;
     esac
@@ -732,6 +737,27 @@ def test_a_good_run_leaves_the_release_files_and_the_current_link(box):
     assert "SOCBOARD_TRUSTED_PROXIES: 10.231.77.1\n" in override
     assert override.count("restart: unless-stopped") == 2 and "FORWARDED_ALLOW_IPS" not in override and "proxy:" not in override
     assert r.code == 0
+
+
+def test_the_fetched_files_are_readable_by_the_container_user_when_each_one_shot_service_runs(box):
+    # umask 077 would leave them root 0600; db-init runs as uid 10001 and reads db_init.py through a bind mount (#321).
+    r = box.run()
+    assert_only(r, 0, DEPLOYED)
+    assert [line for line in r.calls if line.startswith("MODES ")] == [f"MODES {s} 755 644 644" for s in ("db-init", "migrate", "seed")]
+    release = box.opt / "releases" / f"{REVISION}-{'a' * 12}"
+    assert [stat.S_IMODE(p.stat().st_mode) for p in (release / "compose", release / "compose.yaml", release / "compose" / "db_init.py")] == [0o755, 0o644, 0o644]
+    assert_safe(r)  # the variable file is still only ever 0600
+
+
+def test_a_mode_change_that_fails_exits_4_before_the_secret_is_read(box):
+    chmod = box.tools / "chmod"
+    chmod.unlink()
+    chmod.write_text(f'#!{real("bash")}\ncase "$1" in 644|755) exit 1 ;; esac\nexec {real("chmod")} "$@"\n', encoding="utf-8")
+    chmod.chmod(0o755)
+    box.set_app(PREVIOUS_IMAGE)
+    r = box.run()
+    refused(r, 4, FIXED[4])
+    assert not {"secret-read", "up-db", "run-db-init"} & set(r.kinds())
 
 
 def test_the_variable_file_holds_the_eight_values_and_two_fixed_ones_and_nothing_else(box):
