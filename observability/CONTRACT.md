@@ -4,9 +4,9 @@ The names the observability work shares (roadmap 4, `_docs/planning/roadmap-4-de
 
 Rules that apply to every table:
 
-- No value in any row is free text. Every attribute, label and field is a fixed word, a number, an id or a version, so alert and case text cannot reach a signal.
+- No value in any row is free text. Every value derived from a request is a fixed word, a number, an id or a version, so alert and case text cannot reach a signal. The only exceptions are `deployment.environment.name` and `service.version`, which an operator sets (section 1) and no request can reach.
 - The allowed labels and fields are the whole list. Anything not listed is refused.
-- `socboard.case.id` is the public case id (the decimal string the API shows), never a database key shown in another form.
+- `socboard.case.id` is the public case id exactly as the API returns it, an opaque string (`openapi.yaml`), never a database key shown in another form.
 
 ## 1. Resource attributes
 
@@ -18,6 +18,7 @@ Set once on the telemetry resource, so they appear on every metric, span and log
 | `deployment.environment.name` | string | for example `dev`, `ci` | `OTEL_RESOURCE_ATTRIBUTES` | #289 |
 | `service.version` | string | the image or commit version | `OTEL_RESOURCE_ATTRIBUTES` | #289 |
 
+- `deployment.environment.name` and `service.version` are operator-set: read from `OTEL_RESOURCE_ATTRIBUTES` at start-up, never from a request, so alert and case text cannot reach them.
 - No new application variable is added for these.
 - Telemetry is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Unset or empty means nothing is created or exported.
 
@@ -44,7 +45,7 @@ Set once on the telemetry resource, so they appear on every metric, span and log
 | Attribute | Type | Allowed values |
 |---|---|---|
 | `socboard.alert.severity` | string | `Low`, `Medium`, `High`, `Critical` (the severities of `openapi.yaml`) |
-| `socboard.case.id` | string | the public case id, decimal digits only |
+| `socboard.case.id` | string | the public case id exactly as the API returns it, an opaque string (`openapi.yaml`) |
 
 - No SQL, HTTP-client or other auto-instrumentation is used. Spans are written by hand.
 - The only attributes any span may carry are the two above. No URL, header, query string or HTTP status attribute is set.
@@ -60,8 +61,8 @@ One JSON object per line, on standard output.
 | `level` | string | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `logger` | string | the logger's name, a fixed dotted name in the code |
 | `event` | string | one of the events below |
-| `trace_id` | string | 32 lower-case hex characters (section 5), or `""` when no span is active |
-| `span_id` | string | 16 lower-case hex characters, or `""` when no span is active |
+| `trace_id` | string | 32 lower-case hex characters (section 5); left out of the line when no span is active |
+| `span_id` | string | 16 lower-case hex characters; left out of the line when no span is active |
 | `service.name` | string | `socboard` |
 
 | Event | When | Extra fields | Implemented by |
@@ -70,7 +71,7 @@ One JSON object per line, on standard output.
 | `alert.first_in_queue` | the first queue read returned the case | none | #291 |
 
 - `event` is a fixed word from this table, never built from alert text.
-- A log line carries no field beyond the seven above. The case id and severity are found through the trace id.
+- A log line carries no field beyond the seven above. `trace_id` and `span_id` are absent, not zero or empty, when no span is active. The case id and severity are found through the trace id.
 
 ## 5. Trace id format
 
@@ -138,4 +139,6 @@ Each line is `<kind>=<value>`. The value is what a test searches for.
 
 ## 9. Check of the refused case
 
-Every row above was read for a value that could hold alert or case text. The values are fixed words (`outcome`, severities, `event`, `level`), numbers, versions, ids or fixed sentences written in the code or the rule. None is free text.
+Every row above was read for a value that could hold alert or case text. The values derived from a request are fixed words (`outcome`, severities, `event`, `level`), numbers, versions, ids or fixed sentences written in the code or the rule. None of them is free text.
+
+The exceptions are `deployment.environment.name` and `service.version`, and the section 6 annotations `environment` and `version`, which carry those two values. An operator sets them in `OTEL_RESOURCE_ATTRIBUTES` at start-up (section 1). No request can reach them, so alert and case text cannot enter a signal through them.
