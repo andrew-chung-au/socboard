@@ -85,6 +85,8 @@ In the repository's settings, in a browser:
 4. On the "Variables" tab: the repository variable `TF_STATE_BUCKET`, set to the state bucket name. It stays a variable because a bucket name does not identify the account, provided you chose one without the account number (`terraform/README.md`, state bucket, step 2).
 
 Expected: the two Environments show the rules above, the Secrets tab lists the three role secrets, and the Variables tab lists `TF_STATE_BUCKET`. This covers the #156 task file's "Before you start" items 2 and 3, and the `AWS_PLAN_ROLE_ARN` secret it asks for in its step 1.
+
+Note: the secret `AWS_PLAN_ROLE_ID` was added later by #209 (set on 2026-11-16); see `terraform/README.md`, Outputs.
 Risk: changes who may deploy. Undo: edit or delete the Environment, secret or variable in the same page.
 
 ### Step 5: The #156 branch check
@@ -233,7 +235,7 @@ Write PASS, FAIL or NOT SETTLED in each row, with a short note. A FAIL note says
 | 8 | `ci-access/` steps 1 to 6 as expected: 7 resources (6 if the provider was reused), the provider made without `thumbprint_list` | step 3.3; `ci-access/main.tf` | NOT CHECKED | |
 | 9 | The real OIDC subject has the numeric-id form (#156 step 1 passes); if not, the README's "If the subject has no ids" path was followed, never a looser trust | step 5; `ci-access/main.tf`, `ci-access/plan.tf` | NOT CHECKED | |
 | 10 | Branch check: see the #156 task file's own table (steps 2 and 3 refused) | step 5 | NOT CHECKED | |
-| 11 | `infra`: named reviewer, administrators not exempt, `main` only; `deploy`: `main` only; the three role ARNs set as repository secrets (write "ARN set") and `TF_STATE_BUCKET` as a variable | step 4 | NOT CHECKED | |
+| 11 | `infra`: named reviewer, administrators not exempt, `main` only; `deploy`: `main` only; the three role ARNs set as repository secrets (write "ARN set") and `TF_STATE_BUCKET` as a variable (note: `AWS_PLAN_ROLE_ID` was added later by #209, set on 2026-11-16; see `terraform/README.md`, Outputs) | step 4 | NOT CHECKED | |
 | 12 | T3 is offered in the chosen zone (default `us-east-1a`); whether `us-east-1e` is listed | step 6; `server/variables.tf` | NOT CHECKED | |
 | 13 | The `aws_ami` lookup (owner `099720109477`, the noble 24.04 amd64 name pattern) finds an image, and the default subnet of the zone is found | step 6 (README step 4); `server/main.tf` | NOT CHECKED | |
 | 14 | `server/` steps 1 to 6 as expected: 9 resources, three outputs | step 6; `server/main.tf` | NOT CHECKED | |

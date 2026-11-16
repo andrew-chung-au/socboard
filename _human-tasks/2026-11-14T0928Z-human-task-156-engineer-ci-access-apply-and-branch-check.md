@@ -25,7 +25,7 @@ Expected: `main`, with a clean `git status --short`.
 
 ### Step 1: Positive control, the plan role accepts a pull request run
 
-This shows the subject format in the trust is right, so a later refusal means something. Add `AWS_PLAN_ROLE_ARN` as a repository secret first. The log is public and an AWS error message can name the role's full ARN, which contains the account number, so every probe below prints only "assumed" with the role and session name (the text after `assumed-role/`), or the AWS error code. On a new branch `oidc-probe-plan`, add `.github/workflows/oidc-probe-plan.yml`:
+This shows the subject format in the trust is right, so a later refusal means something. Add `AWS_PLAN_ROLE_ARN` as a repository secret first (note: `AWS_PLAN_ROLE_ID` was added later by #209, set on 2026-11-16; see `terraform/README.md`, Outputs). The log is public and an AWS error message can name the role's full ARN, which contains the account number, so every probe below prints only "assumed" with the role and session name (the text after `assumed-role/`), or the AWS error code. On a new branch `oidc-probe-plan`, add `.github/workflows/oidc-probe-plan.yml`:
 
 ```yaml
 name: oidc-probe-plan
