@@ -58,7 +58,7 @@ Expected: `publish.yml` gains two steps at the end of the `publish` job and noth
 
 `deploy-dev.yml` has two jobs:
 - `find`: no Environment, `actions: read`.
-- `deploy`: Environment `deploy`, `id-token: write`, the role from `secrets.AWS_DEPLOY_ROLE_ARN`.
+- `deploy`: Environment `deploy`, `id-token: write`, the role from `secrets.AWS_DEPLOY_ROLE_ARN`. A step before the credentials step masks the role's unique ID from the repository secret `AWS_DEPLOY_ROLE_ID` (set by #268), so the public log does not print it.
 
 If different: stop and tell the orchestrator what was printed.
 
