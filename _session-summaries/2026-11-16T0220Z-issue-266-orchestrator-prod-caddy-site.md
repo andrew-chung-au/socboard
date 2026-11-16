@@ -61,4 +61,4 @@ none
 
 ## Follow-ups for the next session
 
-- After #237's first deploy, the maintainer applies this change (README, "Steps for the human in D19b", and the block for #266 at its end), then the record and the timeline line are written.
+- The maintainer applied this change on 2026-11-16, before #237's first deploy (nothing was running). The record is `_human-tasks/2026-11-16T0259Z-human-task-266-engineer-apply-prod-site.md` and the timeline has its line. The apply settled F-266-2 (`caddy validate` printed `Valid configuration`; the README's `VERIFY:` on it is removed) and corrected the README's claim that the apply waits for #237's first deploy.
