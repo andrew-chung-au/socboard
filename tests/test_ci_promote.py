@@ -71,8 +71,8 @@ def zip_of(*files):
     return buffer.getvalue()
 
 
-def entry(identifier, created, name="deploy-record-dev", expired=False):
-    return {"id": identifier, "name": name, "expired": expired, "created_at": created}
+def entry(identifier, created, name="deploy-record-dev", expired=False, branch="main"):
+    return {"id": identifier, "name": name, "expired": expired, "created_at": created, "workflow_run": {"id": identifier * 10, "head_branch": branch}}
 
 
 class Stub:
@@ -224,6 +224,29 @@ def test_no_dev_record_at_all_says_to_let_a_push_deploy_to_dev(world, capsys):
 def test_only_expired_records_count_as_none(world, capsys):
     code, _ = world.resolve(Stub(dev_artifacts=[entry(1, "2026-11-16T01:00:00Z", expired=True)]))
     assert code == 1 and "no dev deploy record" in capsys.readouterr().err
+
+
+def test_a_record_uploaded_by_a_run_on_another_branch_is_ignored(world):
+    # Newer and well formed, but left by a run on another branch: it must not be promoted or downloaded.
+    stub = two_records()
+    stub.dev_artifacts.append(entry(12, "2026-11-16T05:00:00Z", branch="feature"))
+    stub.dev_artifacts.append({"id": 13, "name": "deploy-record-dev", "expired": False, "created_at": "2026-11-16T05:00:00Z"})
+    stub.zips[12] = stub.zips[13] = zip_of(("r.json", json.dumps(dev_record(digest=DIGEST_UNKNOWN))))
+    code, out = world.resolve(stub)
+    assert code == 0 and f"digest={DIGEST_NEW}" in out.splitlines()
+    assert not any("/12/" in path or "/13/" in path for path in stub.gh_paths())
+    code, out = world.resolve(stub, digest=DIGEST_UNKNOWN)
+    assert code == 1 and out == ""
+
+
+def test_a_gh_call_that_hangs_is_a_clean_refusal_naming_no_path(world, monkeypatch, capsys):
+    def hang(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 60)
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    assert cp.main(["resolve", "--repository", REPOSITORY], {}) == 1
+    err = capsys.readouterr().err
+    assert "did not answer" in err and REPOSITORY not in err
 
 
 def test_an_artifact_of_another_name_is_ignored(world, capsys):

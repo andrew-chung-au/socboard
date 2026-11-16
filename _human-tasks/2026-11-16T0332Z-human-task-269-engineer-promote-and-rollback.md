@@ -42,13 +42,25 @@ If different: stop; promote would reach a server without the `environment` param
 cp _human-tasks/269-proposed/promote-prod.yml .github/workflows/promote-prod.yml
 ```
 
+Expected: nothing printed.
+If different: "No such file" means this clone is not on `main` after #269 merged; run `git pull` and try again.
+
 ```
 git rm -q _human-tasks/269-proposed/promote-prod.yml
 ```
 
+Expected: nothing printed.
+
 ```
 git add .github/workflows/promote-prod.yml
 ```
+
+```
+git status --short
+```
+
+Expected: exactly two lines, `A  .github/workflows/promote-prod.yml` and `D  _human-tasks/269-proposed/promote-prod.yml`.
+If different: any other line means something else is staged; unstage it with `git restore --staged <path>` before the commit.
 
 The pre-commit hook refuses a commit that touches `.github/*` unless you approve it; you are that approval.
 
@@ -64,6 +76,7 @@ git push origin main
 ```
 
 Expected: the push succeeds; the Actions tab lists "socboard promote prod" with a "Run workflow" button.
+If different: a pre-push refusal names the failing check (`make verify`); fix nothing by hand, copy its last lines into the table and tell the orchestrator. A missing workflow in the Actions tab after a good push means the file is not on `main`: check `git log -1 --stat origin/main`.
 Risk: adds a manual workflow; it does nothing until someone starts it and you approve it. Undo: delete the file in a new commit.
 
 ### Step 2: Set the two Environment variables on `deploy-prod`
@@ -76,11 +89,16 @@ gh api repos/andrew-chung-au/socboard/environments/deploy/variables/DEPLOY_INSTA
 
 Expected: `i-` and hex digits (an instance id is not a secret).
 
+If different: an HTTP 404 means `deploy` has no such variable yet (#238's steps set it); use `terraform -chdir=terraform/server output -raw instance_id` instead.
+
+Set it on `deploy-prod` from the same place, so nothing is typed:
+
 ```
-gh variable set DEPLOY_INSTANCE_ID --env deploy-prod --repo andrew-chung-au/socboard --body i-071fe10ec49fbbbe5
+gh variable set DEPLOY_INSTANCE_ID --env deploy-prod --repo andrew-chung-au/socboard --body "$(gh api repos/andrew-chung-au/socboard/environments/deploy/variables/DEPLOY_INSTANCE_ID --jq .value)"
 ```
 
-Use the value the previous command printed if it differs from `i-071fe10ec49fbbbe5`.
+Expected: `✓ Created variable DEPLOY_INSTANCE_ID for andrew-chung-au/socboard` (or "Updated").
+If different: an error naming the Environment means `deploy-prod` does not exist; it was created on 2026-11-16 (#268), so tell the orchestrator.
 
 The URL is prod's hostname (#266's output `prod_hostname`); the suggested value:
 
@@ -88,11 +106,14 @@ The URL is prod's hostname (#266's output `prod_hostname`); the suggested value:
 terraform -chdir=terraform/server output -raw prod_hostname
 ```
 
-Expected: `prod-44-216-250-242.sslip.io` or the same form with your Elastic IP.
+Expected: `prod-44-216-250-242.sslip.io` (recorded at #266's apply, 2026-11-16) or the same form with your Elastic IP.
+If different: an error means the server part's state is not reachable from this shell (credentials or `init`); use the `prod_hostname` value recorded in #266's result instead.
 
 ```
-gh variable set DEPLOY_URL --env deploy-prod --repo andrew-chung-au/socboard --body https://prod-44-216-250-242.sslip.io
+gh variable set DEPLOY_URL --env deploy-prod --repo andrew-chung-au/socboard --body "https://$(terraform -chdir=terraform/server output -raw prod_hostname)"
 ```
+
+Expected: `✓ Created variable DEPLOY_URL for andrew-chung-au/socboard`.
 
 ```
 gh variable list --env deploy-prod --repo andrew-chung-au/socboard
@@ -126,17 +147,31 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://prod-44-216-250-242.sslip.io/a
 ```
 
 Expected: `200`. Open the prod URL in a browser: the sign-in page loads with a valid certificate.
+If different: anything but `200` (or a certificate warning) means prod is not serving: copy the code into the table and tell the orchestrator; prod still runs what the script restored if the swap failed (#237). Do not promote again to "fix" it.
 
 ### Step 5: Roll back to an earlier dev digest, then forward again
 
-In step 3's `resolve` summary, under "Recent dev digests", pick the second row's digest (an older commit). Then:
+The suggested digest is the second-newest digest dev ran (the summary of step 3's `resolve` job lists the same ones under "Recent dev digests"). Download dev's second-newest record:
 
 ```
-gh workflow run promote-prod.yml --repo andrew-chung-au/socboard --ref main -f digest=<the older digest>
+gh run download --repo andrew-chung-au/socboard --name deploy-record-dev --dir .scratch/dev-record-2 "$(gh api 'repos/andrew-chung-au/socboard/actions/artifacts?name=deploy-record-dev&per_page=2' --jq '.artifacts[1].workflow_run.id')"
+```
+
+```
+jq -r .digest .scratch/dev-record-2/deploy-record-dev.json
+```
+
+Expected: one line `sha256:` and 64 hex digits, different from the digest step 3 promoted.
+If different: the same digest as step 3 means dev's two newest records are the same release; take the next row of the summary's list instead. An error from `gh run download` means there is only one dev record: let a second push deploy to dev first, then come back.
+
+Use that digest as the input:
+
+```
+gh workflow run promote-prod.yml --repo andrew-chung-au/socboard --ref main -f digest=sha256:<the 64 digits printed above>
 ```
 
 Approve it. Expected: the `resolve` summary says "(named by the input)", the `promote` summary shows "Prod ran before" with step 3's digest, and the job passes as in step 3.
-If different: `no dev deploy record holds this digest` means a typing error; copy the digest again from the summary.
+If different: `no dev deploy record holds this digest` means a typing error; copy the digest again from the line above. A red `promote` job: as step 3.
 
 Then forward again, with no input:
 
@@ -145,6 +180,7 @@ gh workflow run promote-prod.yml --repo andrew-chung-au/socboard --ref main
 ```
 
 Approve it. Expected: prod is back on dev's current digest; "Prod ran before" shows the older digest.
+If different: as step 3. Then delete the download: `rm -r .scratch/dev-record-2`.
 
 ### Step 6: Refused runs
 
@@ -157,6 +193,7 @@ gh workflow run promote-prod.yml --repo andrew-chung-au/socboard --ref main -f d
 ```
 
 Expected: the `resolve` job fails with `ci_promote: no dev deploy record holds this digest: only a digest that ran in dev can go to prod`; the `promote` job is skipped and **no approval is asked**.
+If different: if GitHub asks you to review a deployment for this run, **reject it** (the refusal test failed: a digest dev never ran reached the approval). Then tell the orchestrator and treat promote as unsafe until it is fixed.
 
 **6b. A dispatch from another branch:**
 
@@ -164,15 +201,21 @@ Expected: the `resolve` job fails with `ci_promote: no dev deploy record holds t
 git switch -c promote-probe
 ```
 
+Expected: `Switched to a new branch 'promote-probe'`.
+
 ```
 git push -u origin promote-probe
 ```
+
+Expected: the branch is created on `origin` (it holds the same commit as `main`, so the pre-push check has nothing new to verify).
+If different: a refused push means the name exists already; pick `promote-probe-2` in this and the following commands.
 
 ```
 gh workflow run promote-prod.yml --repo andrew-chung-au/socboard --ref promote-probe
 ```
 
-Expected: both jobs are skipped (their `if` requires `main`); no approval is asked and nothing is deployed. (#268's refused-branch run already shows the role refuses a non-`main` branch in `deploy-prod`.)
+Expected: both jobs are skipped (their `if` requires `main`); no approval is asked and nothing is deployed. (#268's refused-branch run already shows the role refuses a non-`main` branch in `deploy-prod`.) `VERIFY:` that a dispatch on another branch shows both jobs as skipped rather than failing.
+If different: if GitHub asks you to review a deployment, **reject it** and tell the orchestrator: the main-only guard is missing. A `gh workflow run` error saying the workflow is not found on that ref is also a refusal; record it as a pass with that line.
 
 ```
 git switch main
@@ -186,13 +229,23 @@ git push origin --delete promote-probe
 git branch -D promote-probe
 ```
 
+Expected: `Deleted branch promote-probe`, and `git ls-remote --heads origin promote-probe` prints nothing.
+
 **6c. A rejected approval:**
 
 ```
 gh workflow run promote-prod.yml --repo andrew-chung-au/socboard --ref main
 ```
 
-In the run page, choose "Reject". Expected: the `promote` job does not run, nothing is deployed, and no `deploy-record-prod` is added for this run.
+In the run page, choose "Reject". Expected: the `promote` job does not run, nothing is deployed, and no `deploy-record-prod` is added for this run. `VERIFY:` that a rejected review ends the job without running a step.
+If different: if the `promote` job runs after a rejection, tell the orchestrator at once and check prod with step 4.
+
+```
+gh api "repos/andrew-chung-au/socboard/actions/artifacts?name=deploy-record-prod&per_page=1" --jq '.artifacts[0].workflow_run.id'
+```
+
+Expected: the run id of step 5's second run, not this one.
+If different: this run's id means a record was written after a rejection; tell the orchestrator.
 
 ## Record the result
 

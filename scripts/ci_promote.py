@@ -52,7 +52,7 @@ def run_gh(arguments, binary=False):
     except FileNotFoundError:
         raise Refused("the gh command line is not installed on the runner") from None
     except subprocess.TimeoutExpired:
-        raise Refused(f"gh {arguments[1] if len(arguments) > 1 else ''} did not answer within {GH_CALL_SECONDS} seconds") from None
+        raise Refused(f"a gh call did not answer within {GH_CALL_SECONDS} seconds") from None
     return done.returncode, done.stdout
 
 
@@ -66,6 +66,11 @@ def list_artifacts(repository, name):
         rows = []
         for item in found:
             if item.get("name") != name or item.get("expired") is not False:
+                continue
+            # Only a record left by a run on main counts: any workflow run of this repository can upload an
+            # artifact with this name, but only the deploy jobs on main write real ones. VERIFY: the list
+            # entry's `workflow_run.head_branch` is the branch of the run that uploaded it.
+            if (item.get("workflow_run") or {}).get("head_branch") != "main":
                 continue
             identifier, created = item["id"], item["created_at"]
             if isinstance(identifier, bool) or not isinstance(identifier, int) or not isinstance(created, str) or not CREATED_AT.fullmatch(created):
