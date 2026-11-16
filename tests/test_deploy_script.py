@@ -163,6 +163,7 @@ S="$STUB_STATE"
 nl=$'\n'
 a="$*"
 printf '%s\n' "@NAME@ ${a//"$nl"/ }" >> "$STUB_CALLS"
+emit() { local l; [ -f "$S/out-$1" ] || return 0; while IFS= read -r l; do printf '%s\n' "$l"; done < "$S/out-$1"; }
 val() { local v; if [ -f "$S/$1" ]; then IFS= read -r v < "$S/$1"; else v=$2; fi; printf '%s' "$v"; }
 """
 
@@ -226,7 +227,7 @@ case "$1" in
     case "$sub" in
       up)
         case "$last" in
-          db) [ -n "${STUB_DB_UP_FAIL:-}" ] && exit 1 ;;
+          db) [ -n "${STUB_DB_UP_FAIL:-}" ] && { emit db >&2; exit 1; } ;;
           app)
             # "all" fails the restore too; any other value fails only the first swap (no STACK_IMAGE in the environment).
             [ -n "${STUB_UP_APP_FAIL:-}" ] && { [ "$STUB_UP_APP_FAIL" = all ] || [ -z "${STACK_IMAGE-}" ]; } && exit 1
@@ -238,7 +239,7 @@ case "$1" in
       run)
         case " $* " in
           *" --name "*) [ -n "${STUB_CAND_RUN_FAIL:-}" ] && exit 1; : > "$S/cand_exists" ;;
-          *) [ "${STUB_FAIL_SERVICE:-}" = "$last" ] && exit 1 ;;
+          *) [ "${STUB_FAIL_SERVICE:-}" = "$last" ] && { emit "$last"; exit 1; } ;;
         esac
         exit 0 ;;
     esac
@@ -910,21 +911,79 @@ def test_a_boto3_that_cannot_be_installed_exits_3(box):
     assert "secret-read" not in r.kinds()
 
 
+def set_step_output(box, name, lines):
+    (box.state / f"out-{name}").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def step_failed(r, step, lines):
+    """Exit 5: the fixed line, the failing step's name, then its last 20 lines; the old app and the candidate are untouched."""
+    assert r.code == 5, r.out
+    assert r.lines() == [FIXED[5], f"socboard-deploy: failed step: {step}", *lines], r.out
+    assert_old_app_untouched(r)
+    assert_candidate_removed(r)
+    assert_safe(r)
+
+
 @pytest.mark.parametrize("service", ["db-init", "migrate", "seed"])
-def test_a_failed_one_shot_service_exits_5_and_runs_nothing_after_it(box, service):
+def test_a_failed_one_shot_service_exits_5_names_the_step_and_runs_nothing_after_it(box, service):
     box.set_app(PREVIOUS_IMAGE)
+    set_step_output(box, service, numbered())
     r = box.run(env={"STUB_FAIL_SERVICE": service})
-    refused(r, 5, FIXED[5])
+    step_failed(r, service, numbered()[10:])
+    assert "logs" not in r.kinds()
     order = ["run-db-init", "run-migrate", "run-seed"]
     assert r.kinds()[-1] == f"run-{service}"
     assert not set(order[order.index(f"run-{service}") + 1 :]) & set(r.kinds())
     assert "run-candidate" not in r.kinds()
 
 
-def test_a_database_that_does_not_start_exits_5(box):
+def test_a_failed_one_shot_service_with_no_output_prints_the_fixed_line_and_the_step_only(box):
+    r = box.run(env={"STUB_FAIL_SERVICE": "migrate"})
+    step_failed(r, "migrate", [])
+
+
+def test_a_short_step_output_is_printed_whole(box):
+    set_step_output(box, "seed", numbered(3))
+    r = box.run(env={"STUB_FAIL_SERVICE": "seed"})
+    step_failed(r, "seed", numbered(3))
+
+
+@pytest.mark.parametrize("service", ["db-init", "migrate", "seed"])
+def test_a_failed_step_prints_no_secret_value(box, service):
+    set_step_output(box, service, canary_lines())
+    r = box.run(env={"STUB_FAIL_SERVICE": service})
+    assert r.code == 5 and r.lines()[:2] == [FIXED[5], f"socboard-deploy: failed step: {service}"]
+    assert r.out.count("[redacted]") == 10
+    assert_safe(r)
+
+
+def test_a_step_value_inside_a_longer_value_leaves_no_tail_of_the_longer_one(box):
+    box.write_secret(good(SOCBOARD_INGEST_API_KEY="canaryShared00001", SOCBOARD_SEED_PASSWORD_ANALYST_A="canaryShared00001LONGTAILxyz"))
+    set_step_output(box, "seed", ["x canaryShared00001LONGTAILxyz y canaryShared00001 z"])
+    r = box.run(env={"STUB_FAIL_SERVICE": "seed"})
+    assert r.lines() == [FIXED[5], "socboard-deploy: failed step: seed", "x [redacted] y [redacted] z"]
+
+
+def test_a_step_that_succeeds_prints_none_of_its_output(box):
+    for name in ("db-init", "migrate", "seed", "db"):
+        set_step_output(box, name, ["STEP-OUTPUT-CANARY"])
+    r = box.run()
+    assert_only(r, 0, DEPLOYED)
+
+
+def test_a_database_that_does_not_start_exits_5_with_its_log(box):
+    set_step_output(box, "db", ["compose-says-unhealthy"])
+    box.set_logs("socboard-db-1", numbered(30))
     r = box.run(env={"STUB_DB_UP_FAIL": "1"})
-    refused(r, 5, FIXED[5])
+    step_failed(r, "db", numbered()[10:])  # the container's log comes last, so it fills the 20 lines
     assert "run-db-init" not in r.kinds()
+    assert [line for line in r.calls if line.startswith("docker logs")] == ["docker logs --tail 20 socboard-db-1"]
+
+
+def test_a_database_that_does_not_start_prints_the_compose_message_when_it_has_no_log(box):
+    set_step_output(box, "db", ["compose-says-unhealthy"])
+    r = box.run(env={"STUB_DB_UP_FAIL": "1"})
+    step_failed(r, "db", ["compose-says-unhealthy"])
 
 
 @pytest.mark.parametrize("gateway", ["10.231.77.128", "10.231.77.2", "", "10.231.77.1 10.231.77.2"])
