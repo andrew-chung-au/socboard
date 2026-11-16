@@ -211,21 +211,23 @@ Paste the output or write pass or fail for each step. Results contain no secrets
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 fetch | | |
-| 2 switch | | |
-| 3 log | | |
-| 4 make install | | |
-| 5 uv add opentelemetry-api | | |
-| 6 uv add opentelemetry-sdk | | |
-| 7 uv add opentelemetry-exporter-otlp-proto-http | | |
-| 8 pyproject.toml diff: three added lines only | | |
-| 9 uv.lock: no deletions | | |
-| 10 uv.lock: packages gained, no instrumentation package | | |
-| 11 uv sync --locked | | |
-| 12 make verify | | |
-| 13 commit (hash) | | |
-| 14 push | | |
-| 15 CI runs (links) | | |
+| 1 fetch | Not reported |  |
+| 2 switch | PASS (as reported) | `git log --oneline -3` showed `HEAD -> claude/288-otel-deps` at 467e6d2 with `origin/claude/288-otel-deps`, above 5181065. |
+| 3 log | PASS (as reported) | As step 2. |
+| 4 make install | Not reported |  |
+| 5 uv add opentelemetry-api | PASS (as reported) | `pyproject.toml` line 10: `"opentelemetry-api>=1.45.2"`. |
+| 6 uv add opentelemetry-sdk | PASS (as reported) | `pyproject.toml` line 12: `"opentelemetry-sdk>=1.45.2"`. |
+| 7 uv add opentelemetry-exporter-otlp-proto-http | PASS (as reported) | `pyproject.toml` line 11: `"opentelemetry-exporter-otlp-proto-http>=1.45.2"`. |
+| 8 pyproject.toml diff: three added lines only | PASS | Read by the orchestrator session on `origin/main...origin/issue-288-otel-deps`: exactly the three `+` lines, no `-` line. |
+| 9 uv.lock: no deletions | PASS | Read by the orchestrator session: 297 insertions, no removed line. |
+| 10 uv.lock: packages gained, no instrumentation package | PASS | Added: certifi, charset-normalizer, googleapis-common-protos, opentelemetry-exporter-http-transport (0.66b2), opentelemetry-exporter-otlp-common (0.66b2), opentelemetry-exporter-otlp-proto-common, opentelemetry-exporter-otlp-proto-http, opentelemetry-proto, opentelemetry-sdk, opentelemetry-semantic-conventions, protobuf, requests, urllib3. `opentelemetry-api` was already in the lock. The two `0.66b2` packages are dependencies of the 1.45.2 exporter that this file's list predates. No `opentelemetry-instrumentation-*`. |
+| 11 uv sync --locked | Not reported | CI's `socboard verify` and `image` runs on a63c813 use the lock (both success). |
+| 12 make verify | PASS (as reported) | `VERIFY: PASS` on the maintainer's machine. CI: `socboard verify` run on a63c813, success. |
+| 13 commit (hash) | PASS | a63c813, `Add the OpenTelemetry API, SDK and OTLP HTTP exporter packages (#288)`. |
+| 14 push | PASS (as reported) | `467e6d2..a63c813  claude/288-otel-deps -> claude/288-otel-deps`. |
+| 15 CI runs (links) | PASS | On a63c813: `socboard verify`, `compose`, `image` and `postgres` all success (branch `claude/288-otel-deps`). |
+
+Filled on 2026-11-16 by the orchestrator session from the maintainer's pasted output and from the pushed commit. "As reported" means the maintainer pasted it or said so; "Not reported" means nothing was said about it.
 
 ## Risk
 
