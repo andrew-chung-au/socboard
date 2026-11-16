@@ -203,6 +203,10 @@ After a push to `main` is published, CI deploys that digest to dev (`.github/wor
 
 Deploy and teardown runbook: `_docs/runbooks/deploy-and-teardown.md` is the step-by-step procedure for the dev server (deploy by CI or by hand, reading a failed run, rollback, credentials and rotation, restoring the database from a snapshot, a failed certificate, teardown and a check that nothing still bills). Its server steps are not yet run, and prod is not covered.
 
+### Promote to prod
+
+A person promotes to prod, by hand, the digest dev is running, and rolls prod back the same way (`.github/workflows/promote-prod.yml`, proposed in `_human-tasks/269-proposed/promote-prod.yml` until the maintainer installs it; logic in `scripts/ci_promote.py`; the decision is `_docs/decisions/2026-11-16T0332Z-promote-to-prod.md`, proposed). Started from the Actions tab with "Run workflow" on `main`, with one optional input, `digest`. A `resolve` job, which holds no cloud role, picks dev's newest `deploy-record-dev`, or the digest the input names if a dev record holds it, and refuses anything else before any approval is asked: a malformed digest, a digest that never ran in dev, no dev record. The `promote` job then waits in the `deploy-prod` Environment for the maintainer's approval (branches: `main` only), sends `socboard-deploy` with the digest and `environment=prod`, checks `https://prod-<ip with dashes>.sslip.io/api/health`, writes a job summary (digest, previous prod digest, who started it, who approved it) and uploads `deploy-record-prod`. A rollback is the same run with an earlier digest from the summary's list. The evidence (the promote, the rollback and the refused runs, each linked) is the result table in `_human-tasks/2026-11-16T0332Z-human-task-269-engineer-promote-and-rollback.md`: **not yet run**. The prod URL is not live after teardown; the run pages and the committed table are.
+
 ## Currently Out of Scope
 
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
