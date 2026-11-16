@@ -36,12 +36,21 @@ LOG_CHECK_ENV = {
 LOG_CHECK_MESSAGES = (
     "log check failed: could not list the run's jobs",
     "log check failed: plan job not found",
-    "log check failed: could not download the plan job's log",
     "log check failed: the plan job's log is empty",
     "log check failed: grep failed",
     "log check FAILED: the plan job's log holds a role unique ID",
     "log check passed: the plan job's log holds no role unique ID",
 )
+# The one printf the log-check step may have: it prints only the status that the case before it validated.
+STATUS_LINE = "status=$(grep -Eo '\\bHTTP [0-9]{3}\\b' \"$errs\" | tail -n 1) || status=\"\""
+STATUS_BLOCK = [
+    STATUS_LINE,
+    'case "$status" in',
+    "HTTP\\ [0-9][0-9][0-9]) ;;",
+    '*) status="no HTTP status" ;;',
+    "esac",
+    'printf "log check failed: could not download the plan job\'s log (%s)\\n" "$status"',
+]
 CHDIR = "terraform -chdir=terraform/server "
 PLAN_FILE = '"$RUNNER_TEMP/server.tfplan"'
 ALLOWED_TERRAFORM_LINES = {
@@ -303,13 +312,20 @@ def log_check_problems(job):
         found.append("log-check does not sleep RETRY_SLEEP seconds between tries, in two loops")
     if len(re.findall(r"for try in 1 2 3 4 5; do", run)) != 2:
         found.append("log-check does not retry the listing and the download up to 5 times")
-    for needle in ('"repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs"', '"repos/$REPO/actions/jobs/$job_id/logs"', 'log="$RUNNER_TEMP/', "rm -f \"$log\"", "'.jobs[] | select(.name == \"plan\") | .id'"):
+    for needle in ('errs="$RUNNER_TEMP/', "trap 'rm -f \"$log\" \"$errs\"' EXIT", 'rm -f "$log" "$errs"\necho "log check passed', '"repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs"', '"repos/$REPO/actions/jobs/$job_id/logs"', 'log="$RUNNER_TEMP/', "rm -f \"$log\"", "'.jobs[] | select(.name == \"plan\") | .id'"):
         if needle not in run:
             found.append(f"log-check run lacks {needle}")
     lines = [line.strip() for line in run.splitlines() if line.strip()]
     if "grep -Eq 'AROA[A-Z0-9]+' \"$log\"" not in lines:
         found.append("log-check does not run grep -Eq 'AROA[A-Z0-9]+' on the log")
+    starts = [i for i, line in enumerate(lines) if line == STATUS_BLOCK[0]]
+    if len(starts) != 1 or lines[starts[0] : starts[0] + len(STATUS_BLOCK)] != STATUS_BLOCK:
+        found.append("log-check does not validate the HTTP status with the exact case before the one exact printf")
+    if sum(1 for line in lines if "status" in line) != sum(1 for line in STATUS_BLOCK if "status" in line):
+        found.append("log-check uses the status variable outside the validated block")
     for line in lines:
+        if line in STATUS_BLOCK:
+            continue
         for arg in re.findall(r'\becho\s+("[^"]*"|\S+)', line):
             if re.search(r"[$`]", arg):
                 found.append(f"log-check echoes something that is not fixed text: {line}")
@@ -322,7 +338,7 @@ def log_check_problems(job):
             if word in bare:
                 found.append(f"log-check runs {word!r}")
         if re.search(r"\bgh\b", bare):
-            to_file = '> "$log" 2> /dev/null' in bare
+            to_file = bare.endswith('> "$log" 2> "$errs"; then')
             to_var = bare.startswith("job_id=$(gh ") and "2> /dev/null)" in bare
             if not (to_file or to_var):
                 found.append(f"log-check runs gh in a shape that may print: {line}")
@@ -500,15 +516,35 @@ BROKEN = {
     "log-check without the grep message": lc_edit("log check failed: grep failed", "log check failed: could not be checked"),
     "log-check timeout too long": set_key(["jobs", "log-check", "timeout-minutes"], 11),
     "log-check grep with another flag": lc_edit("grep -Eq 'AROA", "grep -Eqo 'AROA"),
-    "log-check extra grep that prints": lc_edit('rm -f "$log"\necho "log check passed', 'grep AROA "$log"\necho "log check passed'),
+    "log-check extra grep that prints": lc_edit('rm -f "$log" "$errs"\necho "log check passed', 'grep AROA "$log"\necho "log check passed'),
     "log-check other pattern": lc_edit("AROA[A-Z0-9]+", "ASIA[A-Z0-9]+"),
     "log-check cats the log": lc_edit("set +e\n", 'cat "$log"\n          set +e\n'),
     "log-check echoes the log": lc_edit("set +e\n", 'echo "$(head -c 50 "$log")"\n          set +e\n'),
     "log-check echoes a variable": lc_edit('echo "log check passed:', 'echo "$job_id log check passed:'),
     "log-check echoes the match": lc_edit('grep -Eq', 'echo "$(grep -Eo \'AROA[A-Z0-9]+\' "$log")"\n          grep -Eq'),
-    "log-check keeps gh stderr": lc_edit('/logs" > "$log" 2> /dev/null', '/logs" > "$log"'),
+    "log-check keeps gh stderr": lc_edit('/logs" > "$log" 2> "$errs"', '/logs" > "$log"'),
+    "log-check sends gh stderr to the console": lc_edit('/logs" > "$log" 2> "$errs"', '/logs" > "$log" 2>&1'),
+    "log-check cats the stderr file": lc_edit("set +e\n", 'cat "$errs"\n          set +e\n'),
+    "log-check prints the stderr file": lc_edit("set +e\n", 'printf "%s" "$(cat "$errs")"\n          set +e\n'),
+    "log-check prints an unvalidated status": lc_edit('case "$status" in\n', 'case "$status" in\n    *) ;;\n'),
+    "log-check without the status case": lc_edit(
+        '  case "$status" in\n    HTTP\\ [0-9][0-9][0-9]) ;;\n    *) status="no HTTP status" ;;\n  esac\n', ""
+    ),
+    "log-check prints the raw grep output": lc_edit(
+        '(%s)\\n" "$status"', '(%s)\\n" "$(grep -Eo \'HTTP [0-9]+\' "$errs")"'
+    ),
+    "log-check prints the status with echo": lc_edit(
+        'printf "log check failed: could not download the plan job\'s log (%s)\\n" "$status"', 'echo "log check failed ($status)"'
+    ),
+    "log-check prints a second status": lc_edit("set +e\n", 'printf "%s\\n" "$status"\n          set +e\n'),
+    "log-check printf with a variable format": lc_edit('printf "log check failed: could not download', 'printf "$status log check failed: could not download'),
+    "log-check status keeps the first match": lc_edit(" | tail -n 1)", " | head -n 1)"),
+    "log-check echoes the job id": lc_edit("set +e\n", 'echo "$job_id"\n          set +e\n'),
+    "log-check echoes the log": lc_edit("set +e\n", 'echo "$log"\n          set +e\n'),
+    "log-check never deletes the stderr file": lc_edit('rm -f "$log" "$errs"\necho', 'rm -f "$log"\necho'),
+    "log-check stderr file outside the runner temp": lc_edit('errs="$RUNNER_TEMP/', 'errs="'),
     "log-check keeps gh stderr on lookup": lc_edit("| .id' 2> /dev/null)", "| .id')"),
-    "log-check gh to stdout": lc_edit('/logs" > "$log" 2> /dev/null', '/logs" 2> /dev/null'),
+    "log-check gh to stdout": lc_edit('/logs" > "$log" 2> "$errs"', '/logs" 2> "$errs"'),
     "log-check never deletes the log": lc_edit('rm -f "$log"', "true"),
     "log-check log outside the runner temp": lc_edit('log="$RUNNER_TEMP/', 'log="plan-job.log" # '),
     "log-check traces": lc_edit("fail() {", "set -x\n          fail() {"),
@@ -570,6 +606,7 @@ def test_terraform_word_ignores_names_and_folders(text):
 FAKE_GH = """#!/bin/bash
 # Fake gh: FAKE_JOB_ID answers the job lookup, FAKE_LOG_FILE the log download.
 # FAKE_JOBS_FAILS and FAKE_LOGS_FAILS: how many of the first calls fail. Calls are counted in files in FAKE_DIR.
+# FAKE_LOGS_STDERR: what a failing log download writes to stderr.
 count() {
   n=$(cat "$FAKE_DIR/count-$1" 2> /dev/null || echo 0)
   n=$((n + 1))
@@ -583,7 +620,7 @@ case "$*" in
     ;;
   *logs*)
     count logs
-    if [ "$n" -le "$FAKE_LOGS_FAILS" ]; then echo "fake gh error AROAERRORTEXT2" >&2; exit 1; fi
+    if [ "$n" -le "$FAKE_LOGS_FAILS" ]; then echo "${FAKE_LOGS_STDERR:-fake gh error AROAERRORTEXT2}" >&2; exit 1; fi
     cat "$FAKE_LOG_FILE"
     ;;
   *)
@@ -593,9 +630,10 @@ esac
 """
 
 ALWAYS = 99
+STATUS_PRINT = "(HTTP 403)"
 
 
-def run_log_check(tmp_path, log_text, job_id="4242", jobs_fails=0, logs_fails=0):
+def run_log_check(tmp_path, log_text, job_id="4242", jobs_fails=0, logs_fails=0, logs_stderr=None):
     """Run the real log-check step text with RETRY_SLEEP=0; returns (exit code, combined output, the temp dir)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -622,6 +660,8 @@ def run_log_check(tmp_path, log_text, job_id="4242", jobs_fails=0, logs_fails=0)
         "FAKE_JOBS_FAILS": str(jobs_fails),
         "FAKE_LOGS_FAILS": str(logs_fails),
     }
+    if logs_stderr is not None:
+        env["FAKE_LOGS_STDERR"] = logs_stderr
     done = subprocess.run(["bash", "-eo", "pipefail", str(script)], env=env, capture_output=True, text=True, check=False, timeout=30)
     return done.returncode, done.stdout + done.stderr, temp
 
@@ -720,4 +760,56 @@ def test_log_check_fails_when_the_plan_job_is_not_found_once(tmp_path, job_id):
     assert code != 0
     assert "plan job not found" in output
     assert calls(tmp_path, "logs") == 0
+    assert list(temp.iterdir()) == []
+
+
+URL = "https://example.invalid/repos/owner/repo/actions/jobs/4242/logs"
+
+
+def download_failure(tmp_path, stderr):
+    code, output, temp = run_log_check(tmp_path, CLEAN_LOG, logs_fails=ALWAYS, logs_stderr=stderr)
+    assert code != 0
+    assert calls(tmp_path, "logs") == 5
+    assert list(temp.iterdir()) == []
+    return output
+
+
+def test_a_failed_download_prints_only_its_http_status(tmp_path):
+    output = download_failure(tmp_path, f"gh: Forbidden (HTTP 403)\nGET {URL}\nassumedRoleId AROAEXAMPLE123")
+    assert output == "log check failed: could not download the plan job's log (HTTP 403)\n"
+    assert "(HTTP 403)" in output
+    for text in (URL, "example.invalid", "AROA", "EXAMPLE123", "Forbidden", "GET"):
+        assert text not in output
+
+
+def test_a_failed_download_prints_the_last_status(tmp_path):
+    output = download_failure(tmp_path, "gh: Not Found (HTTP 404)\nretry\ngh: Bad Gateway (HTTP 502)\n")
+    assert output == "log check failed: could not download the plan job's log (HTTP 502)\n"
+
+
+def test_a_failed_download_without_a_status_says_so(tmp_path):
+    output = download_failure(tmp_path, f"dial tcp: connection refused {URL} AROAEXAMPLE123")
+    assert output == "log check failed: could not download the plan job's log (no HTTP status)\n"
+
+
+def test_a_failed_download_with_an_empty_stderr_says_no_status(tmp_path):
+    output = download_failure(tmp_path, "")
+    assert output == "log check failed: could not download the plan job's log (no HTTP status)\n"
+
+
+@pytest.mark.parametrize("stderr", ["gh: odd (HTTP 4033x)", "gh: odd (HTTP 40)", "gh: odd (HTTP 4033)", "HTTP  403", "http 403", "gh: odd (xHTTP 403)", "HTTP 40\x1b[31m3"])
+def test_a_malformed_status_is_not_printed(tmp_path, stderr):
+    output = download_failure(tmp_path, stderr)
+    assert output == "log check failed: could not download the plan job's log (no HTTP status)\n"
+
+
+def test_a_status_with_a_line_break_in_the_stderr_prints_one_clean_status(tmp_path):
+    output = download_failure(tmp_path, "HTTP 403 AROAEXAMPLE123\n$(echo injected) `id` HTTP 429\n")
+    assert output == "log check failed: could not download the plan job's log (HTTP 429)\n"
+
+
+def test_a_download_that_works_on_a_later_try_prints_no_status(tmp_path):
+    code, output, temp = run_log_check(tmp_path, CLEAN_LOG, logs_fails=2, logs_stderr="gh: Forbidden (HTTP 403)")
+    assert code == 0
+    assert "HTTP" not in output and "Forbidden" not in output
     assert list(temp.iterdir()) == []

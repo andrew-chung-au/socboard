@@ -15,7 +15,8 @@
 #   up to 5 times, RETRY_SLEEP seconds apart, as the log may not be ready while the run is in progress) and fails if
 #   the log still holds an AROA... unique ID (masking is best-effort). It prints only fixed lines, never the log or
 #   the match, and each failure names its stage (jobs not listed, plan job not found, log not downloaded, log empty,
-#   grep failed).
+#   grep failed). A failed download prints only its HTTP status (HTTP nnn, validated by a case, else "no HTTP
+#   status"); the download's stderr goes to a file under $RUNNER_TEMP, deleted at the end, and is never printed.
 # - The plan role cannot read a secret value, but the reviewer must refuse a change to terraform/server/outputs.tf
 #   that outputs a secret value, or an output not marked sensitive that could hold one (Deploy record, section F).
 # - Instance user data must never hold a secret: the plan role reads it (ec2:Describe*) in every same-repository run.
@@ -124,7 +125,8 @@ jobs:
         run: |
           fail() { exit 1; }
           log="$RUNNER_TEMP/plan-job.log"
-          trap 'rm -f "$log"' EXIT
+          errs="$RUNNER_TEMP/plan-job.err"
+          trap 'rm -f "$log" "$errs"' EXIT
           listed=0
           job_id=""
           for try in 1 2 3 4 5; do
@@ -136,7 +138,7 @@ jobs:
           case "$job_id" in ''|*[!0-9]*) echo "log check failed: plan job not found"; fail ;; esac
           outcome=download
           for try in 1 2 3 4 5; do
-            if gh api "repos/$REPO/actions/jobs/$job_id/logs" > "$log" 2> /dev/null; then
+            if gh api "repos/$REPO/actions/jobs/$job_id/logs" > "$log" 2> "$errs"; then
               outcome=empty
               if [ -s "$log" ]; then outcome=ready; break; fi
             else
@@ -144,7 +146,15 @@ jobs:
             fi
             if [ "$try" -lt 5 ]; then sleep "$RETRY_SLEEP"; fi
           done
-          if [ "$outcome" = download ]; then echo "log check failed: could not download the plan job's log"; fail; fi
+          if [ "$outcome" = download ]; then
+            status=$(grep -Eo '\bHTTP [0-9]{3}\b' "$errs" | tail -n 1) || status=""
+            case "$status" in
+              HTTP\ [0-9][0-9][0-9]) ;;
+              *) status="no HTTP status" ;;
+            esac
+            printf "log check failed: could not download the plan job's log (%s)\n" "$status"
+            fail
+          fi
           if [ "$outcome" = empty ]; then echo "log check failed: the plan job's log is empty"; fail; fi
           set +e
           grep -Eq 'AROA[A-Z0-9]+' "$log"
@@ -152,5 +162,5 @@ jobs:
           set -e
           if [ "$found" -eq 0 ]; then echo "log check FAILED: the plan job's log holds a role unique ID"; fail; fi
           if [ "$found" -ne 1 ]; then echo "log check failed: grep failed"; fail; fi
-          rm -f "$log"
+          rm -f "$log" "$errs"
           echo "log check passed: the plan job's log holds no role unique ID"
