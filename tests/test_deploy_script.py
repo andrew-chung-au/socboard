@@ -24,7 +24,7 @@ import stat
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -467,6 +467,19 @@ def test_the_real_script_holds_no_test_hook_and_its_folders_and_waits_are_consta
     assert not [line for line in lines if re.match(r"(RUN_DIR|OPT_DIR|WAIT|POLL)=", line) and line not in REAL_ASSIGNMENTS]
 
 
+def test_the_data_folder_is_the_bootstraps_postgres_folder_and_a_direct_child_of_the_mount_root():
+    mount_root = re.search(r'^\s*data_dir\s*=\s*"([^"]+)"', MAIN_TF.read_text(encoding="utf-8"), re.M).group(1)
+    bootstrap = (ROOT / "terraform" / "server" / "bootstrap.sh.tftpl").read_text(encoding="utf-8")
+    pg_dir = re.search(r"^PG_DIR='\$\{data_dir\}(/[a-z-]+)'$", bootstrap, re.M).group(1)
+    values = re.findall(r"^DATA_DIR='([^']*)'$", SCRIPT_TEXT, re.M)
+    assert len(values) == 1
+    value = values[0]
+    assert value == mount_root + pg_dir
+    assert value != mount_root
+    assert PurePosixPath(value).parent == PurePosixPath(mount_root)
+    assert "caddy" not in PurePosixPath(value).parts
+
+
 def test_the_script_unsets_the_ten_names_it_writes_before_the_lock_and_before_any_use():
     lines = SCRIPT_TEXT.splitlines()
     unset = 'unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR'
@@ -724,7 +737,7 @@ def test_a_good_run_leaves_the_release_files_and_the_current_link(box):
 def test_the_variable_file_holds_the_eight_values_and_two_fixed_ones_and_nothing_else(box):
     box.run()
     lines = (box.state / "vars-snapshot").read_text(encoding="utf-8").splitlines()
-    expected = [f"{name}={value}" for name, value in SECRET_VALUES.items()] + [f"STACK_IMAGE={IMAGE}", "STACK_PGDATA_DIR=/srv/socboard-data"]
+    expected = [f"{name}={value}" for name, value in SECRET_VALUES.items()] + [f"STACK_IMAGE={IMAGE}", "STACK_PGDATA_DIR=/srv/socboard-data/postgres"]
     assert sorted(lines) == sorted(expected)
 
 
@@ -1118,7 +1131,7 @@ def test_exported_names_the_script_writes_cannot_change_what_runs(box):
     assert (box.state / "app_image").read_text(encoding="utf-8") == IMAGE
     assert {line for line in r.calls if line.startswith("IMG ")} == {"IMG unset"}
     lines = (box.state / "vars-snapshot").read_text(encoding="utf-8").splitlines()
-    expected = [f"{name}={value}" for name, value in SECRET_VALUES.items()] + [f"STACK_IMAGE={IMAGE}", "STACK_PGDATA_DIR=/srv/socboard-data"]
+    expected = [f"{name}={value}" for name, value in SECRET_VALUES.items()] + [f"STACK_IMAGE={IMAGE}", "STACK_PGDATA_DIR=/srv/socboard-data/postgres"]
     assert sorted(lines) == sorted(expected)
     assert_no_exported_value(r)
     assert_safe(r)
@@ -1138,7 +1151,7 @@ def test_an_exported_stack_image_reaches_only_the_restore_swap_as_the_previous_d
 def test_an_exported_data_folder_changes_neither_the_variable_file_nor_any_compose_call(box):
     r = box.run(env={"STACK_PGDATA_DIR": EXPORTED["STACK_PGDATA_DIR"]})
     assert_only(r, 0, DEPLOYED)
-    assert "STACK_PGDATA_DIR=/srv/socboard-data" in (box.state / "vars-snapshot").read_text(encoding="utf-8").splitlines()
+    assert "STACK_PGDATA_DIR=/srv/socboard-data/postgres" in (box.state / "vars-snapshot").read_text(encoding="utf-8").splitlines()
     assert_no_exported_value(r)
 
 
