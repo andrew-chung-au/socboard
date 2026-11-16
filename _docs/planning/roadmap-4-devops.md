@@ -26,10 +26,12 @@ Tracks run in parallel after the contract and the human sitting: **A** app telem
 | Issue | Track | Needs | Evidence a reviewer can open |
 |---|---|---|---|
 | #285 O0 Signal contract | Contract | none | merged PR, `observability/CONTRACT.md` |
+| #310 O0a Contract wording (QA findings F-285-1, F-285-2) | Contract | #285; before #289 starts | merged PR #315 |
 | #286 O1 Spec detail (protected diff) | Human | #285 | merged PR |
 | #287 O2 Decision record | Human | none | the decision record |
 | #288 O3 OpenTelemetry dependencies (protected) | A | the human's approval | PR and CI run |
 | #289 O4 Telemetry core | A | #285, #288 | CI run (unit tests) |
+| #312 O4a Limit the two operator-set resource attributes (F-285-2) | A | #289 merged; groom after #289 merges | CI run (unit tests) |
 | #290 O5 Instrument ingest, canary test | A | #289 | CI run |
 | #291 O6 Instrument the queue read | A | #289, #290 | CI run |
 | #292 O7 Collector and storage | B | #285, #287 | CI run of the overlay check |
