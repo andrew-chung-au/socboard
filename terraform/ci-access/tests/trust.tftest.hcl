@@ -83,6 +83,35 @@ run "deploy_policy_keeps_its_denies_and_no_new_statement" {
   }
 }
 
+run "plan_policy_reads_the_deploy_document" {
+  command = plan
+
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : s if s.Sid == "ReadDeployDocument"]) == 1
+    error_message = "The plan policy must hold exactly one ReadDeployDocument statement."
+  }
+
+  assert {
+    condition     = [for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : s.Effect if s.Sid == "ReadDeployDocument"] == ["Allow"]
+    error_message = "The ReadDeployDocument statement must be an Allow."
+  }
+
+  assert {
+    condition     = [for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : sort(s.Action) if s.Sid == "ReadDeployDocument"] == [["ssm:DescribeDocument", "ssm:DescribeDocumentPermission", "ssm:GetDocument", "ssm:ListTagsForResource"]]
+    error_message = "The ReadDeployDocument statement must allow exactly the four read actions, including ssm:DescribeDocumentPermission (#209)."
+  }
+
+  assert {
+    condition     = [for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : length(s.Action) if s.Sid == "ReadDeployDocument"] == [4]
+    error_message = "The ReadDeployDocument statement's action list must have length 4."
+  }
+
+  assert {
+    condition     = [for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : s.Resource if s.Sid == "ReadDeployDocument"] == [["arn:aws:ssm:us-east-1:123456789012:document/socboard-deploy"]]
+    error_message = "The ReadDeployDocument statement's resource must be exactly the socboard-deploy document ARN."
+  }
+}
+
 run "wildcard_environment_is_refused" {
   command = plan
 
