@@ -48,7 +48,7 @@ Critical path: O3, O4, O5, O10, O14. Everything else fits beside it.
 ## Waves
 
 - **Wave 0 (one sitting with the human):** approve the decisions record, the spec diff (#286), the dependencies (#288), and one combined Makefile and `AGENTS.md` diff (#293); label #285 to #288; write the `oncall` Environment steps (#298).
-- **Wave 1 (parallel):** A: #288 then #289. B: #292. C: #294 and #296. 
+- **Wave 1 (parallel):** A: #288 then #289. B: #292. C: #294 and #296.
 - **Wave 2:** A: #290, #291. B: #293. C: #297, #298.
 - **Wave 3:** #295, then #299, then #300.
 - **Waits for the dev deployment:** #301 only. It needs the first deploy, and a server with room for the stack (a `t3.small` with 2 GiB also carries two app stacks); it may end as a record that it does not fit.
