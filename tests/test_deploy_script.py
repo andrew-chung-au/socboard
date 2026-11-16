@@ -1,10 +1,11 @@
 """The deploy script (#237, D20), run offline with stub programs.
 
 `terraform/server/socboard-deploy.sh` runs as root on the server. Here it runs as an ordinary user
-in a temporary folder: the run directory, the release directory and the lock live under the test's
-folder because the script reads them from SOCBOARD_DEPLOY_RUN_DIR and SOCBOARD_DEPLOY_OPT_DIR (set
-only by this file; the defaults in the script are the real /run/socboard-deploy and /opt/socboard),
-and its waits come from SOCBOARD_DEPLOY_WAIT and SOCBOARD_DEPLOY_POLL.
+in a temporary folder. The real script holds no test hook: its run directory, release directory and
+waits are constants. Each test runs a copy written to the test's folder with exactly those four
+assignments replaced (REAL_ASSIGNMENTS below), so the run directory, the release directory and the
+lock live under the test's folder; a test asserts the copy differs from the real file in those
+lines only.
 
 PATH holds only the stubs (docker, curl, python3 with a fake boto3, flock, systemctl, apt-get, which
 record every argument in one call log) and a folder of links to the few real programs the script may
@@ -17,10 +18,12 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -38,6 +41,13 @@ REVISION = "0123456789abcdef0123456789abcdef01234567"
 APP = "socboard-app-1"
 CAND = "socboard-deploy-candidate"
 TOKEN = "imdsTokenCanary0001"
+
+# The four lines of the real script the test copy replaces: the folders and waits (the ambient-inputs
+# decision record). The replacements are built in Box.copy_lines.
+REAL_ASSIGNMENTS = ["RUN_DIR='/run/socboard-deploy'", "OPT_DIR='/opt/socboard'", "WAIT=90", "POLL=3"]
+
+# The fifth line the copy replaces (see Box.copy_lines): the fixed search path of the re-executed run.
+REAL_CLEAN_PATH = "CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'"
 
 SECRET_VALUES = {
     "SOCBOARD_TOKEN_SECRET": "canaryTokenSecret.0123456789abcdefABCDEF",
@@ -94,7 +104,7 @@ def compose_tail(line):
 
 def kind(line):
     """A short name for one recorded call, or None for a note line."""
-    if line.startswith(("VARS_MODE", "IMG ", "SMOKE_ENV", "PULL_ENV")):
+    if line.startswith(("VARS_MODE", "IMG ", "SMOKE_ENV", "PULL_ENV", "ENV_SET ")):
         return None
     words = line.split()
     head = words[0]
@@ -148,6 +158,7 @@ def kind(line):
 
 
 STUB_HEAD = r"""#!@BASH@
+. "@KNOBS@"
 S="$STUB_STATE"
 nl=$'\n'
 a="$*"
@@ -209,6 +220,8 @@ case "$1" in
     fi
     if [ -f "$envf" ]; then echo "VARS_MODE $(@STAT@ -c %a "$envf")" >> "$STUB_CALLS"; [ -f "$S/vars-snapshot" ] || @CP@ "$envf" "$S/vars-snapshot"; else echo "VARS_MODE missing" >> "$STUB_CALLS"; fi
     echo "IMG ${STACK_IMAGE-unset}" >> "$STUB_CALLS"
+    # Names only, never values: a variable the script writes into its variable file must not arrive from outside.
+    for n in @WRITTEN@; do [ -n "${!n+set}" ] && echo "ENV_SET $n" >> "$STUB_CALLS"; done
     for last; do :; done
     case "$sub" in
       up)
@@ -296,18 +309,45 @@ class Box:
         self.run_dir = base / "run" / "socboard-deploy"
         self.opt = base / "opt" / "socboard"
         self.calls = base / "calls.log"
+        self.knobs = base / "knobs.sh"
+        self.test_path = f"{self.bin}:{self.tools}"
         self.secret_file = base / "secret.json"
         for folder in (self.bin, self.tools, self.state, self.base / "py" / "boto3", self.base / "run", self.base / "opt"):
             folder.mkdir(parents=True)
         (self.base / "py" / "boto3" / "__init__.py").write_text(FAKE_BOTO3, encoding="utf-8")
         # The stubs call their own helpers by absolute path, so the script's PATH stays small.
-        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "REQUIRED": " ".join(compose_variables())}
+        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "KNOBS": str(base / "knobs.sh"), "REQUIRED": " ".join(compose_variables()), "WRITTEN": " ".join([*SECRET_VALUES, "STACK_PGDATA_DIR"])}
         for name, body in (("docker", DOCKER), ("curl", CURL), ("systemctl", SYSTEMCTL), ("apt-get", APT), ("python3", PYTHON3), ("flock", FLOCK)):
             self.stub(name, body)
         # The only real programs the script may run (everything else is a builtin or a stub).
         for name in ("mkdir", "rm", "mv", "ln", "readlink", "chmod", "sleep", "env"):
             (self.tools / name).symlink_to(real(name))
         self.write_secret(dict(SECRET_VALUES))
+        self.script = base / "socboard-deploy-copy.sh"
+        self.script.write_text("\n".join(self.copy_lines()) + "\n", encoding="utf-8")
+
+    def copy_lines(self):
+        """The real script's lines with exactly the four assignments of REAL_ASSIGNMENTS replaced."""
+        replacements = {
+            REAL_ASSIGNMENTS[0]: f"RUN_DIR={shlex.quote(str(self.run_dir))}",
+            REAL_ASSIGNMENTS[1]: f"OPT_DIR={shlex.quote(str(self.opt))}",
+            REAL_ASSIGNMENTS[2]: "WAIT=1",
+            REAL_ASSIGNMENTS[3]: "POLL=0.05",
+            # The fifth line: the fixed search path of the re-executed run becomes the stub folders (the real
+            # path would hide every stub). The test-only seam is this value alone; the check and the re-exec are real.
+            REAL_CLEAN_PATH: f"CLEAN_PATH={shlex.quote(self.test_path)}",
+        }
+        lines = SCRIPT.read_text(encoding="utf-8").split("\n")
+        for old in replacements:
+            assert lines.count(old) == 1, f"the real script must hold the line {old!r} exactly once"
+        return [replacements.get(line, line) for line in lines[:-1]]
+
+    def block_link(self, name):
+        """A `ln` or `mv` in the tool folder that fails for the current-release link and runs the real program otherwise."""
+        path = self.tools / name
+        path.unlink()
+        path.write_text(f'#!{real("bash")}\ncase "$*" in *current.new*) exit 1 ;; esac\nexec {real(name)} "$@"\n', encoding="utf-8")
+        path.chmod(0o755)
 
     def stub(self, name, body):
         text = (STUB_HEAD + body).replace("@NAME@", name)
@@ -337,22 +377,22 @@ class Box:
         (self.opt / "current").symlink_to(folder)
         return folder
 
-    def run(self, *args, digest=DIGEST, env=None, use_default_arg=True):
+    def run(self, *args, digest=DIGEST, env=None, use_default_arg=True, shell=None):
         argv = list(args) if args else ([digest] if use_default_arg else [])
-        environment = {
-            "PATH": f"{self.bin}:{self.tools}",
-            "SOCBOARD_DEPLOY_RUN_DIR": str(self.run_dir),
-            "SOCBOARD_DEPLOY_OPT_DIR": str(self.opt),
-            "SOCBOARD_DEPLOY_WAIT": "1",
-            "SOCBOARD_DEPLOY_POLL": "0.05",
+        # The script starts itself again under an empty environment, so nothing but the test's PATH reaches the
+        # stubs from the outer environment. The stubs' own settings (STUB_*) travel in a file they read first.
+        knobs = {
             "STUB_STATE": str(self.state),
             "STUB_CALLS": str(self.calls),
             "STUB_TOKEN": TOKEN,
             "STUB_SECRET_FILE": str(self.secret_file),
             "STUB_PYPATH": str(self.base / "py"),
         }
-        environment.update(env or {})
-        proc = subprocess.run([real("bash"), str(SCRIPT), *argv], env=environment, capture_output=True, text=True, timeout=60)
+        environment = {"PATH": self.test_path}
+        for name, value in (env or {}).items():
+            (knobs if name.startswith("STUB_") else environment)[name] = value
+        self.knobs.write_text("".join(f"export {n}={shlex.quote(v)}\n" for n, v in knobs.items()), encoding="utf-8")
+        proc = subprocess.run([shell or real("bash"), str(self.script), *argv], env=environment, capture_output=True, text=True, timeout=60)
         return Result(self, proc)
 
     def files_left(self):
@@ -416,6 +456,37 @@ def test_the_script_is_a_bash_script_with_one_parameter_reference():
     assert SCRIPT_TEXT.startswith("#!/bin/bash\n")
     assert SCRIPT_TEXT.count("{{") == 1 and "DIGEST_PARAM='{{ digest }}'\n" in SCRIPT_TEXT
     assert len(SCRIPT_TEXT.encode()) < 60_000  # the document's limit is 64 KB
+
+
+def test_the_real_script_holds_no_test_hook_and_its_folders_and_waits_are_constants():
+    assert "SOCBOARD_DEPLOY_" not in SCRIPT_TEXT
+    lines = SCRIPT_TEXT.splitlines()
+    for line in REAL_ASSIGNMENTS:
+        assert lines.count(line) == 1, line
+    assert [line.split("=")[0] for line in REAL_ASSIGNMENTS] == ["RUN_DIR", "OPT_DIR", "WAIT", "POLL"]
+    assert not [line for line in lines if re.match(r"(RUN_DIR|OPT_DIR|WAIT|POLL)=", line) and line not in REAL_ASSIGNMENTS]
+
+
+def test_the_script_unsets_the_ten_names_it_writes_before_the_lock_and_before_any_use():
+    lines = SCRIPT_TEXT.splitlines()
+    unset = 'unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR'
+    assert lines.count(unset) == 1
+    names = re.search(r"^NAMES=\(([^)]*)\)", SCRIPT_TEXT, re.M).group(1).split()
+    assert len(names) == 8 and names == list(SECRET_VALUES)
+    # The lock is the first step, and the first use of any of the ten names comes after it (the image, the secret, the variable file).
+    for later in ('mkdir -p "$RUN_DIR" || die 8', "flock -n 9 || die 8", 'IMAGE="$IMAGE_REPO@$digest"', "S[${line%%=*}]="):
+        assert SCRIPT_TEXT.index(unset) < SCRIPT_TEXT.index(later), later
+
+
+def test_the_test_copy_differs_from_the_real_script_in_the_four_assignments_only(box):
+    real_lines = SCRIPT_TEXT.splitlines()
+    copy_lines = box.script.read_text(encoding="utf-8").splitlines()
+    assert len(copy_lines) == len(real_lines)
+    changed = [(a, b) for a, b in zip(real_lines, copy_lines) if a != b]
+    # The four assignments, plus (fix round 1) the fixed search path of the re-executed run, which comes first in the file.
+    assert [a for a, _ in changed] == [REAL_CLEAN_PATH, *REAL_ASSIGNMENTS]
+    assert [b for _, b in changed] == [f"CLEAN_PATH={shlex.quote(box.test_path)}", f"RUN_DIR={shlex.quote(str(box.run_dir))}", f"OPT_DIR={shlex.quote(str(box.opt))}", "WAIT=1", "POLL=0.05"]
+    assert "SOCBOARD_DEPLOY_" not in box.script.read_text(encoding="utf-8")
 
 
 def test_the_script_names_no_account_number_arn_secret_or_real_address():
@@ -1023,6 +1094,125 @@ def test_every_exit_removes_the_variable_file_and_the_candidate_and_releases_the
     assert not [p for p in box.run_dir.iterdir() if p.name != "lock"]
 
 
+# --- inherited variables (#281) -------------------------------------------------------------------------------
+
+EXPORTED = {name: f"EXPORTEDCANARY-{name}" for name in SECRET_VALUES}
+EXPORTED["STACK_IMAGE"] = f"{REPO}@sha256:{'e' * 64}"
+EXPORTED["STACK_PGDATA_DIR"] = "/exported/EXPORTEDCANARY-pgdata"
+
+
+def assert_no_exported_value(r):
+    calls = "\n".join(r.calls)
+    for value in EXPORTED.values():
+        assert value not in r.out and value not in calls, value
+        for path in r.box.files_left():
+            if path.is_file():
+                assert value not in path.read_text(encoding="utf-8", errors="replace"), f"{value} left in {path}"
+    assert "EXPORTEDCANARY" not in (r.box.state / "vars-snapshot").read_text(encoding="utf-8")
+    assert not [line for line in r.calls if line.startswith("ENV_SET ")], "a written name reached a Compose call"
+
+
+def test_exported_names_the_script_writes_cannot_change_what_runs(box):
+    r = box.run(env=EXPORTED)
+    assert_only(r, 0, DEPLOYED)
+    assert (box.state / "app_image").read_text(encoding="utf-8") == IMAGE
+    assert {line for line in r.calls if line.startswith("IMG ")} == {"IMG unset"}
+    lines = (box.state / "vars-snapshot").read_text(encoding="utf-8").splitlines()
+    expected = [f"{name}={value}" for name, value in SECRET_VALUES.items()] + [f"STACK_IMAGE={IMAGE}", "STACK_PGDATA_DIR=/srv/socboard-data"]
+    assert sorted(lines) == sorted(expected)
+    assert_no_exported_value(r)
+    assert_safe(r)
+
+
+def test_an_exported_stack_image_reaches_only_the_restore_swap_as_the_previous_digest(box):
+    box.set_app(PREVIOUS_IMAGE)
+    box.previous_release()
+    r = box.run(env={**EXPORTED, "STUB_NEW_HEALTH": "unhealthy"})
+    assert r.code == 7 and r.lines()[0] == FIXED["7r"]
+    assert [line for line in r.calls if line.startswith("IMG ") and line != "IMG unset"] == [f"IMG {PREVIOUS_IMAGE}"]
+    assert (box.state / "app_image").read_text(encoding="utf-8") == PREVIOUS_IMAGE
+    assert_no_exported_value(r)
+    assert_safe(r)
+
+
+def test_an_exported_data_folder_changes_neither_the_variable_file_nor_any_compose_call(box):
+    r = box.run(env={"STACK_PGDATA_DIR": EXPORTED["STACK_PGDATA_DIR"]})
+    assert_only(r, 0, DEPLOYED)
+    assert "STACK_PGDATA_DIR=/srv/socboard-data" in (box.state / "vars-snapshot").read_text(encoding="utf-8").splitlines()
+    assert_no_exported_value(r)
+
+
+def test_the_test_hook_variables_have_no_effect_on_a_run(box):
+    hooks = {
+        "SOCBOARD_DEPLOY_RUN_DIR": str(box.base / "canary-run"),
+        "SOCBOARD_DEPLOY_OPT_DIR": str(box.base / "canary-opt"),
+        "SOCBOARD_DEPLOY_WAIT": "500",
+        "SOCBOARD_DEPLOY_POLL": "500",
+    }
+    started = time.monotonic()
+    r = box.run(env={**hooks, "STUB_CAND_HEALTH": "starting"})  # a wait that times out: it ends after the copy's 1 second, not 500
+    assert r.code == 6 and r.lines()[0] == FIXED[6]
+    assert time.monotonic() - started < 20
+    assert not (box.base / "canary-run").exists() and not (box.base / "canary-opt").exists()
+    assert (box.run_dir / "lock").exists() and (box.opt / "releases").is_dir()
+
+
+# --- the current-release link (#281) ----------------------------------------------------------------------------
+
+
+def test_a_good_run_prints_the_success_line_only_with_current_naming_the_new_release(box):
+    r = box.run()
+    release = box.opt / "releases" / f"{REVISION}-{'a' * 12}"
+    assert r.code == 0 and r.out == DEPLOYED + "\n"
+    assert os.readlink(box.opt / "current") == str(release)
+    assert not (box.opt / "current.new").exists()
+
+
+@pytest.mark.parametrize("tool", ["ln", "mv"])
+def test_a_failed_link_restores_the_previous_release_and_exits_7_without_the_success_line(box, tool):
+    box.set_app(PREVIOUS_IMAGE)
+    previous = box.previous_release()
+    box.set_logs(APP, numbered())
+    box.block_link(tool)
+    r = box.run()
+    assert r.code == 7 and r.lines() == [FIXED["7r"]] + numbered()[10:]
+    assert DEPLOYED not in r.out
+    assert (box.state / "app_image").read_text(encoding="utf-8") == PREVIOUS_IMAGE
+    assert [line for line in r.calls if line.startswith("IMG ") and line != "IMG unset"] == [f"IMG {PREVIOUS_IMAGE}"]
+    assert r.kinds().count("up-app") == 2
+    assert (box.opt / "current").resolve() == previous.resolve()
+    assert not (box.opt / "current.new").exists()
+    assert_candidate_removed(r)
+    assert_safe(r)
+
+
+@pytest.mark.parametrize("tool", ["ln", "mv"])
+def test_a_failed_link_on_a_first_deploy_stops_the_app_leaves_the_database_and_exits_7(box, tool):
+    box.set_logs(APP, numbered(5))
+    box.block_link(tool)
+    r = box.run()
+    assert r.code == 7 and r.lines() == [FIXED["7n"]] + numbered(5)
+    assert DEPLOYED not in r.out
+    assert r.kinds().count("up-app") == 1 and r.kinds().count("stop-app") == 1
+    assert not {"stop-other", "rm-other"} & set(r.kinds()) and not [k for k in r.kinds() if k.startswith("compose-")]
+    assert not (box.opt / "current").exists() and not (box.opt / "current").is_symlink()
+    assert not (box.opt / "current.new").exists()
+    assert_safe(r)
+
+
+@pytest.mark.parametrize("tool", ["ln", "mv"])
+def test_a_failed_link_and_a_failed_restore_exit_9(box, tool):
+    box.set_app(PREVIOUS_IMAGE)
+    previous = box.previous_release()
+    box.set_logs(APP, numbered())
+    box.block_link(tool)
+    r = box.run(env={"STUB_RESTORE_HEALTH": "unhealthy"})
+    assert r.code == 9 and r.lines() == [FIXED[9]] + numbered()[10:]
+    assert DEPLOYED not in r.out
+    assert (box.opt / "current").resolve() == previous.resolve() and not (box.opt / "current.new").exists()
+    assert_safe(r)
+
+
 # --- the human's task file ---------------------------------------------------------------------------------
 
 
@@ -1045,3 +1235,159 @@ def test_the_task_file_has_no_inline_secret_no_real_address_and_every_result_row
     table = text.split("| Step | Pass or fail | Output or note |")[1].split("## Risk")[0]
     rows = [line for line in table.splitlines() if line.startswith("|") and not line.startswith("|---")]
     assert len(rows) >= 10 and all(line.split("|")[2].strip() == "NOT CHECKED" for line in rows), rows
+
+
+# --- the clean start (#281, fix round 1): the script starts itself again under an empty environment ------------
+# The copy re-executes for real (only its search path is the stubs'); the real block is also run alone below.
+
+CLEAN_BLOCK_START = "CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'"
+CLEAN_BLOCK_END = "case $- in *x*) exit 1 ;; esac"
+
+
+HANDOVER = 'exec /usr/bin/env -i PATH="$CLEAN_PATH" CLEAN_START=1 /bin/bash --norc --noprofile "$0" "$@" || exit 1'
+POSIX_GUARD = '[ -n "${BASH_VERSION-}" ] && [ "${CLEAN_START-}" = 1 ] && [ "$PATH" = "$CLEAN_PATH" ] || ' + HANDOVER
+BASH_ONLY = re.compile(r"\w+=\(|\[\[|compgen|<\(|\blocal\b|\bdeclare\b|\$'|\bfunction\b|\(\(")
+
+
+def clean_block():
+    lines = SCRIPT_TEXT.splitlines()
+    return lines[lines.index(CLEAN_BLOCK_START) : lines.index(CLEAN_BLOCK_END) + 1]
+
+
+def test_the_clean_start_is_the_first_command_and_the_region_is_explicit():
+    code = [line for line in SCRIPT_TEXT.splitlines() if line.strip() and not line.startswith("#")]
+    assert code[0] == "CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'" and code[1] == "set +x"
+    # Two hand-over lines since fix round 1b: the POSIX one (for any shell that is not the clean bash run) and the
+    # bash part's strict one (replaces the single line of 41bbe67); both are the same exec.
+    assert SCRIPT_TEXT.count("exec /usr/bin/env -i ") == 2 and SCRIPT_TEXT.count('"$0" "$@"') == 2
+    assert [line for line in code if "exec /usr/bin/env -i " in line] == [POSIX_GUARD, '[ "$clean" = 1 ] || ' + HANDOVER]
+    assert SCRIPT_TEXT.index(CLEAN_BLOCK_END) < SCRIPT_TEXT.index("DIGEST_PARAM='{{ digest }}'") < SCRIPT_TEXT.index("set -u")
+    assert 'region_name="us-east-1"' in SCRIPT_TEXT
+
+
+def test_a_start_up_file_named_by_the_environment_is_read_only_by_the_outer_shell(box):
+    hook = box.base / "start-up-file.sh"
+    marker = box.base / "start-up-marker"
+    hook.write_text(f'echo "$SHLVL" >> {shlex.quote(str(marker))}\n', encoding="utf-8")
+    r = box.run(env={"BASH_ENV": str(hook)})
+    assert_only(r, 0, DEPLOYED)
+    # Bash reads the file once, in the outer shell before the script's first line (no script can prevent that); the
+    # re-executed run (`--norc`, and no such variable) never does, nor does any program it starts.
+    assert marker.read_text(encoding="utf-8").splitlines() == ["1"]
+    assert_safe(r)
+
+
+@pytest.mark.parametrize("extra", [{}, {"BASH_XTRACEFD": "2", "PS4": "+${LINENO}:${BASH_COMMAND}: "}])
+@pytest.mark.parametrize("guard", [False, True])
+def test_tracing_set_in_the_environment_shows_no_secret_and_no_later_command(box, extra, guard):
+    env = {"SHELLOPTS": "xtrace", **extra}
+    if guard:
+        env["CLEAN_START"] = "1"
+    r = box.run(env=env)
+    assert r.code == 0 and DEPLOYED in r.lines()
+    # The outer shell traces only the block before the re-execution; nothing after it is traced.
+    for canary in [*SECRET_VALUES.values(), *OTHER_CANARIES]:
+        assert canary not in r.out
+    assert "docker" not in r.out and "python3" not in r.out and "S[" not in r.out
+    assert_safe(r)
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("IFS", "a/ \t\n"),
+        ("GLOBIGNORE", "*"),
+        ("CDPATH", "/"),
+        ("S", "x"),
+        ("ENV", "/nonexistent"),
+        ("SHELLOPTS", "allexport"),
+        ("BASHOPTS", "nullglob"),
+        ("LC_ALL", "C.UTF-8"),
+        ("AWS_DEFAULT_REGION", "eu-west-1"),
+        ("AWS_REGION", "eu-west-1"),
+        ("HOME", "/nonexistent-home"),
+    ],
+)
+def test_an_exported_variable_has_no_effect_on_the_run(box, name, value):
+    r = box.run(env={name: value})
+    assert_only(r, 0, DEPLOYED)
+    assert r.kinds().count("secret-read") == 1
+    assert_safe(r)
+
+
+def test_a_planted_program_on_the_starting_path_never_runs(box):
+    plant = box.base / "plant"
+    plant.mkdir()
+    marker = box.base / "plant-ran"
+    for name in ("docker", "curl", "python3", "flock", "env", "mkdir"):
+        (plant / name).write_text(f"#!{real('bash')}\necho {name} >> {shlex.quote(str(marker))}\nexit 0\n", encoding="utf-8")
+        (plant / name).chmod(0o755)
+    for guard in (False, True):
+        r = Box(box.base / f"g{guard}").run(env={"PATH": f"{plant}:{box.test_path}", **({"CLEAN_START": "1"} if guard else {})})
+        assert not marker.exists(), marker.read_text(encoding="utf-8")
+        assert r.code != 0 or DEPLOYED in r.lines()
+
+
+def test_the_marker_cannot_skip_the_restart_while_another_variable_is_present(box):
+    # With the marker and the stubs' path present, one more variable still starts the script again: tracing, which
+    # would otherwise cover the whole run, ends at the restart.
+    r = box.run(env={"CLEAN_START": "1", "SHELLOPTS": "xtrace"})
+    assert r.code == 0 and "docker" not in r.out and SECRET_VALUES["STACK_PG_APP_PASSWORD"] not in r.out
+    r = Box(box.base / "second").run(env={"CLEAN_START": "1", **EXPORTED})
+    assert_only(r, 0, DEPLOYED)
+    assert_no_exported_value(r)
+
+
+def test_the_real_block_alone_restarts_under_an_empty_environment(tmp_path):
+    probe = tmp_path / "probe.sh"
+    probe.write_text("#!/bin/bash\n" + "\n".join(clean_block()) + '\nprintf "ARGS:%s\\n" "$*"\nprintf "FLAGS:%s\\n" "$-"\ncompgen -e\ncompgen -A function\n', encoding="utf-8")
+    hook = tmp_path / "hook.sh"
+    hook.write_text('echo "OUTER-HOOK"\n', encoding="utf-8")
+    dirty = {"PATH": "/nonexistent", "IFS": "x", "GLOBIGNORE": "*", "CDPATH": "/", "S": "1", "BASH_ENV": str(hook), "SHELLOPTS": "allexport", "CLEAN_START": "1"}
+    proc = subprocess.run(["/bin/bash", "--norc", str(probe), "sha256:abc"], env=dirty, capture_output=True, text=True, timeout=30)
+    assert proc.stderr == ""  # (the exit code is the last `compgen`'s: 1 for no function, as wanted)
+    lines = proc.stdout.splitlines()
+    assert lines.count("OUTER-HOOK") == 1  # the outer shell only
+    assert "ARGS:sha256:abc" in lines and not [line for line in lines if line.startswith("FLAGS:") and "x" in line]
+    names = set(lines[lines.index([line for line in lines if line.startswith("FLAGS:")][0]) + 1 :])
+    assert names <= {"CLEAN_START", "PATH", "PWD", "SHLVL", "_"}, names
+
+
+# --- the start-up block is POSIX sh (#281, fix round 1b): Systems Manager starts the script with `sh` -------
+
+
+def test_the_lines_before_the_hand_over_are_posix_sh_and_the_hand_over_comes_before_any_bash_only_line():
+    code = [line for line in SCRIPT_TEXT.splitlines() if line.strip() and not line.startswith("#")]
+    first = next(i for i, line in enumerate(code) if "exec /usr/bin/env -i " in line)
+    # The shell reads these lines one simple command at a time: no compound command may be open before the exec.
+    assert code[: first + 1] == ["CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'", "set +x", POSIX_GUARD]
+    assert not [line for line in code[: first + 1] if BASH_ONLY.search(line)]
+    bash_only = [i for i, line in enumerate(code) if BASH_ONLY.search(line)]
+    assert bash_only and min(bash_only) > first, "a bash-only line must come after the hand-over"
+
+
+def test_the_posix_checks_themselves_flag_each_bash_only_form():
+    for bad in ("a=(1 2)", "[[ x ]]", "compgen -e", "cat <(x)", "local x", "declare -A S", "x=$'a'", "function f", "((x))"):
+        assert BASH_ONLY.search(bad), bad
+    for good in ('[ -n "${BASH_VERSION-}" ] && [ "$PATH" = "$P" ] || exec /usr/bin/env -i "$0" "$@"', "case $- in *x*) exit 1 ;; esac"):
+        assert not BASH_ONLY.search(good), good
+
+
+SH_SHELLS = [shutil.which("sh"), *([shutil.which("dash")] if shutil.which("dash") else [])]
+
+
+@pytest.mark.parametrize("shell", SH_SHELLS)
+def test_the_script_copy_started_with_sh_hands_over_to_bash_and_gives_the_same_results(box, shell):
+    """Systems Manager runs the script with `sh`, which is dash on Ubuntu. Here `sh` may be bash, which accepts
+    every bash-only line, so only CI's dash makes this test meaningful; it never skips. When `dash` is on the
+    machine it also runs explicitly."""
+    print(f"shell under test: {shell} -> {os.path.realpath(shell)}; dash {'found' if shutil.which('dash') else 'not found, so only sh runs'}")
+    assert shell, "the machine has no sh"
+    r = box.run(shell=shell)
+    assert_only(r, 0, DEPLOYED)
+    assert r.kinds().count("secret-read") == 1
+    assert_safe(r)
+    r = Box(box.base / "refused").run("sha256:xyz", shell=shell)
+    assert_only(r, 2, FIXED[2])
+    assert set(r.kinds()) <= {"flock"}, r.kinds()
+    assert_safe(r)

@@ -14,10 +14,36 @@
 # with tracing on, never prints a command's own output, and passes no secret on a command line.
 # No migration is undone by a restore. The script runs no SQL and sets no database URL.
 #
-# Test-only settings (tests/test_deploy_script.py sets them so the script runs without root; the
-# defaults below are the real ones): SOCBOARD_DEPLOY_RUN_DIR, SOCBOARD_DEPLOY_OPT_DIR,
-# SOCBOARD_DEPLOY_WAIT (seconds) and SOCBOARD_DEPLOY_POLL (seconds).
+# Nothing of its behaviour is read from the environment except what Systems Manager and the host
+# provide: the folders and waits below are constants (tests/test_deploy_script.py runs a copy with
+# those four lines replaced), and the names written into the variable file are unset at the start.
+# Decision record: _docs/decisions/*-deploy-script-ambient-inputs.md.
 #
+# The first thing the script does is start itself again once under an empty environment (the block
+# below), so a variable of the starting shell (a start-up file name, shell options, a field splitter, a
+# program search path) never reaches the run. The new run gets a fixed search path and a marker, nothing
+# else. It needs no region variable (the secret read names its region) and no home folder.
+# The marker is honoured only when the environment is exactly that clean one; any other variable, an
+# exported function, or a search path that is not the fixed one starts the script again. One limit: a
+# start-up file named by such a variable in the shell that starts this script is read by that shell before
+# the first line, which no script can prevent; the new run never reads it. The same holds for an exported
+# function that replaces a command this block uses.
+# The digest travels as the first argument of the new run.
+CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+set +x
+[ -n "${BASH_VERSION-}" ] && [ "${CLEAN_START-}" = 1 ] && [ "$PATH" = "$CLEAN_PATH" ] || exec /usr/bin/env -i PATH="$CLEAN_PATH" CLEAN_START=1 /bin/bash --norc --noprofile "$0" "$@" || exit 1
+# Everything above this line is POSIX sh: Systems Manager starts the script with `sh` (dash on Ubuntu), which
+# reads one line at a time and takes the hand-over above, so it never parses a line below. From here on only
+# the bash run of the hand-over (or an outer bash that passed the test above) is reading, and it checks strictly.
+clean=1
+while IFS= read -r name; do
+  case $name in CLEAN_START | PATH | PWD | SHLVL | _) ;; *) clean=0 ;; esac
+done < <(compgen -e)
+[ -z "$(compgen -A function)" ] || clean=0
+[ "$clean" = 1 ] || exec /usr/bin/env -i PATH="$CLEAN_PATH" CLEAN_START=1 /bin/bash --norc --noprofile "$0" "$@" || exit 1
+unset clean name
+case $- in *x*) exit 1 ;; esac
+
 # The document replaces the one parameter reference on the next line before the script runs; run any
 # other way, the script takes the digest as its first argument. Keep that the only such reference.
 DIGEST_PARAM='{{ digest }}'
@@ -46,14 +72,17 @@ STACK_NETWORK="${PROJECT}_stack"
 APP="$PROJECT-app-1"
 CAND="$PROJECT-deploy-candidate"
 CAND_PORT="127.0.0.1:$CAND_HOST_PORT:$APP_PORT"
-RUN_DIR=${SOCBOARD_DEPLOY_RUN_DIR:-/run/socboard-deploy}
-OPT_DIR=${SOCBOARD_DEPLOY_OPT_DIR:-/opt/socboard}
-WAIT=${SOCBOARD_DEPLOY_WAIT:-90}
-POLL=${SOCBOARD_DEPLOY_POLL:-3}
+RUN_DIR='/run/socboard-deploy'
+OPT_DIR='/opt/socboard'
+WAIT=90
+POLL=3
 VARS="$RUN_DIR/stack-vars"
 NAMES=(SOCBOARD_TOKEN_SECRET SOCBOARD_INGEST_API_KEY SOCBOARD_SEED_PASSWORD_ANALYST_A
   SOCBOARD_SEED_PASSWORD_ANALYST_B SOCBOARD_SEED_PASSWORD_LEAD STACK_PG_SUPERUSER_PASSWORD
   STACK_PG_OWNER_PASSWORD STACK_PG_APP_PASSWORD)
+# Compose lets a shell variable override the same name in the variable file, so none of the ten names
+# the script writes there may be inherited.
+unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR
 
 CAND_UP=0
 LOCKED=0
@@ -182,6 +211,13 @@ check_release() {
   done
 }
 
+# The last step of the swap: `current` names the release that now runs. A failure leaves `current` as it was.
+link_current() {
+  ln -sfn "$REL" "$OPT_DIR/current.new" && mv -T "$OPT_DIR/current.new" "$OPT_DIR/current" && return 0
+  rm -f "$OPT_DIR/current.new"
+  return 1
+}
+
 # --- 1. the lock -------------------------------------------------------------------------------
 # The lock file is the one file an "already deployed" run may create (it lives in a memory file system).
 mkdir -p "$RUN_DIR" || die 8
@@ -303,11 +339,10 @@ CAND_UP=0
 
 # --- 10. the swap and the checks; a failure restores the previous release ---------------------------
 swapped_ok=0
-if compose up -d --no-deps --pull never --no-build app >/dev/null 2>&1 && check_release; then
+if compose up -d --no-deps --pull never --no-build app >/dev/null 2>&1 && check_release && link_current; then
   swapped_ok=1
 fi
 if [ "$swapped_ok" = 1 ]; then
-  ln -sfn "$REL" "$OPT_DIR/current.new" && mv -T "$OPT_DIR/current.new" "$OPT_DIR/current"
   say 'socboard-deploy: deployed.'
   exit 0
 fi
