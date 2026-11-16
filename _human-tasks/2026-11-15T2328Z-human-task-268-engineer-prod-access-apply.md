@@ -81,15 +81,21 @@ If different: read the error, do not retry another way, and tell the orchestrato
 terraform -chdir=terraform/ci-access plan -out=tfplan
 ```
 
-Expected: `Plan: 0 to add, 1 to change, 0 to destroy.` The one change is `aws_iam_role.deploy will be updated in-place`, in `assume_role_policy` only. Read the trust: the audience is `sts.amazonaws.com` and `sub` has exactly two values, `…:environment:deploy` and `…:environment:deploy-prod`, each starting `repo:andrew-chung-au@<owner id>/socboard@<repo id>`. The plan and apply roles and every role policy show no change.
-If different: a third subject, a `*`, a subject without the ids, a change on another resource, or a replace of the role means stop. Do not apply. Tell the orchestrator.
+Expected: `Plan: 0 to add, 2 to change, 0 to destroy.` The two changes are:
+- `aws_iam_role.deploy will be updated in-place`, in `assume_role_policy` only. Read the trust: the audience is `sts.amazonaws.com` and `sub` has exactly two values, `…:environment:deploy` and `…:environment:deploy-prod`, each starting `repo:andrew-chung-au@<owner id>/socboard@<repo id>`.
+- `aws_iam_role_policy.plan will be updated in-place`, with exactly one added action, `ssm:DescribeDocumentPermission`, in the `ReadDeployDocument` statement (#209).
+
+The apply role and every other role policy show no change.
+If different: a third subject, a `*`, a subject without the ids, any other added or changed action, a change on another resource, or a replace of a role means stop. Do not apply. Tell the orchestrator.
 
 ```
 terraform -chdir=terraform/ci-access apply tfplan
 ```
 
-Expected: `Apply complete! Resources: 0 added, 1 changed, 0 destroyed.` and the three role ARN outputs, unchanged.
+Expected: `Apply complete! Resources: 0 added, 2 changed, 0 destroyed.` and the three role ARN outputs, unchanged.
 If different: as step 2.
+
+Read back: the next #209 plan run on PR #263 should pass the plan step.
 
 ### Step 4: The `deploy-prod` Environment, read back (done: the maintainer created it on 2026-11-16)
 

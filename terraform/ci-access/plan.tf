@@ -54,10 +54,12 @@ resource "aws_iam_role_policy" "plan" {
         Action   = ["ec2:Describe*"]
         Resource = "*"
       },
+      # The provider reads the document's permissions when it refreshes aws_ssm_document (found
+      # 2026-11-16 with the IAM policy simulator, #209).
       {
         Sid      = "ReadDeployDocument"
         Effect   = "Allow"
-        Action   = ["ssm:DescribeDocument", "ssm:GetDocument", "ssm:ListTagsForResource"]
+        Action   = ["ssm:DescribeDocument", "ssm:DescribeDocumentPermission", "ssm:GetDocument", "ssm:ListTagsForResource"]
         Resource = [local.deploy_doc_arn]
       },
       # A plan of the server part reads no IAM, budget or snapshot schedule.
