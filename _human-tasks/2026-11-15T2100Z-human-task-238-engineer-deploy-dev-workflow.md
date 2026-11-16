@@ -148,20 +148,26 @@ If different: stop and tell the orchestrator.
 
 ## Record the result
 
+Recorded 2026-11-16 by the agent from the run's logs, job summary and artifacts (read through the GitHub API), and from the maintainer's report of the run page. The first deploying run is [43979237337](https://github.com/andrew-chung-au/socboard/actions/runs/43979237337), commit `2ebd8a6` (the merge of PR #344, which landed two minutes after #343's merge). It needed four attempts: attempts 1 and 2 stopped at the variable check because the two values had been saved as Environment secrets, not variables; attempt 3 deployed but its health check used a mistyped `DEPLOY_URL` (`.sslip.ioa`); attempt 4 is the re-run with the corrected value.
+
 | Row | Pass, fail or not settled | Output or note |
 |---|---|---|
-| The run is `socboard deploy dev`, started by a `socboard publish` run | | |
-| `find` found `published-image` | | |
-| The role was assumed | | |
-| `send-command` accepted the instance id and the document (first live check of the deploy role's resource split, `VERIFY:` in #156) | | |
-| The command ended `Success` with the deployed line | | |
-| The health check passed | | |
-| `deploy-record-dev` exists and holds the digest the publish run printed | | |
-| The re-run shows "already deployed" | | |
-| A later push whose publish run was skipped shows `find` green with nothing deployed | | |
-| A pull request's run did not start the deploy job (link) | | |
-| Time from the push to the URL serving the new digest | | |
-| `get-command-invocation` returned `InvocationDoesNotExist` in the first seconds (yes or no) | | |
+| The run is `socboard deploy dev`, started by a `socboard publish` run | PASS | Run 43979237337, started by publish run [43979128244](https://github.com/andrew-chung-au/socboard/actions/runs/43979128244) (`RUN_ID` in the `find` log), `HEAD_SHA` `2ebd8a61e896832e2359596b777ac374311d1ddf`. |
+| `find` found `published-image` | PASS | `find` green on every attempt; the deploy job got the digest. |
+| The role was assumed | PASS | Attempt 3: "Assuming role with OIDC", "Authenticated as assumedRoleId ***:socboard-deploy-dev-43979237337". The role's unique ID printed as `***`, so the mask step works. |
+| `send-command` accepted the instance id and the document (first live check of the deploy role's resource split, `VERIFY:` in #156) | PASS | Attempt 3: `sent socboard-deploy for 20261116-231934-2ebd8a6 (command f1625e56-41cb-46f5-903f-16310a6fdcff)`. Settles the #156 `VERIFY:` for the send. |
+| The command ended `Success` with the deployed line | PASS | Attempt 3 printed `socboard-deploy: deployed.` |
+| The health check passed | PASS (attempt 4) | Attempt 3: 6 of 6 "no answer", because `DEPLOY_URL` was `https://44-216-250-242.sslip.ioa`; the job failed and wrote no record, as designed. Attempt 4, after the fix: `health check 1 of 6: 200`. |
+| `deploy-record-dev` exists and holds the digest the publish run printed | PASS | The record (attempt 4) has digest `sha256:49392eb16880a6f51a25ff46e3e9138fd997d437a1a03f5e107f499b070f2773`, tag `20261116-231934-2ebd8a6`, revision `2ebd8a6…`, result `already deployed`, command `38c40a7d-310d-4b6b-875e-7d8d1b8ef918`, the same digest, tag and revision as publish run 43979128244's `published-image`. |
+| The re-run shows "already deployed" | PASS | Attempt 4: `socboard-deploy: already deployed. Nothing was changed.` The job summary says the same. Covers step 8. |
+| A later push whose publish run was skipped shows `find` green with nothing deployed | PASS | Run [43978394005](https://github.com/andrew-chung-au/socboard/actions/runs/43978394005): `find` green with "this publish run published nothing" (publish run 43978367461), deploy skipped. |
+| A pull request's run did not start the deploy job (link) | PASS (by timing) | Run [43983006345](https://github.com/andrew-chung-au/socboard/actions/runs/43983006345): `find` and `deploy` skipped. It follows publish run 43982995261 (skipped), which started 4 s after the pull request `issue-288-otel-deps`'s verify run finished; no push to `main` ran then. The API does not show a run's triggering run, so the link is by timing. No `deploy` job ran between 23:29 and 23:54 UTC across 19 such runs. |
+| Time from the push to the URL serving the new digest | NOT SETTLED | Not measurable on this run: the merge was at 23:19:34 UTC and the deploy at 23:51 UTC, delayed by setting the variables. The send-to-deployed part took about 88 s (23:50:00 to 23:51:28, including six health checks). Take it from the next push to `main`. |
+| `get-command-invocation` returned `InvocationDoesNotExist` in the first seconds (yes or no) | NOT SETTLED | `scripts/ci_deploy.py` does not print it, so the log cannot show it. |
+
+Found during the run (follow-up issues, not fixed here):
+- [#349](https://github.com/andrew-chung-au/socboard/issues/349): runs [43978322955](https://github.com/andrew-chung-au/socboard/actions/runs/43978322955) and [43979101310](https://github.com/andrew-chung-au/socboard/actions/runs/43979101310) failed at `find` with "the published-image artifact's revision is not the publish run's commit". `publish.yml` records the tested commit (`github.event.workflow_run.head_sha` of the CI run); `deploy-dev.yml` compares it with the publish run's own `head_sha`, which is `main`'s head when that run starts. When a second merge lands before the first commit's publish run, the two differ. The refusal is safe (the older commit is not `main`'s head), but it leaves a red run.
+- [#350](https://github.com/andrew-chung-au/socboard/issues/350): `ci_deploy.py check` accepted `https://44-216-250-242.sslip.ioa`. It could require the `<four numbers with dashes>.sslip.io` form.
 
 ## Risk
 
