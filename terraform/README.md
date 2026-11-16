@@ -264,12 +264,14 @@ Dev and prod are two Compose stacks on this one server (`_docs/decisions/2026-11
 
 - **Why the hostnames differ by a prefix.** Dev keeps the bare name, because the decision keeps every name of the stack already built; the prod name is derived from the same Elastic IP, so a replaced instance keeps both. `prod-<ip>.sslip.io` resolves to the address (read 2026-11-16 with `getent hosts`).
 - **Why two ports.** Each stack publishes its app on the loopback only (`STACK_APP_PORT`), and host Caddy picks the stack by hostname. The tests refuse a Caddyfile in which the two sites share an upstream. The deploy script's candidate port (8001 for dev) is #267's; prod's must differ from both 8001 and 8100. The security group is unchanged: TCP 80 and 443 only.
-- **The forwarded address.** Caddy replaces any `X-Forwarded-For` the caller sent, for both sites. The prod app sees its own network's gateway, `10.231.78.1`, as the peer, as dev sees `10.231.77.1`. `VERIFY:` the prod gateway when prod first runs (the deploy script checks the gateway of the stack it deploys).
+- **The forwarded address.** Caddy replaces any `X-Forwarded-For` the caller sent, for both sites. The prod app sees its own network's gateway, `10.231.78.1`, as the peer, as dev sees `10.231.77.1`. `VERIFY:` the prod gateway when prod first runs (the deploy script's gateway check, exit 10, covers dev now and is #267's to extend to prod).
 - **Certificates.** The prod hostname gets its own certificate from the same ACME account, stored beside dev's on the volume. Its first issuance counts once against Let's Encrypt's limits; dev's certificate is kept.
 - **Not chosen: a sites folder on the data volume.** QA's finding F-256-6 on #256 suggested that the Caddyfile import site files from the data volume, so a later site would not replace the instance. Both options cost one replacement (the import line has to be added once), and this one adds no new writer of Caddy files as root: the bootstrap stays the only thing that writes `/etc/caddy/Caddyfile`, and nothing on the volume is read as Caddy's configuration.
 - **What applying it costs.** The change is to the user data, so it replaces the instance (next section): both stacks restart, and the root disk is lost, so dev is deployed again (the next green push) and prod has nothing to restore, because it is not deployed yet. After the apply, update `DEPLOY_INSTANCE_ID` in the `deploy` Environment (and in `deploy-prod` when it holds one). Apply between deploys: a deploy that runs during the replacement fails.
 
 ### Changed user data replaces the instance
+
+The change that adds the prod site (issue #266) is such a change: its cost is listed under "The prod stack beside dev", "What applying it costs".
 
 `user_data_replace_on_change = true`. cloud-init runs user data once per instance, so without it a change would stop and start the same instance and never run the new script. With it, any change to the bootstrap or to `acme_ca` replaces the instance. The data volume and the Elastic IP are separate resources and survive: the old instance is stopped before the volume is detached (`stop_instance_before_detaching`), the new one mounts the same volume without formatting it, re-owns `caddy/` to its own `caddy` user, and the hostname stays. Caddy finds its certificate and ACME account for the same hostname in the kept storage and reuses them, with no new issuance (`VERIFY:` at D19b, by the certificate's serial number before and after). A replacement that does re-issue counts against Let's Encrypt's limits: 5 duplicate certificates for the same names in 7 days, and the weekly limit per registered domain, which every sslip.io user shares unless sslip.io is on the Public Suffix List (`VERIFY:` the current figures). Avoid repeated replacements in one week. What is lost is the root disk: D20's Compose file and environment file on it, so D20 deploys again after a replacement. A replacement also takes the newest Canonical image (the `ignore_changes` on `ami` applies only to an ordinary plan).
 
@@ -591,10 +593,20 @@ For the replacement that adds the prod site, this is what differs. It is the mai
 - Step 7: after the `stat` check add the prod folder, then the Caddyfile check. The expected prod folder is uid 999 and `700`:
 
 ```
-onserver 'stat -c %U:%a:%n /srv/socboard-data/postgres-prod; grep -c reverse_proxy /etc/caddy/Caddyfile'
+onserver 'stat -c %U:%a:%n /srv/socboard-data/postgres-prod'
 ```
 
-Expected: `dnsmasq:700:/srv/socboard-data/postgres-prod` (the host names uid 999 `dnsmasq`), then `2`. `VERIFY:` that Caddy reads the file as valid:
+Expected: `dnsmasq:700:/srv/socboard-data/postgres-prod` (the host names uid 999 `dnsmasq`).
+If different: another owner or mode means the bootstrap did not finish; stop and send the output of `onserver 'tail -n 20 /var/log/cloud-init-output.log'`.
+
+```
+onserver 'grep -c reverse_proxy /etc/caddy/Caddyfile'
+```
+
+Expected: `2`, one per site.
+If different: `1` means the prod site is missing; stop and send the output.
+
+`VERIFY:` that Caddy reads the file as valid:
 
 ```
 onserver 'runuser -u caddy -- caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -n 1'
@@ -607,7 +619,8 @@ Expected: `Valid configuration`. If different: send the line printed; do not edi
 curl -sS -o /dev/null -w '%{http_code}' "https://$(terraform output -raw prod_hostname)/"
 ```
 
-Expected: `502` with no certificate warning: Caddy has the second site and nothing is on port 8100. A certificate error for prod alone means its issuance has not finished; wait five minutes and try again, then read Caddy's journal as step 4 says.
+Expected: `502` with no certificate warning: Caddy has the second site and nothing is on port 8100.
+If different: a certificate error for prod alone means its issuance has not finished; wait five minutes and try again, then read Caddy's journal as step 4 says.
 - Step 10: update every Environment that holds the instance id, `deploy-prod` included once it has the variable.
 
 ### Teardown
