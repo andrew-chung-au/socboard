@@ -1,0 +1,121 @@
+# Promotes to prod, by hand, the image digest dev is running, or rolls prod back to an earlier digest that ran in dev (#269).
+#
+# It is started only by `workflow_dispatch`, with one optional input, `digest` (empty means dev's current digest). The
+# `resolve` job holds no cloud role and no Environment: it reads the deploy records dev left (`deploy-record-dev`,
+# #238), picks the digest and refuses a digest that never ran in dev, so a refused run never asks for an approval.
+# The `promote` job runs in the `deploy-prod` Environment (the required reviewer approves each run; branch rule
+# `main`), assumes the deploy role by OIDC, sends the one document `socboard-deploy` with the digest and
+# `environment=prod`, reads the result by the script's fixed lines, checks the public health URL and leaves the
+# record `deploy-record-prod`. The logic is scripts/ci_promote.py (tested); the input and every event value reach it
+# only through `env:`, never inside a `run:` text.
+name: socboard promote prod
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "Empty: promote the digest dev runs now. Or a digest that ran in dev (sha256:...), to roll prod back to it."
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  resolve:
+    # A backstop for the Environment's own branch rule: a dispatch from another branch does nothing.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      image: ${{ steps.choose.outputs.image }}
+      tag: ${{ steps.choose.outputs.tag }}
+      digest: ${{ steps.choose.outputs.digest }}
+      revision: ${{ steps.choose.outputs.revision }}
+      previous: ${{ steps.choose.outputs.previous }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Choose the digest (dev's newest record, or the one the input names if dev ran it)
+        id: choose
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          INPUT_DIGEST: ${{ inputs.digest }}
+        run: python3 scripts/ci_promote.py resolve --repository "$REPOSITORY" --input-digest "$INPUT_DIGEST" --output "$GITHUB_OUTPUT"
+
+  promote:
+    needs: resolve
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: deploy-prod
+    # Two promotions never overlap; a running one is never cancelled (the script's lock is the second layer).
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the Environment's variables before any role is assumed
+        env:
+          DEPLOY_INSTANCE_ID: ${{ vars.DEPLOY_INSTANCE_ID }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: python3 scripts/ci_deploy.py check
+
+      # The credentials action prints the role's unique ID in clear; GitHub masks only a registered value,
+      # and only in a job that references the secret (#268).
+      - name: Mask the deploy role's unique ID
+        env:
+          AWS_DEPLOY_ROLE_ID: ${{ secrets.AWS_DEPLOY_ROLE_ID }}
+        run: echo "::add-mask::$AWS_DEPLOY_ROLE_ID"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: socboard-promote-prod-${{ github.run_id }}
+
+      - name: Send the deploy document to prod, wait for it and check the public health URL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
+          DEPLOY_INSTANCE_ID: ${{ vars.DEPLOY_INSTANCE_ID }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          DIGEST: ${{ needs.resolve.outputs.digest }}
+          REVISION: ${{ needs.resolve.outputs.revision }}
+          PREVIOUS: ${{ needs.resolve.outputs.previous }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/ci_promote.py deploy --repository "$REPOSITORY" --image "$IMAGE" --tag "$TAG" --digest "$DIGEST" \
+            --revision "$REVISION" --previous "$PREVIOUS" --run-id "$GITHUB_RUN_ID" --run-url "$RUN_URL" \
+            --record "$RUNNER_TEMP/deploy-record-prod.json"
+
+      # Only after a pass: a failed promote leaves no record, so the newest record is the last good prod deploy.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deploy-record-prod
+          path: ${{ runner.temp }}/deploy-record-prod.json
+          retention-days: 90
+          # A re-run of the same run replaces the record instead of failing on the existing name.
+          overwrite: true
+          if-no-files-found: error
