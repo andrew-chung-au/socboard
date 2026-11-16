@@ -1,5 +1,7 @@
 # First apply, part A: state, IAM and budgets, CI access and the server
 
+> **Record of a finished run.** The maintainer ran this checklist on 2026-11-15/16; its results are in "Record the result" below and in `_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md`. Do not run it again. Its commands are as they were then: since #268, `iam-and-budgets/` also requires `app_prod_secret_arn`, so a new apply follows the steps in `terraform/README.md`, not this file.
+
 ## Purpose
 
 Take the AWS account from nothing to the four Terraform parts applied (`state/`, `iam-and-budgets/`, `ci-access/`, `server/`), set the GitHub Environments, the repository secrets and the state bucket variable, and record every `VERIFY:` this apply can settle. Issue: #207 (Deploy item D19a).
