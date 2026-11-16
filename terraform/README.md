@@ -585,7 +585,7 @@ In the record, each row is PASS, FAIL or NOT CHECKED. A FAIL says what you saw, 
 
 #### What changes in these steps for the prod change (issue #266)
 
-For the replacement that adds the prod site, this is what differs. It is the maintainer's apply. It does not need to wait for #237's first deploy: the maintainer applied it on 2026-11-16, before the first deploy, so the replacement restarted nothing and no instance id had to be updated.
+For the replacement that adds the prod site, this is what differs. It is the maintainer's apply. It ran on 2026-11-16 before #237's first deploy, and that is fine: with nothing running there is nothing to restart, and `DEPLOY_INSTANCE_ID` was not set yet, so there was no instance id to update (#238's steps set it from the current output). Once stacks are running, apply between deploys.
 
 - Step 2: `terraform output` shows four values, because `prod_hostname` does not exist yet.
 - Step 3: the counts are the usual ones (3/0/3 once the deploy document exists); the plan also lists "Changes to Outputs" with `prod_hostname`. The stop rule is unchanged.
@@ -606,7 +606,7 @@ onserver 'grep -c reverse_proxy /etc/caddy/Caddyfile'
 Expected: `2`, one per site.
 If different: `1` means the prod site is missing; stop and send the output.
 
-`VERIFY:` that Caddy reads the file as valid:
+This check printed `Valid configuration` on 2026-11-16 (as reported):
 
 ```
 onserver 'runuser -u caddy -- caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -n 1'
