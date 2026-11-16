@@ -60,7 +60,7 @@ none
 
 ## Temporary changes
 
-none (no system change, process or large install).
+none (no system change, process or large install). `make clean-scratch` ran after the issue was closed.
 
 ## Interruptions
 
