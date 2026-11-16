@@ -4,6 +4,65 @@ SOCBoard is a web-based case management board for a security operations centre (
 
 All data is synthetic. The graded version uses no machine learning in its critical path, so every severity and every status change can be explained and tested.
 
+[![verify](https://github.com/andrew-chung-au/socboard/actions/workflows/verify.yml/badge.svg)](https://github.com/andrew-chung-au/socboard/actions/workflows/verify.yml) [![compose](https://github.com/andrew-chung-au/socboard/actions/workflows/compose.yml/badge.svg)](https://github.com/andrew-chung-au/socboard/actions/workflows/compose.yml) [![postgres](https://github.com/andrew-chung-au/socboard/actions/workflows/postgres.yml/badge.svg)](https://github.com/andrew-chung-au/socboard/actions/workflows/postgres.yml)
+
+## Reviewer guide
+
+This section is for the peer reviewer scoring the course rubric (`_docs/planning/rubric.md`: 12 criteria, 24 points, 10 to pass). Each row says what exists, where to open the evidence, and the score we believe it supports. The score is a suggestion; please judge each row yourself. Rows marked **in progress** say exactly what is done and what is left, and link the open work.
+
+### At a glance
+
+- **What it is:** a case board for a security operations team. Alerts arrive through an API, get a severity from a fixed rule table, wait in a shared queue, and are claimed, investigated and closed by analysts. Every step is written to an append-only audit trail.
+- **Stack:** React and TypeScript (frontend), FastAPI and SQLAlchemy on Python 3.12 (backend), SQLite for local work and Postgres 16 deployed, Docker Compose, Terraform on AWS, GitHub Actions.
+- **Built by an agent team** working from a written spec and a public tracker: 95 issues closed and 178 pull requests merged, each issue groomed with acceptance criteria and checked by an independent QA role; 29 decision records explain the choices.
+
+### Try it in five minutes (needs Docker)
+
+```sh
+make compose-up      # Postgres, the app and a local proxy; makes local secrets on the first run, prints none
+grep '^SOCBOARD_SEED_PASSWORD_LEAD=' compose.secrets   # your local lead password (a random value made on your machine)
+```
+
+Open http://127.0.0.1:8080/ and sign in as `lead` with that password. `make compose-down` stops it and keeps the data. Without Docker, `make run` starts the same app on SQLite (see [Development](#development)).
+
+### Where to find each criterion
+
+| # | Criterion (max) | Suggested | What exists, and where to open it |
+|---|---|---|---|
+| 1 | Problem description (2) | 2 | The problem, what the system does and how it must behave: [Problem](#problem), [Solution](#solution), [Core functionality](#core-functionality), [Case workflow](#case-workflow), [Expected behavior](#expected-behavior), [Severity rules](#severity-rules). |
+| 2 | Product specification (2) | 2 | The spec with users, journeys, stories, invariants and phases: [`_docs/specs.md`](_docs/specs.md). The public tracker: [issues](https://github.com/andrew-chung-au/socboard/issues?q=is%3Aissue). Every issue carries acceptance criteria and the agents' own `PM:`, `Engineer:`, `QA:` and `Orchestrator:` comments. Good examples: [#178](https://github.com/andrew-chung-au/socboard/issues/178) (login limiting), [#221](https://github.com/andrew-chung-au/socboard/issues/221) (the Compose stack), [#237](https://github.com/andrew-chung-au/socboard/issues/237) (the deploy script, with two independent QA reviews). |
+| 3 | Agent team specification (2) | 2 | Three roles and how work passes between them: [`_docs/agent-kit/process.md`](_docs/agent-kit/process.md) (lifecycle, tiers, hand-offs) and the role files [PM](_docs/agent-kit/team/pm.md), [Software engineer](_docs/agent-kit/team/software-engineer.md), [QA engineer](_docs/agent-kit/team/qa-engineer.md). How parallel sessions share the work without collisions: [`_docs/planning/deploy-coordination.md`](_docs/planning/deploy-coordination.md). See [The agent team](#the-agent-team) below. |
+| 4 | Context management (2) | 2 | [`AGENTS.md`](AGENTS.md) describes the project, its commands and rules, and its "Read when" list points to the modular docs: process, roles, procedures, the spec and [`_docs/index.md`](_docs/index.md), the index of every project document. Always-on rules for the sessions are in [`.kiro/steering/`](.kiro/steering). |
+| 5 | Application (2) | 2 | Frontend ([`frontend/`](frontend)), backend ([`socboard/`](socboard)) and a database (SQLite locally, Postgres in the stack), connected end to end. One command runs it locally: `make run` (SQLite) or `make compose-up` (Postgres). [Development](#development), [Compose stack](#compose-stack). |
+| 6 | Testing (2) | 2 | Unit tests and in-process integration tests (the full user journeys in [`tests/test_journeys.py`](tests/test_journeys.py)) run with one command, `make test`, which also runs the frontend's tests; CI runs them on every push and pull request ([verify](https://github.com/andrew-chung-au/socboard/actions/workflows/verify.yml)). The same suite runs on Postgres ([postgres](https://github.com/andrew-chung-au/socboard/actions/workflows/postgres.yml)). Against the running stack: `make test-stack` (journeys over HTTP through the proxy) and `make e2e` (a real browser with two analysts and a lead), both in CI ([compose](https://github.com/andrew-chung-au/socboard/actions/workflows/compose.yml)). [Tests against the stack](#tests-against-the-stack), [Browser test](#browser-test). |
+| 7 | Containerization (2) | 2 | One image serves the API and the built frontend ([`Dockerfile`](Dockerfile), built and checked in CI). The full system, including Postgres, starts with one command: `make compose-up` ([`compose.yaml`](compose.yaml)). [Container image](#container-image), [Compose stack](#compose-stack). |
+| 8 | Deployment (2) | **in progress** (1 now, 2 when the app is live) | The AWS infrastructure is built by Terraform ([`terraform/`](terraform)) and applied: the server, its encrypted data volume, daily snapshots, HTTPS through host Caddy, and keyless CI access. The public hostnames already answer over HTTPS with valid certificates: dev https://44-216-250-242.sslip.io/ and prod https://prod-44-216-250-242.sslip.io/. Every check made on the real systems is dated in the [evidence timeline](_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md). The first deploy of the app ([#237](https://github.com/andrew-chung-au/socboard/issues/237)) stopped safely at its database step on a file-permission bug that only a real host could show; the fix is in progress, and this row links the live app once it runs. |
+| 9 | CI/CD (3) | **in progress** (1 now, 3 when prod is promoted) | CI runs every test on every pull request (1). Built and waiting on the first deploy: CD to dev on every green push to `main` ([#238](https://github.com/andrew-chung-au/socboard/issues/238), [Deploy to dev](#deploy-to-dev)) (2). In progress: a manual, approved promotion of the same image to production, with rollback ([#269](https://github.com/andrew-chung-au/socboard/issues/269)), behind the `deploy-prod` Environment's required reviewer (3). The tested image is published once and deployed by digest ([Published image](#published-image)). |
+| 10 | Observability (2) | **planned** (0 now) | The plan and its issues: [`_docs/planning/roadmap-4-devops.md`](_docs/planning/roadmap-4-devops.md), with the signal contract already written ([#285](https://github.com/andrew-chung-au/socboard/issues/285)): one key journey, ingest to queue, with a metric, a trace and structured logs sharing a trace id, and no customer data or credentials in telemetry. |
+| 11 | Alerting on user impact (1) | **planned** (0 now) | An alert when new alerts take longer than the spec's 5 seconds to reach the queue ([#296](https://github.com/andrew-chung-au/socboard/issues/296)). |
+| 12 | On-call agent (2) | **planned** (0 now) | An agent woken by that alert opens the smallest fix as a pull request, proved by a drill with a planted defect ([#297](https://github.com/andrew-chung-au/socboard/issues/297) to [#299](https://github.com/andrew-chung-au/socboard/issues/299)). |
+| | **Total** | **16 now, 24 planned** | Already above the pass mark of 10. This table is updated as each in-progress row lands. |
+
+### What this project shows
+
+- **Security built in, not added later.** The audit trail is append-only at the database (triggers on SQLite and on Postgres, where the app connects as a role that owns nothing and cannot disable them) and again in the application. Deployed mode refuses to start with a missing or weak secret. Login and ingest are rate-limited without letting anyone lock out a user. Alert text is treated as untrusted and escaped. Records: [audit trail on Postgres](_docs/decisions/2026-11-14T1946Z-postgres-audit-triggers.md), [the Deploy decisions](_docs/decisions/2026-11-13T2156Z-deploy.md).
+- **Least-privilege cloud access.** CI reaches AWS only through short-lived GitHub OIDC tokens, with separate plan, apply and deploy roles. No role can change IAM, so CI cannot widen its own access, and branches other than `main` were shown to be refused ([#156](https://github.com/andrew-chung-au/socboard/issues/156), [the record](_docs/decisions/2026-11-14T0928Z-ci-oidc-roles.md)).
+- **One tested image, deployed by digest.** The image the integration and browser tests ran against is the one published and deployed; nothing is rebuilt between test and deploy, and there is no `latest` tag.
+- **Verified on real systems, and honest about it.** Every assumption about AWS was marked `VERIFY:` until a real apply settled it, and each result is in the [evidence timeline](_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md), including the problems found and fixed on the way (for example a role identifier that appeared in a public CI log was masked and the log deleted).
+- **A disciplined agent process.** Each issue is groomed by a PM role, built by an Engineer role and checked by a QA role that changes nothing; security-sensitive issues get a second, independent QA review. Every session leaves a summary in [`_session-summaries/`](_session-summaries).
+
+### The agent team
+
+| Role | Does | Never does |
+|---|---|---|
+| PM | Turns the spec into issues with checkable acceptance criteria, proposes a tier, records the issue's text hash so the approved version is fixed | Writes code, or starts work on an issue the maintainer has not approved |
+| Software engineer | Implements one approved issue on its own branch, with tests, and opens a pull request | Changes protected files without the maintainer's approval, or weakens a test |
+| QA engineer | Checks the result against every acceptance criterion and posts a pass or fail with evidence | Changes anything |
+| Orchestrator | Runs the roles in order, claims and closes issues, and brings the maintainer each decision | Plans, grooms, implements or tests itself |
+| Maintainer (human) | Approves issues, merges, applies Terraform and runs the steps only a person can | |
+
+Small changes (Light), normal changes (Standard) and security-sensitive changes (Heavy, which add a decision record and a second QA) follow the tiers in [`_docs/agent-kit/process.md`](_docs/agent-kit/process.md).
+
 ## Problem
 
 Small security teams receive alerts from many sources: failed logins, malware detections, unusual network traffic. Without a shared system, alerts sit in inboxes, chat threads and spreadsheets. This causes three problems:
