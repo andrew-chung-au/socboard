@@ -69,7 +69,14 @@ Each story is a tracker issue; acceptance criteria are written on the issue. Pri
 - (Must) As an operator, a source system that exceeds a fixed ingest rate is refused with 429 and the excess alerts are not stored. The rate is set by configuration, with a default chosen in the issue.
 
 **Cross-cutting**
-- (Must, DevOps phase) As an operator, one key journey emits metrics, traces, and structured logs sharing a trace id, with no synthetic PII or credentials in telemetry. Detailed when that phase starts (Section 6).
+
+The names below are those of `observability/CONTRACT.md`; a change to a name is made there first.
+- (Must, DevOps phase) As an operator, the journey from an accepted `POST /api/alerts` to the first queue read that returns the case is measured by the histogram `socboard.alert.time_to_queue` (unit `s`, bucket bounds include 5), readable as `socboard_alert_time_to_queue_seconds_bucket`, and the counter `socboard.ingest.alerts` counts each ingest by `outcome` (`accepted` or `refused`).
+- (Must, DevOps phase) As an operator, one ingest sent with a chosen `traceparent` leaves the same 32-character lower-case hex trace id in the span `ingest.alert`, in the `trace_id` field of the log event `alert.ingested` and in the exemplar of `socboard.alert.time_to_queue`, and the span `queue.first_seen` links to `ingest.alert`.
+- (Must, DevOps phase) As an operator, no alert title or description, case note, password, ingest key, token or account number is in any metric, span, log line, exemplar or resource attribute: each canary value of `observability/CONTRACT.md` section 8, planted in a request, is absent from everything Tempo, Loki and Prometheus stored.
+- (Must, DevOps phase) As an operator, one make command starts the collector, Tempo (traces), Loki (logs), Prometheus (metrics) and Grafana, and the trace, the log lines and the metric of one ingest can be opened in Grafana.
+- (Must, DevOps phase) As an operator, one alert, `QueueLatencyOverSLO` (label `severity` = `page`), fires when the 95th percentile of `socboard_alert_time_to_queue_seconds_bucket` over 5 minutes is above 5 seconds for 2 minutes, and carries the annotations `summary`, `environment`, `version`, `owner` and `dashboard_url`.
+- (Must, DevOps phase) As an operator, when `QueueLatencyOverSLO` is firing, an on-call agent opens one pull request with its fix; it never merges a pull request and never pushes to `main`.
 
 ## 5. Expected behavior & invariants
 
@@ -93,7 +100,7 @@ This release is the whole graded project, aiming for full marks on every criteri
 
 **Phase 2: Deploy (outline)** — following `_docs/planning/03_deployment.md`: one container image, Postgres in place of SQLite, login attempt limiting and ingest rate limiting, the full system including the database started with one Docker Compose command, end-to-end tests, a deployment reachable at a public URL, and CI/CD that runs the tests and deploys. The boundary: one environment, one server and one Postgres, on AWS, created by Terraform. Container start order uses the Postgres health check in Compose, while `GET /api/health` stays database-free (`openapi.yaml`). The backend binds a non-loopback address only when the container image opts in explicitly; `make backend-run` stays loopback-only and refuses any other host.
 
-**Phase 3: DevOps (outline)** — following `_docs/planning/04_devops.md`: separate dev and prod with automatic deploy to dev and a manual promotion to prod (with a rollback path), one key journey instrumented with metrics, traces and structured logs sharing a trace id and viewable in a UI, at least one alert on real user impact, and an on-call agent that wakes on that alert and fixes the issue.
+**Phase 3: DevOps (outline; the observability, alert and on-call stories are detailed in Section 4)** — following `_docs/planning/04_devops.md`: separate dev and prod with automatic deploy to dev and a manual promotion to prod (with a rollback path), one key journey instrumented with metrics, traces and structured logs sharing a trace id and viewable in a self-hosted UI, one alert on real user impact (`QueueLatencyOverSLO`), and an on-call agent that wakes on that alert and opens a pull request with the fix, never merging it.
 
 **Target Enhancements (Could)** — follow-on work after the three phases, never ahead of them (see roadmap for ordering):
 - Synthetic alert generator and Lead reassignment (the Should-haves), if not already pulled into Core.
@@ -104,11 +111,12 @@ This release is the whole graded project, aiming for full marks on every criteri
 ## 7. Non-goals (Won't have — this release)
 
 - Real log sources or real customer data (all data is synthetic).
-- Automated response actions.
+- Automated response actions to security alerts. (The on-call agent of Phase 3 acts on SOCBoard's own latency alert, not on a security alert, and only opens a pull request.)
 - Any AI-generated verdict in the critical path (the LangGraph step, when added, is advisory only).
 - Multi-tenant orgs, SSO, or a full user-management system.
 - Rich RBAC beyond the Analyst/Lead distinction.
 - In the Deploy phase: a second environment and promotion, rollback (Phase 3), autoscaling, load balancing, a managed or replicated database, a custom domain, high availability, and SSH access to the server.
+- In the DevOps phase: a managed or hosted telemetry service (telemetry is self-hosted), automatic merge of the on-call agent's pull request, and any alert other than `QueueLatencyOverSLO`.
 
 ## 8. Documentation approach
 
