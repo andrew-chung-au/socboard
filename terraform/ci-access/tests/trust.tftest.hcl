@@ -97,7 +97,7 @@ run "plan_policy_reads_the_deploy_document" {
   }
 
   assert {
-    condition     = [for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : sort(s.Action) if s.Sid == "ReadDeployDocument"] == [["ssm:DescribeDocument", "ssm:DescribeDocumentPermission", "ssm:GetDocument", "ssm:ListTagsForResource"]]
+    condition     = [for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : join(",", sort(s.Action)) if s.Sid == "ReadDeployDocument"] == ["ssm:DescribeDocument,ssm:DescribeDocumentPermission,ssm:GetDocument,ssm:ListTagsForResource"]
     error_message = "The ReadDeployDocument statement must allow exactly the four read actions, including ssm:DescribeDocumentPermission (#209)."
   }
 
@@ -107,7 +107,7 @@ run "plan_policy_reads_the_deploy_document" {
   }
 
   assert {
-    condition     = [for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : s.Resource if s.Sid == "ReadDeployDocument"] == [["arn:aws:ssm:us-east-1:123456789012:document/socboard-deploy"]]
+    condition     = [for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : join(",", s.Resource) if s.Sid == "ReadDeployDocument"] == ["arn:aws:ssm:us-east-1:123456789012:document/socboard-deploy"]
     error_message = "The ReadDeployDocument statement's resource must be exactly the socboard-deploy document ARN."
   }
 }
