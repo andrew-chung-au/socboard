@@ -23,13 +23,16 @@ none
 ## Files created or modified
 
 - `_human-tasks/2026-11-16T0033Z-human-task-236-engineer-first-apply-part-b.md` (new)
-- `terraform/README.md` (the D19b subsection only)
+- `terraform/README.md` (the D19b subsection, and the bootstrap section's status paragraph and four settled `VERIFY:` notes: see "Decisions made by the human")
 - `_docs/records/findings/236.json` (new)
 - this file
 
 ## Decisions made by the human
 
-The maintainer reassigned #236 to this session (2026-11-16) and said the run was already done, so the checklist is a record and the human is asked to run nothing.
+- The maintainer reassigned #236 to this session (2026-11-16) and said the run was already done, so the checklist is a record and the human is asked to run nothing.
+- Scope addition, approved by the maintainer on 2026-11-16 (a change to #236's "no other README section changes" constraint): update the bootstrap section's "Status: not yet run" and the `VERIFY: at D19b` notes that the run settled, and no others. Settled and removed: the package names on noble, the by-id link name, the re-run path (and its idempotency), plus the status text (packages installed, the volume found and mounted, `caddy/` on the volume, reboot recovery). Left open: the Cloudsmith key, unattended upgrades, the hostname format, Let's Encrypt without a contact address, a missing volume not blocking the boot, certificate re-use on a replacement, and the forwarded address.
+- Results: rows 12 to 14 stay NOT CHECKED (no reading was taken before the replacement); the reboot and second-plan rows read PASS (as reported); everything else not reported reads "Not reported".
+- The maintainer gave the commands of the run; the README steps were rewritten to follow them (sign in, plan with checks, apply of the saved plan, `send-command` checks, re-run, reboot, second plan, `rm -f d19b.plan`). New and marked as such: the readings before the replacement, the certificate comparison, the `ssm_run` helper and the `DEPLOY_INSTANCE_ID` update. The account check is my wording of "compare without printing" (`VERIFY:` `sso_account_id`).
 
 ## Mismatches with the spec or design docs
 
@@ -53,11 +56,10 @@ none
 
 ## Unrelated problems noticed but not fixed
 
-- F-236-1: the bootstrap section's "Status: not yet run" text and "VERIFY: at D19b" notes are out of date after the run.
+- F-236-1: the bootstrap section's "Status: not yet run" text and "VERIFY: at D19b" notes were out of date after the run. Fixed in this pull request on the maintainer's approval (the findings file is not edited, per its rule).
 - F-236-2: no readings were taken before the replacement, so three comparison rows cannot be filled.
 - F-236-3: the outside checks and the listener's peer address were not run against the new instance.
 
 ## Follow-ups for the next session
 
-- The maintainer decides whether any NOT CHECKED row is worth running, and whether the bootstrap section's status text is updated in this PR or by a new issue.
-- Groom #266 (next).
+- #266 groomed with the maintainer's changes; the maintainer labels it.

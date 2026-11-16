@@ -8,7 +8,21 @@ Record the apply of #256's hardened bootstrap over the server that #207 had appl
 
 ## Where it was run
 
-The maintainer's own machine (WSL, Terraform 1.17.2, AWS CLI v2, SSO profile `socboard`) for Terraform, and a Systems Manager session on the new instance for the host checks. "As reported" means the maintainer reported the result in the planning session and the raw output was not kept.
+The maintainer's own machine (WSL, Terraform 1.17.2, AWS CLI v2, SSO profile `socboard`) for Terraform and for the host checks, which were sent to the instance with `aws ssm send-command` (`AWS-RunShellScript`), not typed in a session. "As reported" means the maintainer reported the result in the planning session and the raw output was not kept.
+
+## What was run, in order
+
+As the maintainer listed it on 2026-11-16 (the raw output was not kept):
+
+1. `export AWS_PROFILE=socboard`; `aws sso login --profile socboard --use-device-code`; a check that the current account is the `socboard` profile's, printing neither.
+2. In `terraform/server/`: `terraform plan -out=d19b.plan -no-color > /tmp/d19b-plan.txt`; a grep of it for `must be replaced|will be destroyed|will be created|^Plan:`; a grep of it for `aws_ebs_volume.data` and `aws_eip.server` with destroy or replace, which printed nothing.
+3. `terraform apply d19b.plan`.
+4. A loop on `aws ssm describe-instance-information` until `PingStatus` was `Online`.
+5. Through `aws ssm send-command`: `cloud-init status --wait` and the bootstrap's last line; `findmnt` and `stat -c '%U %a %n'` of the three folders; `systemctl is-active docker caddy`; `docker compose version --short`; `caddy version`.
+6. `curl -sS -o /dev/null -w '%{http_code}' https://<hostname>/`, which printed 502.
+7. A re-run of `/var/lib/cloud/instance/scripts/part-001`, counting ` wrote ` lines: 0.
+8. `aws ec2 reboot-instances`, then `Online` again, the volume mounted and the services active.
+9. A second `terraform plan`: `No changes`. Then `rm -f d19b.plan`.
 
 ## What the apply did
 
@@ -19,7 +33,7 @@ The maintainer's own machine (WSL, Terraform 1.17.2, AWS CLI v2, SSO profile `so
 
 ## Record the result
 
-Rows are PASS, FAIL, NOT SETTLED or NOT CHECKED. NOT CHECKED means the run did not cover it and nobody has seen it; it is not a failure. Results contain no account number, no ARN with it, no e-mail address, no token, key or secret value.
+Rows are PASS, FAIL, NOT CHECKED or "Not reported". NOT CHECKED (rows 12 to 14) means the check needed a reading before the replacement that nobody took, so it cannot be made now. "Not reported" (rows 15 to 21) means the maintainer reported nothing on it: it may have been looked at or not, and this file claims neither. Neither is a failure. Results contain no account number, no ARN with it, no e-mail address, no token, key or secret value.
 
 | Row | What is checked | Result | Note |
 |---|---|---|---|
@@ -32,22 +46,22 @@ Rows are PASS, FAIL, NOT SETTLED or NOT CHECKED. NOT CHECKED means the run did n
 | 7 | Docker and Caddy are active, with versions | PASS | Both active. Docker Compose 2.40.3, Caddy v2.11.9. |
 | 8 | `https://<hostname>/` answers 502 with a valid certificate (Caddy up, no app yet) | PASS | 502, certificate valid. |
 | 9 | A second run of the bootstrap changes nothing | PASS | It wrote nothing and ended `socboard-bootstrap: done`. |
-| 10 | Reboot | PASS | Back online, volume mounted, Docker and Caddy active (as reported). |
-| 11 | A second `terraform plan` | PASS | `No changes` (as reported). |
-| 12 | The first run's facts, taken before the replacement (cloud-init lines, package versions, `caddy` uid, owners) | NOT CHECKED | Not recorded before the apply. The root disk of that instance is gone. |
-| 13 | The replacement formatted nothing (no `formatting` line in the new instance's cloud-init log) and re-used the same file-system UUID | NOT CHECKED | The mount shows the volume by UUID and the data volume was untouched in the plan, but the log line and the UUID comparison were not reported. |
-| 14 | The certificate's serial before and after (same serial: Caddy re-used the kept storage) | NOT CHECKED | Not taken before the apply. The certificate was valid afterwards (row 8). |
-| 15 | The new instance's image name against the old instance's | NOT CHECKED | Not reported. |
-| 16 | Caddy's keyring holds exactly one primary key with fingerprint `65760C51EDEA2017CEA2CA15155B6D79CA56EA34` (#256) | NOT CHECKED | The bootstrap ended `done`, and it stops on any other key, so this is implied; the key was not read. |
-| 17 | Docker's log rotation (10 MB, 3 files), the weekly prune file, unattended upgrades, `docker.service` ordered after the data mount | NOT CHECKED | Not reported. |
-| 18 | Outside checks: `http://` redirects to HTTPS, TCP 8000 and 22 refused, Caddy's admin endpoint refused on the host, a forged `X-Forwarded-For` replaced | NOT CHECKED | Not run in this apply. The forged header was measured once earlier the same day against the old instance (evidence timeline, the peer-address row, #261). |
-| 19 | The peer address the app sees, with the pinned gateway (`10.231.77.1`) | NOT CHECKED | Not run in this apply. Measured before the pin on 2026-11-16: `10.231.77.128` (evidence timeline, #261). The deploy script (#237) stops with exit 10 if the stack network's gateway is not `10.231.77.1`, so the first deploy checks it on the server. |
-| 20 | The published image pulls on the server with no login | NOT CHECKED | `curl https://ghcr.io/v2/` returned `401` earlier (#207 row 20), and the package is public (evidence timeline); a pull on the new instance was not run. |
-| 21 | Whether `sslip.io` is on the Public Suffix List | NOT CHECKED | Not read. |
+| 10 | Reboot | PASS (as reported) | Back online, volume mounted, Docker and Caddy active. |
+| 11 | A second `terraform plan` | PASS (as reported) | `No changes`. |
+| 12 | The first run's facts, taken before the replacement (cloud-init lines, package versions, `caddy` uid, owners) | NOT CHECKED | A reading before the replacement was needed and was not taken; the old root disk and its log are gone. |
+| 13 | The replacement formatted nothing (no `formatting` line in the new instance's cloud-init log) and re-used the same file-system UUID | NOT CHECKED | The new instance's log line could still be read, but the UUID comparison needed a reading of the old instance before the replacement, which was not taken. The mount shows the volume by UUID and the plan left the data volume untouched. |
+| 14 | The certificate's serial before and after (same serial: Caddy re-used the kept storage) | NOT CHECKED | A reading before the replacement was needed and was not taken, so the serial cannot be compared. The certificate was valid afterwards (row 8). |
+| 15 | The new instance's image name against the old instance's | Not reported | Not reported. |
+| 16 | Caddy's keyring holds exactly one primary key with fingerprint `65760C51EDEA2017CEA2CA15155B6D79CA56EA34` (#256) | Not reported | Not reported. The script stops on any other key, and it ended `done`, but the key itself was not reported. |
+| 17 | Docker's log rotation (10 MB, 3 files), the weekly prune file, unattended upgrades, `docker.service` ordered after the data mount | Not reported | Not reported. |
+| 18 | Outside checks: `http://` redirects to HTTPS, TCP 8000 and 22 refused, Caddy's admin endpoint refused on the host, a forged `X-Forwarded-For` replaced | Not reported | Not reported for the new instance. The forged header was measured once earlier the same day against the old instance (evidence timeline, the peer-address row, #261). |
+| 19 | The peer address the app sees, with the pinned gateway (`10.231.77.1`) | Not reported | Not reported for the new instance. Measured before the pin on 2026-11-16: `10.231.77.128` (evidence timeline, #261). The deploy script (#237) stops with exit 10 if the stack network's gateway is not `10.231.77.1`, so the first deploy checks it on the server. |
+| 20 | The published image pulls on the server with no login | Not reported | `curl https://ghcr.io/v2/` returned `401` earlier (#207 row 20), and the package is public (evidence timeline); a pull on the new instance was not reported. |
+| 21 | Whether `sslip.io` is on the Public Suffix List | Not reported | Not reported. |
 
-## Why some rows are NOT CHECKED
+## Why some rows are NOT CHECKED or not reported
 
-The planning session's steps covered the replacement, the host's basic state, the re-run, the reboot and the second plan, not the full body of #236. Rows 12 to 21 would each need the maintainer to run something again. Under the project's rule (`.kiro/steering/evidence-and-steps.md`, rule 2) a check is not repeated only to produce a record, except when the thing it checked has changed, so they stay NOT CHECKED unless the maintainer decides one is worth running. Rows 12 to 14 cannot be recovered at all: they needed a reading before the replacement. The next replacement's steps (`terraform/README.md`, "Steps for the human in D19b") take those readings.
+The planning session's steps covered the replacement, the host's basic state, the re-run, the reboot and the second plan, not the full body of #236. Rows 15 to 21 would each need the maintainer to run something that the maintainer has said not to run (2026-11-16: "run nothing"). Under the project's rule (`.kiro/steering/evidence-and-steps.md`, rule 2) a check is not repeated only to produce a record, except when the thing it checked has changed, so they stay as they are unless the maintainer decides one is worth running. Rows 12 to 14 cannot be recovered at all: they needed a reading before the replacement. The next replacement's steps (`terraform/README.md`, "Steps for the human in D19b") take those readings.
 
 ## Risk
 
