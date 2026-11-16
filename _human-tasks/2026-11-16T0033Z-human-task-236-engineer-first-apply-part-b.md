@@ -8,11 +8,11 @@ Record the apply of #256's hardened bootstrap over the server that #207 had appl
 
 ## Where it was run
 
-The maintainer's own machine (WSL, Terraform 1.17.2, AWS CLI v2, SSO profile `socboard`) for Terraform and for the host checks, which were sent to the instance with `aws ssm send-command` (`AWS-RunShellScript`), not typed in a session. "As reported" means the maintainer reported the result in the planning session and the raw output was not kept.
+The maintainer's own machine (WSL, Terraform 1.17.2, AWS CLI v2, SSO profile `socboard`) for Terraform and for the host checks, which were sent to the instance with `aws ssm send-command` (`AWS-RunShellScript`), not typed in a session. "As reported" means the maintainer reported the result in the planning session (the evidence timeline says the raw output was not kept).
 
 ## What was run, in order
 
-As the maintainer listed it on 2026-11-16 (the raw output was not kept):
+As the maintainer listed it on 2026-11-16 (the evidence timeline says the raw output was not kept):
 
 1. `export AWS_PROFILE=socboard`; `aws sso login --profile socboard --use-device-code`; a check that the current account is the `socboard` profile's, printing neither.
 2. In `terraform/server/`: `terraform plan -out=d19b.plan -no-color > /tmp/d19b-plan.txt`; a grep of it for `must be replaced|will be destroyed|will be created|^Plan:`; a grep of it for `aws_ebs_volume.data` and `aws_eip.server` with destroy or replace, which printed nothing.

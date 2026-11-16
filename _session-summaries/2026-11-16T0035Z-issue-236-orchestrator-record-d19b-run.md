@@ -8,9 +8,9 @@
 The maintainer ran D19b on 2026-11-16 from the planning session's steps, before any checklist for #236 existed. This session (Terraform lane A, taken over from an earlier Claude session that had left no claim and no branch) wrote the record and the reusable steps.
 
 - `_human-tasks/2026-11-16T0033Z-human-task-236-engineer-first-apply-part-b.md`: the record of that run, with the results the maintainer reported. The plan was 4 to add, 0 to change, 3 to destroy, one add above the body's expectation because `aws_ssm_document.deploy` (#237) was created in the same apply. Rows the run did not cover are NOT CHECKED, not invented.
-- `terraform/README.md`, "Steps for the human in D19b": rewritten in the step format for the next replacement of a bootstrapped instance (#266). Steps 1 and 2 take readings before the replacement; step 6 updates `DEPLOY_INSTANCE_ID`; the plan step says a later replacement reads 3/0/3 once the document exists.
+- `terraform/README.md`, "Steps for the human in D19b": rewritten in the step format for the next replacement of a bootstrapped instance (#266). Step 2 takes readings before the replacement; step 4 sets `IID` after the apply and step 10 updates `DEPLOY_INSTANCE_ID`; the plan step says a later replacement reads 3/0/3 once the document exists.
 
-**What I learned:** the commands of the 2026-11-16 run were not given to this session, only its results. The steps are the README's earlier commands, corrected and written out; the maintainer's actual commands were not compared.
+**What I learned:** the first version of the steps was written from results alone; the maintainer then gave the commands of the run, and the steps follow them, with `whereami` and `onserver` verbatim.
 
 ## Reflection
 

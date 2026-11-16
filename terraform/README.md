@@ -236,16 +236,16 @@ Destroy this part first, then `iam-and-budgets/`, `ci-access/` and `state/` last
 
 `server/bootstrap.sh.tftpl` is the server's user data (issue #233, Deploy item D17c). Terraform renders it in `server/main.tf`; cloud-init runs it once, as root, at the instance's first boot. It is part of `server/`, so it is applied with it, by the human first (D19b) and later by CI. An agent never runs `init` against the backend, `plan`, `apply` or `destroy`.
 
-**Status: run twice on the real host.** #233's version ran at the first apply (#207, 2026-11-16); #256's hardened version ran on the replacement instance on 2026-11-16 (#236, "Steps for the human in D19b" below; the results are in `_human-tasks/2026-11-16T0033Z-human-task-236-engineer-first-apply-part-b.md`, as reported by the maintainer, the raw output not kept). That run settled, and the `VERIFY:` notes for them are removed: the three packages install on noble (Docker Compose 2.40.3, Caddy v2.11.9), the data volume is found by its `/dev/disk/by-id` link and mounted by UUID at `/srv/socboard-data` (`/dev/nvme1n1`), `caddy/` sits on the volume with its owner and mode as described, the re-run path exists and a second run writes nothing, and after a reboot the volume is mounted with Docker and Caddy active. Every other `VERIFY:` in this section and in `server/` is still open: the Cloudsmith key, unattended upgrades, the hostname format, Let's Encrypt without a contact address, a missing volume not blocking the boot, the certificate re-use on a replacement, and the forwarded address with the pinned gateway.
+**Status: run twice on the real host.** #233's version ran at the first apply (#207, 2026-11-16); #256's hardened version ran on the replacement instance on 2026-11-16 (#236, "Steps for the human in D19b" below; the results are in `_human-tasks/2026-11-16T0033Z-human-task-236-engineer-first-apply-part-b.md`, as reported by the maintainer). That run settled, and the `VERIFY:` notes for them are removed: the three packages install on noble (Docker Compose 2.40.3, Caddy v2.11.9), the data volume is mounted by UUID at `/srv/socboard-data` (`/dev/nvme1n1`), and the bootstrap, which finds it by its `/dev/disk/by-id` link, ended `done`, `caddy/` sits on the volume with its owner and mode as described, the re-run path exists and a second run writes nothing, and after a reboot the volume is mounted with Docker and Caddy active. Every other `VERIFY:` in this section is still open (the settled ones in the comments of `server/*.tf` and `bootstrap.sh.tftpl` stay as they are, because editing them would change the user data and replace the instance): the Cloudsmith key, unattended upgrades, the hostname format, Let's Encrypt without a contact address, a missing volume not blocking the boot, the certificate re-use on a replacement, and the forwarded address with the pinned gateway.
 
 ### What it does
 
 - **Packages:** `docker.io` and `docker-compose-v2` (the Compose plugin) from Ubuntu's own archive, signed by the Ubuntu archive key the image already trusts; `caddy` from Caddy's repository on Cloudsmith, whose downloaded keyring is accepted only when it holds exactly one primary key (its subkeys allowed) with the fingerprint `65760C51EDEA2017CEA2CA15155B6D79CA56EA34`; any other shape (no key, a second primary key, another fingerprint, a file `gpg` cannot read) stops the script before the keyring or the apt source is installed (the package names are right on noble, seen 2026-11-16; `VERIFY:` that Cloudsmith serves this key). A package is installed only when missing; the bootstrap never upgrades one (Ubuntu's unattended upgrades patch them, `VERIFY:` that they are on in the image).
 - **Docker:** log rotation of 10 MB per file and 3 files per container (`/etc/docker/daemon.json`); a weekly `docker image prune --all --filter until=168h` (`/etc/cron.d/socboard-docker-prune`), which removes only images no container uses, so never one a running container uses; Docker enabled at boot, and ordered after the data volume's mount by a drop-in (`/etc/systemd/system/docker.service.d/socboard.conf`, `RequiresMountsFor=/srv/socboard-data`), so it does not start without the volume. The drop-in is written after the fstab line and the mount, when the mount unit it names exists and is active, so the `daemon-reload` accepts it; the Docker the package install already started keeps running, and the order applies from the next boot. Containers come back after a reboot only if the Compose file gives them a restart policy (D11 or D20 sets it; this part assumes `restart: unless-stopped` on `db` and `app`).
-- **The data volume:** found by its volume id (`/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol...`; the link was found on 2026-11-16), never by a guessed device name. It is formatted as ext4 only when `blkid -p` finds no signature at all, so a volume with data is never formatted. On a replaced instance the volume already holds ext4, so `blkid -p` exits 0 and nothing is formatted; the fstab line is written again on the new root disk with the volume's unchanged UUID. It is mounted by file-system UUID with `nofail` and `x-systemd.device-timeout=30s` at `/srv/socboard-data`. A missing volume does not block the boot: Docker and Caddy stay stopped (each has `RequiresMountsFor=/srv/socboard-data`) while Systems Manager still reaches the host (`VERIFY:` at D19b). The bare directory under the mount point is made immutable, so nothing writes to the root disk while the volume is missing, and the script stops unless the volume is mounted. The script waits up to 10 minutes for the volume, which Terraform attaches after the instance starts.
+- **The data volume:** found by its volume id (`/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol...`; the bootstrap ended `done` on 2026-11-16 with the volume mounted), never by a guessed device name. It is formatted as ext4 only when `blkid -p` finds no signature at all, so a volume with data is never formatted. On a replaced instance the volume already holds ext4, so `blkid -p` exits 0 and nothing is formatted; the fstab line is written again on the new root disk with the volume's unchanged UUID. It is mounted by file-system UUID with `nofail` and `x-systemd.device-timeout=30s` at `/srv/socboard-data`. A missing volume does not block the boot: Docker and Caddy stay stopped (each has `RequiresMountsFor=/srv/socboard-data`) while Systems Manager still reaches the host (`VERIFY:` at D19b). The bare directory under the mount point is made immutable, so nothing writes to the root disk while the volume is missing, and the script stops unless the volume is mounted. The script waits up to 10 minutes for the volume, which Terraform attaches after the instance starts.
 - **The layout on the volume:** two siblings, created only after the volume is mounted. **`/srv/socboard-data/postgres`, the value `STACK_PGDATA_DIR` takes on the server** (root README, "Compose stack"; D20 sets it), owned by uid 999, the image's `postgres` user, mode 0700; Postgres writes its `pgdata` subdirectory there. `/srv/socboard-data/caddy`, Caddy's certificates and account, owned by the `caddy` user, mode 0700, outside anything a container mounts. Every run sets, each only when it differs: the mount root to `root:root` 0755 (#233's run left it owned by 999); `postgres/` to 999 and 0700 on its top level only (the database's files are never walked); `caddy/` and everything under it to the current `caddy` user, recursively, because the package creates that user again on a replaced instance and its uid may differ. Nothing on the volume is moved, copied or deleted: an existing `caddy/` stays where it is and is reused, and `postgres/` is created when missing. The script stops if the `caddy` user has uid 999.
 - **Caddy:** `/etc/caddy/Caddyfile` serves the output `hostname` (the Elastic IP through sslip.io, for example `203-0-113-10.sslip.io`, Deploy decision 6; `VERIFY:` the name format) over HTTPS and proxies to `127.0.0.1:8000` only. The admin endpoint is off. The certificate comes from the ACME directory in the variable `acme_ca`: Let's Encrypt production by default, or its staging directory for testing. The account has no contact address (decision 6: a real address or none; `VERIFY:` that Let's Encrypt accepts that). Caddy's certificate and account live on the data volume (`/srv/socboard-data/caddy`), so a replaced instance keeps them, and Caddy does not start without the volume.
-- **The forwarded address (for D20):** Caddy replaces any `X-Forwarded-For` the caller sent with the caller's address. The app sees the Compose network's gateway as the peer, `10.231.77.1` for the `stack` network in `compose.yaml`, whose gateway is pinned there (`gateway: 10.231.77.1`, #261). The pin is needed: without it, Docker 29.1.3 on the server gave the network the gateway `10.231.77.128`, the first address of the `ip_range` `10.231.77.128/25`, and with docker-proxy in use that gateway is the peer the app sees from host Caddy (the maintainer's measurement, 2026-11-16). `VERIFY:` measured 2026-11-16 (gateway behaviour); final value re-measured at #236 stage (b). D20 sets `SOCBOARD_TRUSTED_PROXIES=10.231.77.1`, sets `STACK_PGDATA_DIR=/srv/socboard-data/postgres`, leaves `FORWARDED_ALLOW_IPS` at its default, and does not start the compose `proxy` service: host Caddy is the one proxy.
+- **The forwarded address (for D20):** Caddy replaces any `X-Forwarded-For` the caller sent with the caller's address. The app sees the Compose network's gateway as the peer, `10.231.77.1` for the `stack` network in `compose.yaml`, whose gateway is pinned there (`gateway: 10.231.77.1`, #261). The pin is needed: without it, Docker 29.1.3 on the server gave the network the gateway `10.231.77.128`, the first address of the `ip_range` `10.231.77.128/25`, and with docker-proxy in use that gateway is the peer the app sees from host Caddy (the maintainer's measurement, 2026-11-16). `VERIFY:` measured 2026-11-16 (gateway behaviour); not re-measured in #236's run (row 19 of its record); the first deploy checks the gateway (exit 10). D20 sets `SOCBOARD_TRUSTED_PROXIES=10.231.77.1`, sets `STACK_PGDATA_DIR=/srv/socboard-data/postgres`, leaves `FORWARDED_ALLOW_IPS` at its default, and does not start the compose `proxy` service: host Caddy is the one proxy.
 - **Idempotent:** each step carries its own check (a package only when missing, a file only when its content differs, a format only of a blank volume, the fstab line only when the mount point has none, an owner or mode only when it differs, a restart only when a file changed), so a second run changes nothing. A failed file write stops the script with a message naming the file; no write failure is treated as "unchanged". Re-run by hand: `sudo bash /var/lib/cloud/instance/scripts/part-001` (the path exists, and a second run on 2026-11-16 wrote nothing).
 - **Never held:** no secret in the script or the Caddy file, none written, none read (no Secrets Manager call). It does not deliver `compose.yaml`, the environment file or the deploy script (D20). The security group is unchanged: TCP 80 and 443 only, no port 22.
 
@@ -302,7 +302,7 @@ This step reads the old instance before it is deleted. Set the instance id and d
 IID=$(terraform output -raw instance_id)
 ```
 
-Expected: no output. `IID` holds the current instance id; set it again in step 5, after the apply.
+Expected: no output. `IID` holds the current instance id; step 4 sets it again after the apply.
 
 ```
 onserver() { CID=$(aws ssm send-command --region us-east-1 --instance-ids "$IID" --document-name AWS-RunShellScript --parameters "{\"commands\":[\"$1\"]}" --query Command.CommandId --output text); aws ssm wait command-executed --region us-east-1 --command-id "$CID" --instance-id "$IID" 2>/dev/null; aws ssm get-command-invocation --region us-east-1 --command-id "$CID" --instance-id "$IID" --query StandardOutputContent --output text; }
@@ -381,7 +381,13 @@ terraform apply d19b.plan
 ```
 
 Expected: "Apply complete!" with the counts the plan showed (2026-11-16: 4 added, 0 changed, 3 destroyed) and the four outputs. A saved plan applies without a prompt: step 3's checks are the confirmation.
-If different: if the apply stops with an error, do not retry another way; send the error text. If no certificate is issued within 15 minutes (step 8 shows no valid certificate, and Caddy's journal, read with `onserver 'journalctl -u caddy --no-pager | tail -n 30'`, shows ACME errors; the first attempts can fail while the Elastic IP's association is still moving), apply once more with the staging directory to find the cause without using up production attempts, then stop and ask for a new issue:
+
+```
+IID=$(terraform output -raw instance_id)
+```
+
+Expected: no output. `IID` now holds the new instance's id, so `onserver` and the later steps reach the new instance. Run this block again after any other apply that replaces the instance, such as the staging apply below.
+If different: if the apply stops with an error, do not retry another way; send the error text. If no certificate is issued within 15 minutes (step 8 shows no valid certificate, and Caddy's journal, read with `onserver 'journalctl -u caddy --no-pager | tail -n 30'` once `IID` is set as above, shows ACME errors; the first attempts can fail while the Elastic IP's association is still moving), apply once more with the staging directory to find the cause without using up production attempts, then stop and ask for a new issue:
 
 ```
 terraform apply -var acme_ca=https://acme-staging-v02.api.letsencrypt.org/directory
@@ -398,11 +404,6 @@ terraform output
 Expected: `elastic_ip`, `hostname` and `data_volume_id` equal step 2's; `instance_id` is new (2026-11-16: `i-0a09e0f4996d70859`).
 If different: a changed `elastic_ip` or `hostname` means the address was replaced; stop, because the hostname and the certificate no longer match.
 
-```
-IID=$(terraform output -raw instance_id)
-```
-
-Expected: no output. `onserver` and the later steps now use the new instance.
 
 #### Step 6: wait for the instance to come online
 
@@ -419,6 +420,8 @@ Risk: none, it only reads.
 ```
 onserver 'cloud-init status --wait; tail -n 1 /var/log/cloud-init-output.log'
 ```
+
+If the output is empty, the wait ran out before cloud-init finished; read the result again as step 2 says.
 
 Expected: `status: done`, then `socboard-bootstrap: done`.
 
@@ -492,7 +495,13 @@ The instance id changed, so every GitHub Environment variable that holds it is s
 gh variable list --env deploy --repo andrew-chung-au/socboard
 ```
 
-Expected: a list that includes `DEPLOY_INSTANCE_ID` once #238's steps have run. Check `--env deploy-prod` too when prod exists, and update every Environment that holds the id.
+Expected: a list that includes `DEPLOY_INSTANCE_ID` once #238's steps have run. When prod exists, check its Environment too, and update every Environment that holds the id:
+
+```
+gh variable list --env deploy-prod --repo andrew-chung-au/socboard
+```
+
+Expected: `DEPLOY_INSTANCE_ID` listed once prod's deploy exists; an error that the Environment does not exist means prod is not set up yet, and there is nothing to update.
 If different: if the variable is not listed, #238's first run has not happened; skip the next block, because #238's own steps read the current output.
 
 ```
@@ -542,8 +551,15 @@ Expected: no output; `backend.tf` and `.terraform.lock.hcl` are unchanged.
 
 #### Step 13: record the result once
 
-Write the results (date, what was checked, result, link) into a dated file in `_human-tasks/` named for the issue that asked for the replacement (suggested name: `_human-tasks/` followed by the output of `date -u +%Y-%m-%dT%H%MZ`, then `-human-task-<issue number>-engineer-<slug>.md`), with a row for each step above, and put one line in `_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md` that links it. Include the old and new instance ids, the plan counts, the old and new certificate serials and the readings from step 2. The record holds no account number, no ARN with it, no e-mail address and no secret.
-Expected: each row is PASS, FAIL or NOT CHECKED. A FAIL says what you saw, and the fix goes through a new issue, never an edit during the apply. A fix to the bootstrap replaces the instance again, so these steps run again from step 2, and the record says why.
+Write the results (date, what was checked, result, link) into a dated file in `_human-tasks/` named for the issue that asked for the replacement (the suggested timestamp for its name is the output of the command below), with a row for each step above, and put one line in `_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md` that links it. Include the old and new instance ids, the plan counts, the old and new certificate serials and the readings from step 2. The record holds no account number, no ARN with it, no e-mail address and no secret.
+
+```
+date -u +%Y-%m-%dT%H%MZ
+```
+
+Expected: a timestamp such as `2026-11-16T0033Z`; the file is `_human-tasks/<timestamp>-human-task-<issue number>-engineer-<slug>.md`.
+
+In the record, each row is PASS, FAIL or NOT CHECKED. A FAIL says what you saw, and the fix goes through a new issue, never an edit during the apply. A fix to the bootstrap replaces the instance again, so these steps run again from step 2, and the record says why.
 
 ### Teardown
 
