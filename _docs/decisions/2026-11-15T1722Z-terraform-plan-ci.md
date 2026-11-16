@@ -16,7 +16,7 @@ Not part of the approved text above; it records two rulings the human made after
 - **Ruling A:** a step before the credentials step masks the ID, read from the repository secret `AWS_PLAN_ROLE_ID` (a stored secret the job never uses is not masked, so the workflow must reference it). The plan job fails with a fixed message if the secret is empty.
 - **Ruling B:** a second job, `log-check` (`needs: plan`, `if: always()` and the same-repository condition, `permissions: actions: read` only, no secret), downloads the plan job's log through the REST API after it ends and fails if it matches `AROA[A-Z0-9]+`. A step cannot read its own job's log, hence the second job. It prints only fixed pass or fail lines and fails closed when the log cannot be fetched or is empty.
 - **Trade-offs:** the check detects a leak after the log is public; it does not undo it, so the human deletes that run's logs. A transient API error turns a clean run red. A same-repository pull request can edit the `log-check` job, which holds only `actions: read`.
-- **Evidence:** `.github/workflows/terraform-plan.yml`, `tests/test_terraform_plan_workflow.py`; the secret `AWS_PLAN_ROLE_ID` is not yet in the D19a secret list or `terraform/README.md`.
+- **Evidence:** `.github/workflows/terraform-plan.yml`, `tests/test_terraform_plan_workflow.py`; the secret `AWS_PLAN_ROLE_ID` is described in `terraform/README.md` (Outputs), with notes in the #156 and #207 task files (added 2026-11-16).
 
 ## Addendum 2, 2026-11-16: the log-check job is removed; follow-up #307
 

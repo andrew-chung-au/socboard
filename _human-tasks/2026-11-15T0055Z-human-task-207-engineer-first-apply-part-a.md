@@ -87,9 +87,9 @@ In the repository's settings, in a browser:
 4. On the "Variables" tab: the repository variable `TF_STATE_BUCKET`, set to the state bucket name. It stays a variable because a bucket name does not identify the account, provided you chose one without the account number (`terraform/README.md`, state bucket, step 2).
 
 Expected: the two Environments show the rules above, the Secrets tab lists the three role secrets, and the Variables tab lists `TF_STATE_BUCKET`. This covers the #156 task file's "Before you start" items 2 and 3, and the `AWS_PLAN_ROLE_ARN` secret it asks for in its step 1.
+Risk: changes who may deploy. Undo: edit or delete the Environment, secret or variable in the same page.
 
 Note: the secret `AWS_PLAN_ROLE_ID` was added later by #209 (set on 2026-11-16); see `terraform/README.md`, Outputs.
-Risk: changes who may deploy. Undo: edit or delete the Environment, secret or variable in the same page.
 
 ### Step 5: The #156 branch check
 
