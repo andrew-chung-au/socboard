@@ -4,7 +4,7 @@ The names the observability work shares (roadmap 4, `_docs/planning/roadmap-4-de
 
 Rules that apply to every table:
 
-- No value in any row is free text. Every value derived from a request is a fixed word, a number, an id or a version, so alert and case text cannot reach a signal. The only exceptions are `deployment.environment.name` and `service.version`, which an operator sets (section 1) and no request can reach.
+- A value derived from a request is a fixed word, a number, an id or a version, never free text, so alert and case text cannot reach a signal. The values not derived from a request are `deployment.environment.name` and `service.version`, which an operator sets (section 1) and no request can reach.
 - The allowed labels and fields are the whole list. Anything not listed is refused.
 - `socboard.case.id` is the public case id exactly as the API returns it, an opaque string (`openapi.yaml`), never a database key shown in another form.
 
@@ -71,7 +71,7 @@ One JSON object per line, on standard output.
 | `alert.first_in_queue` | the first queue read returned the case | none | #291 |
 
 - `event` is a fixed word from this table, never built from alert text.
-- A log line carries no field beyond the seven above. `trace_id` and `span_id` are absent, not zero or empty, when no span is active. The case id and severity are found through the trace id.
+- A log line has at most these seven fields. `trace_id` and `span_id` are absent, not zero or empty, when no span is active. The case id and severity are found through the trace id.
 
 ## 5. Trace id format
 
