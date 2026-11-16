@@ -184,18 +184,18 @@ Write pass or fail for each step. Commit this file with the result so a later ru
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| Before you start: peer address in #236's result file equals the script's, and the gateway pin is merged | NOT CHECKED | |
-| 1: the plan shows the document only; apply succeeded | NOT CHECKED | |
-| 2 and 3: the secret's value was put from a file and the file deleted | NOT CHECKED | |
-| 5: first send, exit code and output | NOT CHECKED | |
-| 5: the full smoke check passed (the run printed `deployed.`) | NOT CHECKED | |
-| 6: the URL answers with a valid certificate | NOT CHECKED | |
-| 6: `/api/health` answers 200 from your machine | NOT CHECKED | |
-| 7: the second run says already deployed and the case count is unchanged | NOT CHECKED | |
-| 8: the bad digest is refused | NOT CHECKED | |
-| 9: the digest of 64 zeros exits 4 and the app still answers | NOT CHECKED | |
-| 10: reboot, the stack comes back and the URL loads | NOT CHECKED | |
-| 11: no `proxy` container runs | NOT CHECKED | |
+| Before you start: peer address in #236's result file equals the script's, and the gateway pin is merged | PASS (partly) | The script has `PROXY_ADDR='10.231.77.1'` and `compose.yaml` pins the gateway to `.1` on `main`. #236's peer-address row says "Not reported" for the new instance, so there was nothing to compare; the script's gateway check (exit 10) did not fire on any run. |
+| 1: the plan shows the document only; apply succeeded | PASS (output not recorded) | The plan and apply output were not kept. The document exists: every send below ran it. |
+| 2 and 3: the secret's value was put from a file and the file deleted | PASS (output not recorded) | The deploy read all eight keys from `socboard/app`. |
+| 5: first send, exit code and output | FAIL, then PASS | Run with digest `sha256:b528f5618c516dd3d41b8ffa9480ea9452d37c44fbf7575aa240430464983072` (publish run 43819479655, commit `b45b167`). First two sends: exit 5, `socboard-deploy: db-init, migrate or seed failed. The current release was not changed.` The `db` container's log showed `FATAL: password authentication failed for user "postgres"` and `Skipping initialization`: `/srv/socboard-data/postgres` already held a database (only `postgres`, `template0`, `template1`; no `socboard` database) initialised with an older superuser password than the secret's. The second send used the same folder, because the first move-aside was not run on the server. Fix during the run (a manual step, not a script change): `docker rm -f socboard-db-1` and `mv /srv/socboard-data/postgres /srv/socboard-data/postgres.old` on the server, then the third send: exit 0, `socboard-deploy: deployed.` `postgres.old` is still on the server (empty; the human deletes it). Follow-ups for new issues: the script hides `db-init`'s own message on exit 5 (PR #327 prints it), and the runbook has no procedure for a superuser password that no longer matches the secret. |
+| 5: the full smoke check passed (the run printed `deployed.`) | PASS | Third send. |
+| 6: the URL answers with a valid certificate | PASS (curl) | `curl` over HTTPS without `-k` returned 200, so the certificate verified. The browser check was not reported. |
+| 6: `/api/health` answers 200 from your machine | PASS | `200`. |
+| 7: the second run says already deployed and the case count is unchanged | PASS (partly) | `socboard-deploy: already deployed. Nothing was changed.`, exit 0. Signing in as `lead` and the case count were not reported. |
+| 8: the bad digest is refused | PASS | `digest=latest`: `InvalidParameters ... Parameters provided in document are invalid or not supported.`, no command id. |
+| 9: the digest of 64 zeros exits 4 and the app still answers | PASS | `Failed`, exit 4, `socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.`; `/api/health` then `200`. |
+| 10: reboot, the stack comes back and the URL loads | PASS | Rebooted twice; `/api/health` gave `000`, `502`, `200` the first time and `000`, `000`, `200` the second. The page in a browser was not reported. |
+| 11: no `proxy` container runs | PASS | `docker ps --filter label=com.docker.compose.service=proxy` on the server printed nothing. |
 
 ## Risk
 
