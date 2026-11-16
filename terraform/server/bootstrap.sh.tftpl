@@ -24,11 +24,13 @@
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 
-# The data volume's mount point. Two siblings on it (#256): PG_DIR is STACK_PGDATA_DIR on this host
-# (Postgres keeps its files in its `pgdata` subdirectory), and CADDY_DIR holds Caddy's certificates
-# and account, outside anything a container mounts.
+# The data volume's mount point. Three siblings on it (#256, #266): PG_DIR is STACK_PGDATA_DIR of the
+# dev stack on this host (Postgres keeps its files in its `pgdata` subdirectory), PG_PROD_DIR is the
+# prod stack's, and CADDY_DIR holds Caddy's certificates and account, outside anything a container
+# mounts. The two Postgres folders are siblings, never one inside the other.
 DATA_DIR='${data_dir}'
 PG_DIR='${data_dir}/postgres'
+PG_PROD_DIR='${data_dir}/postgres-prod'
 CADDY_DIR='${data_dir}/caddy'
 # The data volume by its NVMe serial, which is the volume id: a stable name, not a guessed device
 # (#199 attaches it as /dev/sdf, which shows as an NVMe device on a Nitro instance).
@@ -234,6 +236,9 @@ own "$DATA_DIR" 0:0 755
 # The postgres user of the official image (README, "Compose stack"). Top level only: a later run
 # must not walk the database's files, and the image's uid is fixed.
 own "$PG_DIR" 999:999 700
+[ -d "$PG_PROD_DIR" ] || mkdir -m 0700 "$PG_PROD_DIR"
+# Prod's folder (#266): the same owner, mode and top-level-only rule as dev's.
+own "$PG_PROD_DIR" 999:999 700
 [ -d "$CADDY_DIR" ] || mkdir -m 0700 "$CADDY_DIR"
 own "$CADDY_DIR" "$caddy_uid:$caddy_gid" 700
 # Everything under Caddy's folder, recursively, so a new caddy uid can read its key and account.
@@ -266,7 +271,8 @@ fi
 # (it trusts no proxy before it). The app is published on the host's loopback only, so Caddy's
 # connection reaches it through Docker's port publishing and the app sees the Compose network's
 # gateway as the peer: 10.231.77.1 for the `stack` network of compose.yaml (subnet 10.231.77.0/24,
-# gateway pinned there by #261).
+# gateway pinned there by #261). The prod stack's network is 10.231.78.0/24 with gateway
+# 10.231.78.1 (#266), which is the peer the prod app sees from Caddy in the same way.
 # D20 sets SOCBOARD_TRUSTED_PROXIES to that address and leaves FORWARDED_ALLOW_IPS at its default.
 # VERIFY: at D19b, the peer address the app logs for a request through Caddy.
 write /etc/caddy/Caddyfile 0644 <<'EOF'
@@ -280,6 +286,10 @@ write /etc/caddy/Caddyfile 0644 <<'EOF'
 
 ${hostname} {
 	reverse_proxy ${app_upstream}
+}
+
+${prod_hostname} {
+	reverse_proxy ${prod_app_upstream}
 }
 EOF
 if [ "$changed" = 1 ]; then restart_caddy=1; fi

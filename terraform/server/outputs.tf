@@ -10,6 +10,11 @@ output "hostname" {
   value       = local.hostname
 }
 
+output "prod_hostname" {
+  description = "The public hostname Caddy serves for the prod stack: the dev hostname with a prod- prefix (issue #266). No prod app runs behind it until the promote workflow deploys one."
+  value       = local.prod_hostname
+}
+
 output "instance_id" {
   description = "The instance id, for Systems Manager and the deploy role."
   value       = aws_instance.server.id
