@@ -1,0 +1,138 @@
+# Deploys the published image to dev when every check of a push to main passed and it was published (#238, D22a).
+#
+# It runs on `workflow_run` of `socboard publish`, so GitHub always runs the copy of this file on main, never
+# a pull request's. The `find` job holds no cloud role: it reads the `published-image` artifact the publish
+# job leaves, checks it and deploys only the newest commit on main. The `deploy` job runs in the `deploy`
+# Environment (branch rule `main`), assumes the deploy role by OIDC, sends the one document
+# `socboard-deploy` with the digest, reads the result by the script's fixed lines, checks the public health
+# URL and leaves the record `deploy-record-dev` that the promote workflow reads. The logic is
+# scripts/ci_deploy.py (tested); event values reach it only through `env:`.
+name: socboard deploy dev
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  workflow_run:
+    workflows:
+      - socboard publish
+    types: [completed]
+
+jobs:
+  find:
+    # A pull request, a fork, another branch, or a publish run that failed ends here: the job is skipped.
+    # A publish run's own event is always `workflow_run` (it is started by the other workflows), and its
+    # branch and repository are always main and this repository, so these two lines are a backstop. The
+    # real guards are the conclusion (a pull request's publish run ends `skipped`), the artifact (the
+    # publish job runs, and leaves `published-image`, only for a push to main, scripts/publish_gate.py)
+    # and the find step's check that the published commit is still the head of main.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_run' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      deploy: ${{ steps.find.outputs.deploy }}
+      image: ${{ steps.find.outputs.image }}
+      tag: ${{ steps.find.outputs.tag }}
+      digest: ${{ steps.find.outputs.digest }}
+      revision: ${{ steps.find.outputs.revision }}
+    steps:
+      # The default branch: the decision is made by the script on main, not by the published commit's code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Look for the published-image artifact of the publish run
+        id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          count="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?name=published-image" --jq '[.artifacts[] | select(.expired == false)] | length')"
+          if [ "$count" -gt 0 ]; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.look.outputs.found == 'true'
+        with:
+          name: published-image
+          path: ${{ runner.temp }}/published
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Decide whether there is a digest to deploy
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          FOUND: ${{ steps.look.outputs.found }}
+        run: |
+          main_head="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          file=""
+          if [ "$FOUND" = "true" ]; then file="$RUNNER_TEMP/published/published-image.json"; fi
+          python3 scripts/ci_deploy.py find --repository "$GITHUB_REPOSITORY" --head-sha "$HEAD_SHA" \
+            --main-head "$main_head" --file "$file" --output "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: find
+    if: needs.find.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: deploy
+    # Two deploys never overlap; a running one is never cancelled (the script's lock is the second layer).
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the Environment's variables before any role is assumed
+        env:
+          DEPLOY_INSTANCE_ID: ${{ vars.DEPLOY_INSTANCE_ID }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: python3 scripts/ci_deploy.py check
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: socboard-deploy-dev-${{ github.run_id }}
+
+      - name: Send the deploy document, wait for it and check the public health URL
+        env:
+          DEPLOY_INSTANCE_ID: ${{ vars.DEPLOY_INSTANCE_ID }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+          IMAGE: ${{ needs.find.outputs.image }}
+          TAG: ${{ needs.find.outputs.tag }}
+          DIGEST: ${{ needs.find.outputs.digest }}
+          REVISION: ${{ needs.find.outputs.revision }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/ci_deploy.py deploy --image "$IMAGE" --tag "$TAG" --digest "$DIGEST" --revision "$REVISION" \
+            --run-id "$GITHUB_RUN_ID" --run-url "$RUN_URL" --record "$RUNNER_TEMP/deploy-record-dev.json"
+
+      # Only after a pass: a failed deploy leaves no record, so the newest record is the last good deploy.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deploy-record-dev
+          path: ${{ runner.temp }}/deploy-record-dev.json
+          retention-days: 90
+          # A re-run of the same run replaces the record instead of failing on the existing name.
+          overwrite: true
+          if-no-files-found: error

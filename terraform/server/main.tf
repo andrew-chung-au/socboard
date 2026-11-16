@@ -14,7 +14,8 @@
 # `project = "socboard"` in its own create call (instance, data volume, security group, Elastic IP);
 # the root volume stays untagged (#162 snapshots every volume with that tag); no IAM data source,
 # no remote state and no Parameter Store lookup (all refused to the CI roles); no IAM, DLM, budget,
-# KMS or Systems Manager resource. Never held here: no secret value, in the user data or anywhere.
+# KMS resource. The one Systems Manager resource is the deploy document (deploy_document.tf, #237),
+# which the apply role may manage. Never held here: no secret value, in the user data or anywhere.
 #
 # The bootstrap (issue #233, D17c) is the user data: bootstrap.sh.tftpl, rendered below. It installs
 # Docker, the Compose plugin and Caddy, mounts the data volume and writes Caddy's file.
@@ -54,12 +55,23 @@ locals {
   # (80 for some package mirrors). VERIFY: at the first apply that all three work with this.
   egress_ports = [80, 443]
 
-  # STACK_PGDATA_DIR on the server: where the bootstrap mounts the data volume (README).
+  # Where the bootstrap mounts the data volume; its `postgres` child is the server's Postgres data
+  # directory and its `caddy` child Caddy's storage (README, "The bootstrap").
   data_dir = "/srv/socboard-data"
+
+  # The app's port on the host's loopback, the one address Caddy proxies to (compose.yaml publishes it).
+  app_upstream = "127.0.0.1:8000"
 
   # Deploy decision 6: the public hostname is the Elastic IP through a wildcard-DNS service, as
   # 203-0-113-10.sslip.io. VERIFY: sslip.io answers this dashed form with the address.
   hostname = "${replace(aws_eip.server.public_ip, ".", "-")}.sslip.io"
+
+  # Prod runs beside dev on this host (decision 2026-11-15T1840Z, issue #266): its own hostname (the
+  # dev one with a `prod-` prefix; VERIFY: sslip.io resolves it, read 2026-11-16 with getent) and its
+  # own loopback port, so host Caddy picks the stack by hostname. Dev's hostname and port above are
+  # unchanged. The ports must differ: the tests refuse a prod upstream equal to dev's.
+  prod_hostname     = "prod-${local.hostname}"
+  prod_app_upstream = "127.0.0.1:8100"
 }
 
 # Newest Ubuntu 24.04 LTS x86_64 image from Canonical, read with ec2:DescribeImages (allowed to the
@@ -127,7 +139,11 @@ resource "aws_instance" "server" {
   iam_instance_profile   = local.instance_profile_name
 
   user_data = templatefile("${path.module}/bootstrap.sh.tftpl", {
-    data_dir = local.data_dir
+    data_dir     = local.data_dir
+    app_upstream = local.app_upstream
+    # Prod's site and upstream (issue #266); the prod data folder is made from data_dir.
+    prod_hostname     = local.prod_hostname
+    prod_app_upstream = local.prod_app_upstream
     # The volume's NVMe serial is its id without the dash. VERIFY: the link name on noble.
     data_device = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(aws_ebs_volume.data.id, "-", "")}"
     hostname    = local.hostname

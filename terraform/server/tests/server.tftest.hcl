@@ -25,10 +25,12 @@ override_data {
 # `key_name` and the group's inline rule sets are computed, so a plan leaves them unknown when the
 # configuration does not set them. These overrides make them null and empty at plan time; a value the
 # configuration sets still wins over an override, so adding `key_name` or an inline rule fails below.
+# The instance's and the Elastic IP's ids are fixed too, so the association can be compared (#256).
 override_resource {
   target          = aws_instance.server
   override_during = plan
   values = {
+    id       = "i-0123456789abcdef0"
     key_name = null
   }
 }
@@ -48,6 +50,7 @@ override_resource {
   target          = aws_eip.server
   override_during = plan
   values = {
+    id        = "eipalloc-0123456789abcdef0"
     public_ip = "203.0.113.10"
     instance  = null
   }
@@ -158,19 +161,59 @@ run "defaults" {
     error_message = "Caddy's admin endpoint must be off and the default certificate authority production."
   }
 
-  # The volume: found by its id, mounted by UUID with nofail at STACK_PGDATA_DIR, owned by uid 999,
-  # and formatted only when blkid finds no signature; Caddy's data lives on it.
+  # The volume: found by its id, mounted by UUID with nofail and the 30-second device wait at
+  # /srv/socboard-data, and formatted only when blkid finds no signature.
   assert {
     condition = alltrue([for s in [
       "DATA_DEV='/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0'",
       "DATA_DIR='/srv/socboard-data'",
-      "\"UUID=$uuid $DATA_DIR ext4 defaults,nofail,",
-      "chown 999:999 \"$DATA_DIR\"",
+      "\"UUID=$uuid $DATA_DIR ext4 defaults,nofail,x-systemd.device-timeout=30s 0 2\"",
       "if [ \"$rc\" -eq 2 ]; then",
-      "root /srv/socboard-data/caddy\n",
-      "RequiresMountsFor=/srv/socboard-data\n",
     ] : strcontains(aws_instance.server.user_data, s)])
-    error_message = "The bootstrap must mount the data volume by id and UUID with nofail at /srv/socboard-data, owned by 999, format only an empty one, and keep Caddy's data on it."
+    error_message = "The bootstrap must mount the data volume by id and UUID with nofail at /srv/socboard-data and format only an empty one."
+  }
+
+  # The layout on the volume (#256): the mount root root:root 0755 on every run, Postgres's directory
+  # (STACK_PGDATA_DIR on the server) 999 and 0700 on its top level, Caddy's folder owned by the caddy
+  # user recursively with 0700, and the caddy uid never 999.
+  assert {
+    condition = alltrue([for s in [
+      "PG_DIR='/srv/socboard-data/postgres'\n",
+      "CADDY_DIR='/srv/socboard-data/caddy'\n",
+      "\nown \"$DATA_DIR\" 0:0 755\n",
+      "\nown \"$PG_DIR\" 999:999 700\n",
+      "\nown \"$CADDY_DIR\" \"$caddy_uid:$caddy_gid\" 700\n",
+      "\n  chown -R \"$caddy_uid:$caddy_gid\" \"$CADDY_DIR\"\n",
+      "if [ \"$caddy_uid\" = 999 ]; then",
+    ] : strcontains(aws_instance.server.user_data, s)])
+    error_message = "The bootstrap must set the mount root to root:root 0755, postgres/ to 999 0700 and caddy/ to the caddy user (recursively) 0700."
+  }
+
+  # Caddy's storage is its folder on the volume, beside the Postgres directory and not under it, so no
+  # container mount reaches Caddy's keys (F-233-5).
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "\t\troot /srv/socboard-data/caddy\n") && !startswith(regex("CADDY_DIR='([^']*)'", aws_instance.server.user_data)[0], "${regex("PG_DIR='([^']*)'", aws_instance.server.user_data)[0]}/") && !strcontains(aws_instance.server.user_data, "/srv/socboard-data/postgres/caddy")
+    error_message = "Caddy's storage root must be /srv/socboard-data/caddy, outside the Postgres directory."
+  }
+
+  # Docker and Caddy each wait for the data mount and do not start without it (F-233-4).
+  assert {
+    condition = alltrue([for f in ["docker", "caddy"] :
+    strcontains(aws_instance.server.user_data, "write /etc/systemd/system/${f}.service.d/socboard.conf 0644 <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/socboard-data\nEOF\n")])
+    error_message = "Docker and Caddy must each have a drop-in with RequiresMountsFor=/srv/socboard-data."
+  }
+
+  # Only the pinned Caddy key: exactly one primary key with this fingerprint (F-233-6).
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "CADDY_KEY_FPR='65760C51EDEA2017CEA2CA15155B6D79CA56EA34'") && strcontains(aws_instance.server.user_data, "if [ \"$found\" = \"$CADDY_KEY_FPR\" ]; then return 0; fi") && strcontains(aws_instance.server.user_data, "if ! caddy_key_ok \"$CADDY_KEYRING.new\"; then")
+    error_message = "The Caddy keyring must be accepted only with exactly one primary key of the pinned fingerprint."
+  }
+
+  # No hidden write failure (F-233-7): files are written only through `write`, which stops on a failed
+  # put; nothing swallows a failure with `|| true`, and put's one caller is write.
+  assert {
+    condition     = !strcontains(aws_instance.server.user_data, "|| true") && length(regexall("(?m)^\\s*(if !? *)?put ", aws_instance.server.user_data)) == 1 && strcontains(aws_instance.server.user_data, "\n  put \"$@\" || rc=$?\n") && strcontains(aws_instance.server.user_data, "    *)\n      say \"could not write $1; stopping\"\n      exit 1\n")
+    error_message = "Every file write must go through write, which stops the script on a failed write."
   }
 
   # Log rotation and the prune that only removes unused images.
@@ -181,10 +224,13 @@ run "defaults" {
 
   # Never held: no secret in the user data. These are the patterns of the kit's secret scan
   # (_docs/agent-kit/scripts/secret-patterns.txt) that can match a value; the file sits outside this
-  # folder, so tf-check's copy cannot read it. And no Secrets Manager call.
+  # folder, so tf-check's copy cannot read it. This copy must follow that file: a pattern added there
+  # is added here. And no Secrets Manager call.
   assert {
     condition = alltrue([for p in [
       "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+      "-----BEGIN PGP PRIVATE KEY BLOC[K]-----", # [K]: the same regex, but this line does not match itself
+      "(^|[^A-Za-z0-9])sk-(proj|ant)-[A-Za-z0-9_-]{20,}",
       "ghp_[A-Za-z0-9]{36}",
       "github_pat_[A-Za-z0-9_]{22,}",
       "AKIA[0-9A-Z]{16}",
@@ -203,6 +249,54 @@ run "defaults" {
   assert {
     condition     = aws_eip.server.instance == null
     error_message = "The Elastic IP must be associated through aws_eip_association, not its instance argument."
+  }
+
+  assert {
+    condition     = aws_eip_association.server.allocation_id == aws_eip.server.id && aws_eip_association.server.instance_id == aws_instance.server.id
+    error_message = "aws_eip_association.server must associate aws_eip.server with aws_instance.server."
+  }
+}
+
+# The prod stack beside dev (issue #266): a second Caddy site for the prod hostname that proxies to
+# prod's own loopback port, and a prod Postgres folder beside dev's. Dev's hostname, port and folder
+# are exactly what they were. The Caddyfile is compared whole, so a third site, a changed dev block,
+# or a prod site on dev's port fails here.
+run "prod_site" {
+  command = plan
+
+  assert {
+    condition     = output.hostname == "203-0-113-10.sslip.io" && output.prod_hostname == "prod-203-0-113-10.sslip.io"
+    error_message = "The dev hostname must be unchanged and the prod hostname the dev one with a prod- prefix."
+  }
+
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "write /etc/caddy/Caddyfile 0644 <<'EOF'\n{\n\tadmin off\n\tacme_ca https://acme-v02.api.letsencrypt.org/directory\n\tstorage file_system {\n\t\troot /srv/socboard-data/caddy\n\t}\n}\n\n203-0-113-10.sslip.io {\n\treverse_proxy 127.0.0.1:8000\n}\n\nprod-203-0-113-10.sslip.io {\n\treverse_proxy 127.0.0.1:8100\n}\nEOF\n")
+    error_message = "The Caddyfile must be the shared global block, the dev site to 127.0.0.1:8000 as before, and the prod site to 127.0.0.1:8100."
+  }
+
+  # Two sites, two different upstreams, both on the loopback: the sites never share a port.
+  assert {
+    condition     = length(regexall("(?m)^[a-z0-9.-]+\\.sslip\\.io \\{$", aws_instance.server.user_data)) == 2 && [for m in regexall("reverse_proxy ([0-9.:]+)", aws_instance.server.user_data) : m[0]] == ["127.0.0.1:8000", "127.0.0.1:8100"]
+    error_message = "Caddy must serve exactly two sites, each to its own loopback port (8000 for dev, 8100 for prod)."
+  }
+
+  # The prod data folder: a sibling of dev's, 999 and 0700 on its top level, never inside dev's, and
+  # dev's folder line and owner rule unchanged.
+  assert {
+    condition = alltrue([for s in [
+      "PG_DIR='/srv/socboard-data/postgres'\n",
+      "PG_PROD_DIR='/srv/socboard-data/postgres-prod'\n",
+      "\nown \"$PG_DIR\" 999:999 700\n",
+      "\n[ -d \"$PG_PROD_DIR\" ] || mkdir -m 0700 \"$PG_PROD_DIR\"\n",
+      "\nown \"$PG_PROD_DIR\" 999:999 700\n",
+    ] : strcontains(aws_instance.server.user_data, s)]) && !startswith(regex("PG_PROD_DIR='([^']*)'", aws_instance.server.user_data)[0], "${regex("PG_DIR='([^']*)'", aws_instance.server.user_data)[0]}/")
+    error_message = "The prod Postgres folder must be /srv/socboard-data/postgres-prod, 999 and 0700, beside dev's and not inside it."
+  }
+
+  # Nothing else opens: still TCP 80 and 443 only, in and out.
+  assert {
+    condition     = toset([for r in aws_vpc_security_group_ingress_rule.web : r.from_port]) == toset([80, 443]) && toset([for r in aws_vpc_security_group_egress_rule.web : r.from_port]) == toset([80, 443])
+    error_message = "The security group must still open only TCP 80 and 443."
   }
 }
 
@@ -257,4 +351,59 @@ run "refuses_a_zone_outside_us_east_1" {
   }
 
   expect_failures = [var.availability_zone]
+}
+
+# The deploy document (issue #237): one Command document, one parameter `digest` with the digest
+# pattern, and the script as its only step. A second parameter, another name, type or pattern, a
+# second step or a changed script header fails here.
+run "deploy_document" {
+  command = plan
+
+  assert {
+    condition     = aws_ssm_document.deploy.name == "socboard-deploy" && aws_ssm_document.deploy.document_type == "Command" && aws_ssm_document.deploy.document_format == "JSON"
+    error_message = "The document must be a JSON Command document named socboard-deploy."
+  }
+
+  assert {
+    condition     = keys(jsondecode(aws_ssm_document.deploy.content).parameters) == ["digest"] && jsondecode(aws_ssm_document.deploy.content).parameters.digest.type == "String" && jsondecode(aws_ssm_document.deploy.content).parameters.digest.allowedPattern == "^sha256:[0-9a-f]{64}$"
+    error_message = "The document must have exactly one parameter, digest, a String with the pattern ^sha256:[0-9a-f]{64}$."
+  }
+
+  assert {
+    condition     = keys(jsondecode(aws_ssm_document.deploy.content).parameters.digest) == ["allowedPattern", "description", "type"]
+    error_message = "The digest parameter must set only its type, description and allowedPattern."
+  }
+
+  assert {
+    condition     = length(jsondecode(aws_ssm_document.deploy.content).mainSteps) == 1 && jsondecode(aws_ssm_document.deploy.content).mainSteps[0].action == "aws:runShellScript"
+    error_message = "The document must have one step, aws:runShellScript."
+  }
+
+  # The step is the script: a shebang first, the one parameter reference, and no other doubled brace
+  # (Systems Manager would read one as a parameter reference).
+  assert {
+    condition = (
+      jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand[0] == "#!/bin/bash"
+      && strcontains(join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand), "DIGEST_PARAM='{{ digest }}'\n")
+      && length(split("{{", join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand))) == 2
+    )
+    error_message = "The step must be the script: first line #!/bin/bash, exactly one parameter reference, {{ digest }}."
+  }
+
+  # Never held: no account number (twelve digits), no ARN, no secret pattern of the kit's scan.
+  assert {
+    condition = alltrue([for p in [
+      "(^|[^0-9])[0-9]{12}([^0-9]|$)",
+      "(^|[^A-Za-z])arn:",
+      "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+      "ghp_[A-Za-z0-9]{36}",
+      "AKIA[0-9A-Z]{16}",
+    ] : !can(regex(p, aws_ssm_document.deploy.content))])
+    error_message = "The document must hold no account number, ARN or secret."
+  }
+
+  assert {
+    condition     = aws_ssm_document.deploy.tags == tomap({ project = "socboard" })
+    error_message = "The document must carry project = socboard."
+  }
 }

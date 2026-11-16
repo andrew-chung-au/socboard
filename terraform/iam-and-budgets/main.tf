@@ -56,7 +56,8 @@ resource "aws_iam_role_policy_attachment" "ssm_core" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# The one extra permission: read one named secret. No other action, no other resource, no write.
+# The one extra permission: read two named secrets, dev's and prod's (issue #268). No other action, no
+# other resource, no write, no wildcard. VERIFY: an in-place change of this policy at the re-apply.
 # VERIFY: `aws_iam_role_policy` arguments `name`, `role`, `policy`.
 resource "aws_iam_role_policy" "read_app_secret" {
   name = "read-app-secret"
@@ -65,10 +66,10 @@ resource "aws_iam_role_policy" "read_app_secret" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Sid      = "ReadOneSecret"
+      Sid      = "ReadTheTwoAppSecrets"
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [var.app_secret_arn]
+      Resource = [var.app_secret_arn, var.app_prod_secret_arn]
     }]
   })
 }

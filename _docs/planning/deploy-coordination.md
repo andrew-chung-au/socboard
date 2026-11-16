@@ -4,21 +4,26 @@ Rules for two Kiro Web sessions that work the Deploy issues at the same time, wi
 
 ## Roles
 
-- **Session A** is the controller. It plans, grooms (the PM work), sets the merge order, tests branches against each other before the human merges, and works the **infrastructure lane**.
-- **Session B** works the **application lane**.
-- **The human** labels, approves protected-file diffs, merges, pushes from the clean clone, and relays between the sessions. Neither session talks to the other directly.
+The lanes as of 2026-11-16 (the maintainer's split). The two-session setup this file started with (Session A and Session B) is replaced by the table below; the rules further down still apply to every lane.
 
-Both sessions run the same orchestrator process on their own issues: Engineer, then QA, then (Heavy) a second independent QA, then the Reviewer, then the decision point.
+- **Planning** is the controller. It plans, grooms when asked, sets the merge order, keeps the roadmaps and the reviewer evidence, and writes the maintainer's step-by-step instructions.
+- Every other lane runs the orchestrator process on its own issues: Engineer, then QA, then (Heavy) a second independent QA, then the decision point.
+- **The maintainer** labels, approves protected-file diffs, merges, applies Terraform, runs the human tasks and relays between the sessions. No session talks to another directly.
 
 ## Who owns what (file ownership is what prevents collisions)
 
-| Lane | Session | Issues | Files |
-|---|---|---|---|
-| Application | B | #140, #142, #141, #143, then D5b, D6a, D6b, D7, D8, D9, D10 to D14 and D24 as they are filed | `socboard/`, `tests/`, `frontend/`, `Dockerfile` and the Compose file, the image CI job |
-| Infrastructure | A | #154, #155, #156, then D17a to D17c, D18b, D19 to D23 as they are filed | `terraform/`, `.github/workflows/terraform-*.yml`, the infrastructure decision records |
-| Planning and records | A | the proposal, roadmap, drafts and this file; #139 | `_docs/planning/`, `_docs/decisions/` for the Deploy record |
+| Lane | Issues now | Files |
+|---|---|---|
+| Planning | the roadmaps, this file, the README reviewer section, the evidence timeline | `_docs/planning/`, `README.md` (reviewer section only), `_docs/records/` for evidence |
+| Terraform A (server) | #256, #236, #266 | `terraform/server/`, the bootstrap, `terraform/README.md` (the server and bootstrap sections), the human tasks for the server applies |
+| Terraform B (access) | #268 | `terraform/ci-access/`, `terraform/iam-and-budgets/`, `terraform/README.md` (the CI access and IAM sections) |
+| Application | #281, #267, #240 | `socboard/` (except the instrumentation), `tests/` for the app, `frontend/`, `terraform/server/socboard-deploy.sh` and its document and tests |
+| CI (the session that owns #209; it took over the Compose and CI lane on 2026-11-16) | #209, the masking in `_human-tasks/238-proposed/`, #269 | `compose.yaml`, `compose/`, `.github/workflows/` (all, including `terraform-*.yml`), `e2e/`, the image |
+| DevOps | the Phase 3 roadmap and its issues, once filed | `compose.observability.yaml` (layered on `compose.yaml`), `observability/`, the telemetry code in `socboard/`, their tests, and the observability CI checks (as diffs for the Compose and CI lane or the maintainer, since workflows are protected) |
 
-Adding a new issue to a lane is A's call, announced to the human; the issue's Claim comment fixes the owner.
+`terraform/README.md` is shared: each Terraform lane edits only its own sections and merges `origin/main` before marking a pull request ready. `socboard/` is shared between Application and DevOps: DevOps adds telemetry only, and says which files it touched in its claim.
+
+Adding a new issue to a lane is the Planning lane's call, announced to the maintainer; the issue's Claim comment fixes the owner.
 
 ## Rules
 
@@ -32,6 +37,8 @@ Adding a new issue to a lane is A's call, announced to the human; the issue's Cl
 8. **Local sandboxes are not the remote.** A session can only see `origin`. Work that exists only in the human's local sandbox (closed issues whose commits were never pushed) cannot be built on. Before grooming or starting an issue that touches code another issue changed, check that the other issue's commits are on `origin/main` (`git cat-file -t <merge commit>` after `git fetch`). If they are not, say so and wait.
 9. **CI is the evidence.** Neither session can install packages or run Docker, Terraform or Postgres here. Every issue pushes early, opens a draft pull request, and reads CI. Anything CI cannot run goes in a human task file.
 10. **Handoffs go through GitHub.** Status lives in the tracker (labels, comments, pull requests, CI), not in a document that goes stale. At each decision point a session sends the human one message with the pull request, the head commit, the CI run, the QA verdicts, the Reviewer findings and what it needs decided.
+
+11. **Wait only for a real dependency** (the maintainer's ruling, 2026-11-16). A start condition, an order or a time holds work back only while the reason behind it is still true; say in one sentence what would break or be done twice. Writing, testing and merging code never wait for a deploy, an apply or a human run. A change that replaces the server is best made before anything runs on it. Recording a result never blocks work. The full text is `.kiro/steering/real-dependencies-only.md`.
 
 ## Message hygiene (so a reply reaches the right session)
 

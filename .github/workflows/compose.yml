@@ -31,6 +31,41 @@ jobs:
       - name: Start the stack
         run: make compose-up
 
+      - name: The stack network has one pool entry, with the pinned gateway (#261, #271)
+        run: |
+          pools="$(docker network inspect socboard_stack --format '{{len .IPAM.Config}} {{range .IPAM.Config}}{{.Gateway}}{{end}}')"
+          echo "pool entries and gateway: $pools"
+          test "$pools" = "1 10.231.77.1"
+
+      - name: The project name, the network and the trusted proxy follow their variables (#271)
+        run: |
+          cat > "$RUNNER_TEMP/render_check.py" <<'PY'
+          import json, sys
+          project, prefix, trusted = sys.argv[1:4]
+          config = json.load(sys.stdin)
+          pools = config["networks"]["stack"]["ipam"]["config"]
+          got = {
+              "name": config["name"],
+              "pools": pools,
+              "proxy": config["services"]["proxy"]["networks"]["stack"]["ipv4_address"],
+              "trusted": config["services"]["app"]["environment"]["SOCBOARD_TRUSTED_PROXIES"],
+          }
+          want = {
+              "name": project,
+              "pools": [{"subnet": f"{prefix}.0/24", "ip_range": f"{prefix}.128/25", "gateway": f"{prefix}.1"}],
+              "proxy": f"{prefix}.10",
+              "trusted": trusted or f"{prefix}.10",
+          }
+          print(json.dumps(got, sort_keys=True))
+          sys.exit(0 if got == want else "the rendered file does not match: " + json.dumps(want, sort_keys=True))
+          PY
+          # Today's values, with no variable set: dev changes nothing.
+          docker compose --env-file compose.secrets config --format json | python3 "$RUNNER_TEMP/render_check.py" socboard 10.231.77 ""
+          # An example second stack: every address and the name move together.
+          STACK_PROJECT=socboard-prod STACK_NET=10.231.78 docker compose --env-file compose.secrets config --format json | python3 "$RUNNER_TEMP/render_check.py" socboard-prod 10.231.78 ""
+          # The server's value: the trusted address is its own variable and nothing else moves.
+          STACK_TRUSTED_PROXIES=10.231.77.1 docker compose --env-file compose.secrets config --format json | python3 "$RUNNER_TEMP/render_check.py" socboard 10.231.77 10.231.77.1
+
       - name: Health through the proxy and on the app's own port
         run: |
           make smoke URL=http://127.0.0.1:8080 HEALTH_ONLY=1

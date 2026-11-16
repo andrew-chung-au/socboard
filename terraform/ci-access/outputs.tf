@@ -12,6 +12,6 @@ output "apply_role_arn" {
 }
 
 output "deploy_role_arn" {
-  description = "Role for the deploy job in the deploy Environment."
+  description = "Role for the deploy jobs in the deploy and deploy-prod Environments."
   value       = aws_iam_role.deploy.arn
 }

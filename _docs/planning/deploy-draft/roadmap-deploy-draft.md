@@ -6,7 +6,7 @@ Order and status only. Acceptance criteria live on the issues. Scope and reasons
 
 - **Status:** later (starts when Core ends). **Provisional:** the spec's Deploy part has no journey and no requirements yet, so no issue below is filed until the human approves the spec notes and the deploy decision record.
 - **Goal:** SOCBoard runs from one container image with Postgres, starts with one Docker Compose command, is covered by integration and end-to-end tests, is reachable at a public HTTPS URL on AWS created by Terraform, and is deployed by CI/CD only when the tests pass.
-- **Reference:** the human's earlier project informed the choice of Terraform on AWS and the lessons below. The design here is derived from SOCBoard's spec, the course brief, SOCBoard's code and public documentation of the tools.
+- **Reference:** the design here is derived from SOCBoard's spec, the course brief, SOCBoard's code and public documentation of the tools.
 - **Who:** **CI** = GitHub Actions can run it; **Human** = needs the human (AWS account, `terraform apply`, GitHub settings, secrets); **Eng** = the Engineer in the sandbox (no Docker, Terraform, AWS credentials or push).
 
 ## SOCBoard's Deploy design, and why
