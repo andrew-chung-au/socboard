@@ -1261,7 +1261,7 @@ def task_file():
     return found[0].read_text(encoding="utf-8")
 
 
-def test_the_task_file_has_no_inline_secret_no_real_address_and_every_result_row_not_checked():
+def test_the_task_file_has_no_inline_secret_no_real_address_and_every_result_row_recorded():
     text = task_file()
     for line in text.splitlines():
         if "--secret-string" in line:
@@ -1273,7 +1273,9 @@ def test_the_task_file_has_no_inline_secret_no_real_address_and_every_result_row
     assert not re.search(r"(?<![0-9])[0-9]{12}(?![0-9])|(?<![A-Za-z])arn:", text)
     table = text.split("| Step | Pass or fail | Output or note |")[1].split("## Risk")[0]
     rows = [line for line in table.splitlines() if line.startswith("|") and not line.startswith("|---")]
-    assert len(rows) >= 10 and all(line.split("|")[2].strip() == "NOT CHECKED" for line in rows), rows
+    # Stage (b) ran on 2026-11-16: every row holds a recorded result and a note, none is left NOT CHECKED.
+    assert len(rows) >= 10 and all(line.split("|")[2].strip().startswith(("PASS", "FAIL")) for line in rows), rows
+    assert all(line.split("|")[3].strip() for line in rows), rows
 
 
 # --- the clean start (#281, fix round 1): the script starts itself again under an empty environment ------------
