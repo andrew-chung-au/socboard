@@ -40,6 +40,7 @@ By file. Add project manifests here.
 | `AGENTS.md` | Instructions agents read first | Current |
 | `_docs/specs.md` | The product specification (problem, users, journeys, requirements, scope, invariants) | Current |
 | `_docs/planning/lovable-guidance.md` | How to generate and import the frontend base with Lovable | Current |
+| `_docs/planning/roadmap-4-devops.md` | Roadmap 4 (Phase 3 DevOps): the observability, alert and on-call plan, the decisions, the order and tracks, and the evidence each issue leaves (#285 to #301) | Proposed |
 | `_docs/planning/deploy-backlog-proposal.md` | Draft Deploy backlog (D1 to D23) for the human's approval: review of roadmap 3, issue drafts, the effect of #22, open questions and spec notes; no issue filed yet | Proposed |
 | `_docs/planning/deploy-coordination.md` | How Session A and Session B work the Deploy issues at the same time: roles, lanes and file ownership, claims, branches, shared files, merge order, the independent second QA, and message hygiene | Proposed |
 | `_docs/planning/deploy-draft/reviewer-brief.md` | Brief for an outside reviewer of the Deploy plan: what to read, what to judge, known gaps, reply format | Proposed |
