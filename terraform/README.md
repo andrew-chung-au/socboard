@@ -191,7 +191,7 @@ Destroy in this order, because the state bucket holds this part's state: D17b's 
 - The instance's user data: the bootstrap (next section), which installs Docker, the Compose plugin and Caddy and mounts the data volume.
 - One security group: TCP 80 and 443 in from anywhere, TCP 80 and 443 out to anywhere, nothing else (no SSH, no app port). Opening a port means editing the list in `server/main.tf`, and the tests fail on it.
 - One data volume for the database: encrypted gp3 with the AWS-managed key, 10 GiB by default (8 to 50), in the instance's zone (`us-east-1a` by default), attached with the instance stopped before any detach. It has `prevent_destroy`, so any plan that would delete or replace it fails.
-- Outputs: `elastic_ip`, `hostname`, `instance_id` and `data_volume_id`. No secret.
+- Outputs: `elastic_ip`, `hostname` (dev's), `prod_hostname`, `instance_id` and `data_volume_id`. No secret.
 
 Every variable has a default, so no variable file is needed.
 
@@ -214,7 +214,7 @@ Run each step in `terraform/server/` with AWS credentials for your own account i
 4. `terraform plan`, and read it: the image name starts `ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-` and its owner is `099720109477`; the instance has no key name, its user data is the bootstrap and `user_data_replace_on_change` is true; four security group rules (80 and 443 each way); the root block device has no tags; the data volume has `project = "socboard"`. If this part was already applied without the bootstrap (D19a, #207), follow "The bootstrap", D19b steps, instead.
    Expected: "Plan: 10 to add, 0 to change, 0 to destroy." (instance, Elastic IP, its association, security group, four rules, data volume, attachment). Stop on any surprise.
 5. `terraform apply`, answering `yes`.
-   Expected: "Apply complete! Resources: 10 added, 0 changed, 0 destroyed." and the four outputs printed.
+   Expected: "Apply complete! Resources: 10 added, 0 changed, 0 destroyed." and the five outputs printed.
 6. Check in the EC2 console: the root volume has no tags and the data volume has `project=socboard`, both encrypted; the instance's metadata shows tokens required and hop limit 1. In Systems Manager (Fleet Manager) the instance shows as online within about ten minutes.
    Expected: as described. If the instance never comes online, the egress limit (80 and 443 only) is the first suspect (`VERIFY:`); the change goes through a new issue.
 
@@ -243,11 +243,31 @@ Destroy this part first, then `iam-and-budgets/`, `ci-access/` and `state/` last
 - **Packages:** `docker.io` and `docker-compose-v2` (the Compose plugin) from Ubuntu's own archive, signed by the Ubuntu archive key the image already trusts; `caddy` from Caddy's repository on Cloudsmith, whose downloaded keyring is accepted only when it holds exactly one primary key (its subkeys allowed) with the fingerprint `65760C51EDEA2017CEA2CA15155B6D79CA56EA34`; any other shape (no key, a second primary key, another fingerprint, a file `gpg` cannot read) stops the script before the keyring or the apt source is installed (the package names are right on noble, seen 2026-11-16; `VERIFY:` that Cloudsmith serves this key). A package is installed only when missing; the bootstrap never upgrades one (Ubuntu's unattended upgrades patch them, `VERIFY:` that they are on in the image).
 - **Docker:** log rotation of 10 MB per file and 3 files per container (`/etc/docker/daemon.json`); a weekly `docker image prune --all --filter until=168h` (`/etc/cron.d/socboard-docker-prune`), which removes only images no container uses, so never one a running container uses; Docker enabled at boot, and ordered after the data volume's mount by a drop-in (`/etc/systemd/system/docker.service.d/socboard.conf`, `RequiresMountsFor=/srv/socboard-data`), so it does not start without the volume. The drop-in is written after the fstab line and the mount, when the mount unit it names exists and is active, so the `daemon-reload` accepts it; the Docker the package install already started keeps running, and the order applies from the next boot. Containers come back after a reboot only if the Compose file gives them a restart policy (D11 or D20 sets it; this part assumes `restart: unless-stopped` on `db` and `app`).
 - **The data volume:** found by its volume id (`/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol...`; the bootstrap ended `done` on 2026-11-16 with the volume mounted), never by a guessed device name. It is formatted as ext4 only when `blkid -p` finds no signature at all, so a volume with data is never formatted. On a replaced instance the volume already holds ext4, so `blkid -p` exits 0 and nothing is formatted; the fstab line is written again on the new root disk with the volume's unchanged UUID. It is mounted by file-system UUID with `nofail` and `x-systemd.device-timeout=30s` at `/srv/socboard-data`. A missing volume does not block the boot: Docker and Caddy stay stopped (each has `RequiresMountsFor=/srv/socboard-data`) while Systems Manager still reaches the host (`VERIFY:` at D19b). The bare directory under the mount point is made immutable, so nothing writes to the root disk while the volume is missing, and the script stops unless the volume is mounted. The script waits up to 10 minutes for the volume, which Terraform attaches after the instance starts.
-- **The layout on the volume:** two siblings, created only after the volume is mounted. **`/srv/socboard-data/postgres`, the value `STACK_PGDATA_DIR` takes on the server** (root README, "Compose stack"; D20 sets it), owned by uid 999, the image's `postgres` user, mode 0700; Postgres writes its `pgdata` subdirectory there. `/srv/socboard-data/caddy`, Caddy's certificates and account, owned by the `caddy` user, mode 0700, outside anything a container mounts. Every run sets, each only when it differs: the mount root to `root:root` 0755 (#233's run left it owned by 999); `postgres/` to 999 and 0700 on its top level only (the database's files are never walked); `caddy/` and everything under it to the current `caddy` user, recursively, because the package creates that user again on a replaced instance and its uid may differ. Nothing on the volume is moved, copied or deleted: an existing `caddy/` stays where it is and is reused, and `postgres/` is created when missing. The script stops if the `caddy` user has uid 999.
-- **Caddy:** `/etc/caddy/Caddyfile` serves the output `hostname` (the Elastic IP through sslip.io, for example `203-0-113-10.sslip.io`, Deploy decision 6; `VERIFY:` the name format) over HTTPS and proxies to `127.0.0.1:8000` only. The admin endpoint is off. The certificate comes from the ACME directory in the variable `acme_ca`: Let's Encrypt production by default, or its staging directory for testing. The account has no contact address (decision 6: a real address or none; `VERIFY:` that Let's Encrypt accepts that). Caddy's certificate and account live on the data volume (`/srv/socboard-data/caddy`), so a replaced instance keeps them, and Caddy does not start without the volume.
+- **The layout on the volume:** three siblings, created only after the volume is mounted (`postgres-prod/`, the prod stack's, is next to `postgres/`; see "The prod stack beside dev" below). **`/srv/socboard-data/postgres`, the value `STACK_PGDATA_DIR` takes on the server** (root README, "Compose stack"; D20 sets it), owned by uid 999, the image's `postgres` user, mode 0700; Postgres writes its `pgdata` subdirectory there. `/srv/socboard-data/caddy`, Caddy's certificates and account, owned by the `caddy` user, mode 0700, outside anything a container mounts. Every run sets, each only when it differs: the mount root to `root:root` 0755 (#233's run left it owned by 999); `postgres/` to 999 and 0700 on its top level only (the database's files are never walked); `caddy/` and everything under it to the current `caddy` user, recursively, because the package creates that user again on a replaced instance and its uid may differ. `postgres-prod/` (the value `STACK_PGDATA_DIR` takes for prod, issue #266) is made the same way as `postgres/`: owned by uid 999, mode 0700, top level only, a sibling and never inside `postgres/`. Nothing on the volume is moved, copied or deleted: an existing `caddy/` stays where it is and is reused, and `postgres/` and `postgres-prod/` are created when missing. The script stops if the `caddy` user has uid 999.
+- **Caddy:** `/etc/caddy/Caddyfile` has two sites sharing one global block (issue #266, "The prod stack beside dev" below). The first serves the output `hostname`, dev's (the Elastic IP through sslip.io, for example `203-0-113-10.sslip.io`, Deploy decision 6; `VERIFY:` the name format) over HTTPS and proxies to `127.0.0.1:8000` only; the second serves `prod_hostname` and proxies to `127.0.0.1:8100` only. The admin endpoint is off. The certificate comes from the ACME directory in the variable `acme_ca`: Let's Encrypt production by default, or its staging directory for testing. The account has no contact address (decision 6: a real address or none; `VERIFY:` that Let's Encrypt accepts that). Caddy's certificates and account live on the data volume (`/srv/socboard-data/caddy`), one storage for both sites, so a replaced instance keeps them, and Caddy does not start without the volume.
 - **The forwarded address (for D20):** Caddy replaces any `X-Forwarded-For` the caller sent with the caller's address. The app sees the Compose network's gateway as the peer, `10.231.77.1` for the `stack` network in `compose.yaml`, whose gateway is pinned there (`gateway: 10.231.77.1`, #261). The pin is needed: without it, Docker 29.1.3 on the server gave the network the gateway `10.231.77.128`, the first address of the `ip_range` `10.231.77.128/25`, and with docker-proxy in use that gateway is the peer the app sees from host Caddy (the maintainer's measurement, 2026-11-16). `VERIFY:` measured 2026-11-16 (gateway behaviour); not re-measured in #236's run (row 19 of its record); the first deploy checks the gateway (exit 10). D20 sets `SOCBOARD_TRUSTED_PROXIES=10.231.77.1`, sets `STACK_PGDATA_DIR=/srv/socboard-data/postgres`, leaves `FORWARDED_ALLOW_IPS` at its default, and does not start the compose `proxy` service: host Caddy is the one proxy.
 - **Idempotent:** each step carries its own check (a package only when missing, a file only when its content differs, a format only of a blank volume, the fstab line only when the mount point has none, an owner or mode only when it differs, a restart only when a file changed), so a second run changes nothing. A failed file write stops the script with a message naming the file; no write failure is treated as "unchanged". Re-run by hand: `sudo bash /var/lib/cloud/instance/scripts/part-001` (the path exists, and a second run on 2026-11-16 wrote nothing).
 - **Never held:** no secret in the script or the Caddy file, none written, none read (no Secrets Manager call). It does not deliver `compose.yaml`, the environment file or the deploy script (D20). The security group is unchanged: TCP 80 and 443 only, no port 22.
+
+### The prod stack beside dev (issue #266)
+
+Dev and prod are two Compose stacks on this one server (`_docs/decisions/2026-11-15T1840Z-dev-prod-one-server.md`). This part gives prod a hostname, a loopback port and a data folder; it starts nothing for prod. The stack's own values come from `compose.yaml`'s variables (#271) and are set by the deploy script (#267). Dev's values do not change.
+
+| Item | Dev | Prod |
+|---|---|---|
+| Public hostname | `<ip-with-dashes>.sslip.io` (output `hostname`) | `prod-<ip-with-dashes>.sslip.io` (output `prod_hostname`) |
+| Loopback port of the app (`STACK_APP_PORT`) and Caddy's upstream | 8000 | 8100 |
+| Data folder (`STACK_PGDATA_DIR`) | `/srv/socboard-data/postgres` | `/srv/socboard-data/postgres-prod` |
+| Compose project (`STACK_PROJECT`) | `socboard` | `socboard-prod` |
+| Stack network prefix (`STACK_NET`) | `10.231.77` | `10.231.78` |
+| Pinned gateway, and so the trusted proxy (`STACK_TRUSTED_PROXIES`) | `10.231.77.1` | `10.231.78.1` |
+
+- **Why the hostnames differ by a prefix.** Dev keeps the bare name, because the decision keeps every name of the stack already built; the prod name is derived from the same Elastic IP, so a replaced instance keeps both. `prod-<ip>.sslip.io` resolves to the address (read 2026-11-16 with `getent hosts`).
+- **Why two ports.** Each stack publishes its app on the loopback only (`STACK_APP_PORT`), and host Caddy picks the stack by hostname. The tests refuse a Caddyfile in which the two sites share an upstream. The deploy script's candidate port (8001 for dev) is #267's; prod's must differ from both 8001 and 8100. The security group is unchanged: TCP 80 and 443 only.
+- **The forwarded address.** Caddy replaces any `X-Forwarded-For` the caller sent, for both sites. The prod app sees its own network's gateway, `10.231.78.1`, as the peer, as dev sees `10.231.77.1`. `VERIFY:` the prod gateway when prod first runs (the deploy script checks the gateway of the stack it deploys).
+- **Certificates.** The prod hostname gets its own certificate from the same ACME account, stored beside dev's on the volume. Its first issuance counts once against Let's Encrypt's limits; dev's certificate is kept.
+- **Not chosen: a sites folder on the data volume.** QA's finding F-256-6 on #256 suggested that the Caddyfile import site files from the data volume, so a later site would not replace the instance. Both options cost one replacement (the import line has to be added once), and this one adds no new writer of Caddy files as root: the bootstrap stays the only thing that writes `/etc/caddy/Caddyfile`, and nothing on the volume is read as Caddy's configuration.
+- **What applying it costs.** The change is to the user data, so it replaces the instance (next section): both stacks restart, and the root disk is lost, so dev is deployed again (the next green push) and prod has nothing to restore, because it is not deployed yet. After the apply, update `DEPLOY_INSTANCE_ID` in the `deploy` Environment (and in `deploy-prod` when it holds one). Apply between deploys: a deploy that runs during the replacement fails.
 
 ### Changed user data replaces the instance
 
@@ -314,7 +334,7 @@ Expected: no output. The text given to `onserver` must hold no double quote, bec
 terraform output
 ```
 
-Expected: four values, `elastic_ip`, `hostname`, `instance_id` and `data_volume_id`. Keep them: step 5 compares them with the output after the apply.
+Expected: `elastic_ip`, `hostname`, `instance_id` and `data_volume_id` (and `prod_hostname`, once the change of #266 has been applied). Keep them: step 5 compares them with the output after the apply.
 If different: fewer than four means the backend is not initialised (the server section's step 2); stop.
 
 ```
@@ -380,7 +400,7 @@ Risk: none, it only reads.
 terraform apply d19b.plan
 ```
 
-Expected: "Apply complete!" with the counts the plan showed (2026-11-16: 4 added, 0 changed, 3 destroyed) and the four outputs. A saved plan applies without a prompt: step 3's checks are the confirmation.
+Expected: "Apply complete!" with the counts the plan showed (2026-11-16: 4 added, 0 changed, 3 destroyed) and the outputs. A saved plan applies without a prompt: step 3's checks are the confirmation.
 
 ```
 IID=$(terraform output -raw instance_id)
@@ -560,6 +580,35 @@ date -u +%Y-%m-%dT%H%MZ
 Expected: a timestamp such as `2026-11-16T0033Z`; the file is `_human-tasks/<timestamp>-human-task-<issue number>-engineer-<slug>.md`.
 
 In the record, each row is PASS, FAIL or NOT CHECKED. A FAIL says what you saw, and the fix goes through a new issue, never an edit during the apply. A fix to the bootstrap replaces the instance again, so these steps run again from step 2, and the record says why.
+
+#### What changes in these steps for the prod change (issue #266)
+
+For the replacement that adds the prod site, this is what differs. It is the maintainer's apply, and it waits for #237's first deploy.
+
+- Step 2: `terraform output` shows four values, because `prod_hostname` does not exist yet.
+- Step 3: the counts are the usual ones (3/0/3 once the deploy document exists); the plan also lists "Changes to Outputs" with `prod_hostname`. The stop rule is unchanged.
+- Step 5: the output now has five values, with `prod_hostname` equal to `prod-` and the dev hostname.
+- Step 7: after the `stat` check add the prod folder, then the Caddyfile check. The expected prod folder is uid 999 and `700`:
+
+```
+onserver 'stat -c %U:%a:%n /srv/socboard-data/postgres-prod; grep -c reverse_proxy /etc/caddy/Caddyfile'
+```
+
+Expected: `dnsmasq:700:/srv/socboard-data/postgres-prod` (the host names uid 999 `dnsmasq`), then `2`. `VERIFY:` that Caddy reads the file as valid:
+
+```
+onserver 'runuser -u caddy -- caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -n 1'
+```
+
+Expected: `Valid configuration`. If different: send the line printed; do not edit the file on the host.
+- Step 8: check the prod hostname as well, and compare the dev certificate's serial with step 2's (it must be unchanged: the kept storage is reused). The prod hostname gets a new certificate, so its serial is new:
+
+```
+curl -sS -o /dev/null -w '%{http_code}' "https://$(terraform output -raw prod_hostname)/"
+```
+
+Expected: `502` with no certificate warning: Caddy has the second site and nothing is on port 8100. A certificate error for prod alone means its issuance has not finished; wait five minutes and try again, then read Caddy's journal as step 4 says.
+- Step 10: update every Environment that holds the instance id, `deploy-prod` included once it has the variable.
 
 ### Teardown
 

@@ -257,6 +257,49 @@ run "defaults" {
   }
 }
 
+# The prod stack beside dev (issue #266): a second Caddy site for the prod hostname that proxies to
+# prod's own loopback port, and a prod Postgres folder beside dev's. Dev's hostname, port and folder
+# are exactly what they were. The Caddyfile is compared whole, so a third site, a changed dev block,
+# or a prod site on dev's port fails here.
+run "prod_site" {
+  command = plan
+
+  assert {
+    condition     = output.hostname == "203-0-113-10.sslip.io" && output.prod_hostname == "prod-203-0-113-10.sslip.io"
+    error_message = "The dev hostname must be unchanged and the prod hostname the dev one with a prod- prefix."
+  }
+
+  assert {
+    condition     = strcontains(aws_instance.server.user_data, "write /etc/caddy/Caddyfile 0644 <<'EOF'\n{\n\tadmin off\n\tacme_ca https://acme-v02.api.letsencrypt.org/directory\n\tstorage file_system {\n\t\troot /srv/socboard-data/caddy\n\t}\n}\n\n203-0-113-10.sslip.io {\n\treverse_proxy 127.0.0.1:8000\n}\n\nprod-203-0-113-10.sslip.io {\n\treverse_proxy 127.0.0.1:8100\n}\nEOF\n")
+    error_message = "The Caddyfile must be the shared global block, the dev site to 127.0.0.1:8000 as before, and the prod site to 127.0.0.1:8100."
+  }
+
+  # Two sites, two different upstreams, both on the loopback: the sites never share a port.
+  assert {
+    condition     = length(regexall("(?m)^[a-z0-9.-]+\\.sslip\\.io \\{$", aws_instance.server.user_data)) == 2 && [for m in regexall("reverse_proxy ([0-9.:]+)", aws_instance.server.user_data) : m[0]] == ["127.0.0.1:8000", "127.0.0.1:8100"]
+    error_message = "Caddy must serve exactly two sites, each to its own loopback port (8000 for dev, 8100 for prod)."
+  }
+
+  # The prod data folder: a sibling of dev's, 999 and 0700 on its top level, never inside dev's, and
+  # dev's folder line and owner rule unchanged.
+  assert {
+    condition = alltrue([for s in [
+      "PG_DIR='/srv/socboard-data/postgres'\n",
+      "PG_PROD_DIR='/srv/socboard-data/postgres-prod'\n",
+      "\nown \"$PG_DIR\" 999:999 700\n",
+      "\n[ -d \"$PG_PROD_DIR\" ] || mkdir -m 0700 \"$PG_PROD_DIR\"\n",
+      "\nown \"$PG_PROD_DIR\" 999:999 700\n",
+    ] : strcontains(aws_instance.server.user_data, s)]) && !startswith(regex("PG_PROD_DIR='([^']*)'", aws_instance.server.user_data)[0], "${regex("PG_DIR='([^']*)'", aws_instance.server.user_data)[0]}/")
+    error_message = "The prod Postgres folder must be /srv/socboard-data/postgres-prod, 999 and 0700, beside dev's and not inside it."
+  }
+
+  # Nothing else opens: still TCP 80 and 443 only, in and out.
+  assert {
+    condition     = toset([for r in aws_vpc_security_group_ingress_rule.web : r.from_port]) == toset([80, 443]) && toset([for r in aws_vpc_security_group_egress_rule.web : r.from_port]) == toset([80, 443])
+    error_message = "The security group must still open only TCP 80 and 443."
+  }
+}
+
 run "staging_certificate_authority" {
   command = plan
 
