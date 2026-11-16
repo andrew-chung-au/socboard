@@ -1,5 +1,54 @@
 # SOCBoard
 
+[![verify](https://github.com/andrew-chung-au/socboard/actions/workflows/verify.yml/badge.svg?branch=main)](https://github.com/andrew-chung-au/socboard/actions/workflows/verify.yml)
+[![compose](https://github.com/andrew-chung-au/socboard/actions/workflows/compose.yml/badge.svg?branch=main)](https://github.com/andrew-chung-au/socboard/actions/workflows/compose.yml)
+[![postgres](https://github.com/andrew-chung-au/socboard/actions/workflows/postgres.yml/badge.svg?branch=main)](https://github.com/andrew-chung-au/socboard/actions/workflows/postgres.yml)
+[![image](https://github.com/andrew-chung-au/socboard/actions/workflows/image.yml/badge.svg?branch=main)](https://github.com/andrew-chung-au/socboard/actions/workflows/image.yml)
+[![publish](https://github.com/andrew-chung-au/socboard/actions/workflows/publish.yml/badge.svg?branch=main)](https://github.com/andrew-chung-au/socboard/actions/workflows/publish.yml)
+
+An alert triage case manager for a security operations centre, built by a team of AI agents (PM, Engineer, QA and an orchestrator) working from a public issue tracker.
+
+## For peer reviewers
+
+**Live app:** https://44-216-250-242.sslip.io/ (dev, first deployed 2026-11-16; health check: [`/api/health`](https://44-216-250-242.sslip.io/api/health)). Sign-in passwords are random and handed out of band, never published; ask the maintainer for one. The server runs for about a week; after teardown the CI runs, pull requests and committed records below stay as the evidence.
+
+### Review in five minutes
+
+1. Open the [live app](https://44-216-250-242.sslip.io/). It is served over HTTPS with a valid certificate.
+2. Open a finished issue to see the agent team at work: [#234](https://github.com/andrew-chung-au/socboard/issues/234) (the browser test) has the PM's grooming, the Engineer's report, two QA FAILs and the final QA PASS. [#269](https://github.com/andrew-chung-au/socboard/issues/269) and [#21](https://github.com/andrew-chung-au/socboard/issues/21) show the same loop.
+3. Open the [Actions tab](https://github.com/andrew-chung-au/socboard/actions): every pull request runs the full test suite, the Postgres tests, the image build and the Compose stack with a browser test.
+4. Skim [`AGENTS.md`](AGENTS.md), the file every agent reads first, and the [process](_docs/agent-kit/process.md) it points to.
+5. Optional, with Docker: `make compose-up` starts Postgres, the app and a proxy with one command, and generates its own secrets.
+
+### Scorecard
+
+Suggested scores against the course rubric, with the evidence for each. **Suggested total: 17 of 24** (pass mark 10).
+
+| Criterion | Suggested | Evidence |
+|---|---|---|
+| Problem description | 2 / 2 | [Problem](#problem), [Solution](#solution), [Core functionality](#core-functionality), [Expected behavior](#expected-behavior) and [Severity rules](#severity-rules), below. |
+| Product specification | 2 / 2 | Spec: [`_docs/specs.md`](_docs/specs.md). Public tracker: [138 issues](https://github.com/andrew-chung-au/socboard/issues?q=is%3Aissue), 98 closed; groomed issues carry acceptance criteria and are filed from the [intake template](.github/ISSUE_TEMPLATE/intake.yml). Agents comment as `PM:`, `Engineer:`, `QA:` and `Orchestrator:` (for example [#234](https://github.com/andrew-chung-au/socboard/issues/234)). 188 merged pull requests. |
+| Agent team | 2 / 2 | Roles: [PM](_docs/agent-kit/team/pm.md), [Software Engineer](_docs/agent-kit/team/software-engineer.md), [QA Engineer](_docs/agent-kit/team/qa-engineer.md), and an orchestrator that launches them. How they hand off, review and finish: [`process.md`](_docs/agent-kit/process.md). QA runs in a fresh session, so it does not share the author's context. Per-tool agent files: [`.claude/agents/`](.claude/agents), [`.opencode/agents/`](.opencode/agents). |
+| Context management | 2 / 2 | [`AGENTS.md`](AGENTS.md) describes the project, every command and the rules, and points to modular docs: the [docs index](_docs/index.md), [process](_docs/agent-kit/process.md), [roles](_docs/agent-kit/team/), [procedures](_docs/agent-kit/procedures/), [decision records](_docs/decisions/), [records](_docs/records/) and [session summaries](_session-summaries/) (one per agent session). |
+| Application | 2 / 2 | React + TypeScript frontend, FastAPI backend, SQLAlchemy on SQLite or Postgres 16. `make run` starts the whole stack locally with one command ([Development](#development)). The [smoke check](#development) logs in, ingests an alert and reads it back from the queue and the audit trail. |
+| Testing | 2 / 2 | `make test` runs unit and in-process integration tests (3,293 Python tests passed in CI on 2026-11-16) and the frontend's Vitest tests. Postgres integration tests run in [`postgres.yml`](.github/workflows/postgres.yml); the user journeys and a Playwright browser test run against the real Compose stack in [`compose.yml`](.github/workflows/compose.yml). `make verify` adds the API contract check, lint and a weakened-test check. |
+| Containerization | 2 / 2 | [`Dockerfile`](Dockerfile) and [`compose.yaml`](compose.yaml): Postgres, one-shot role setup, migrations and seed, the app and a Caddy proxy. `make compose-up` starts it all with one command ([Compose stack](#compose-stack)); CI starts it on every pull request. |
+| Deployment | 2 / 2 | Deployed and reachable at https://44-216-250-242.sslip.io/. Infrastructure as code in [`terraform/`](terraform/README.md) (state bucket, OIDC roles for CI, budgets and snapshots, the server). Deploys by digest through a Systems Manager document ([`socboard-deploy.sh`](terraform/server/socboard-deploy.sh)). The first deploy's step-by-step results: [#335](https://github.com/andrew-chung-au/socboard/pull/335). Runbook: [`deploy-and-teardown.md`](_docs/runbooks/deploy-and-teardown.md). |
+| CI/CD | 1 / 3 | CI runs on every push and pull request ([workflows](.github/workflows/)), and [`publish.yml`](.github/workflows/publish.yml) pushes the tested image to the GitHub Container Registry once every check of a `main` commit is green. **In progress:** deploy to dev from CI ([#238](https://github.com/andrew-chung-au/socboard/issues/238)) and a manual promote to prod with approval and rollback ([#269](https://github.com/andrew-chung-au/socboard/issues/269)). Both workflows are written and tested ([`scripts/ci_deploy.py`](scripts/ci_deploy.py), [`scripts/ci_promote.py`](scripts/ci_promote.py)) and wait for the maintainer to install them (2 more points). |
+| Observability | 0 / 2 | **Planned:** the signal contract is written ([`observability/CONTRACT.md`](observability/CONTRACT.md): metrics, traces and JSON logs sharing a trace id for the ingest-to-queue journey, with privacy rules) and the stack is decided ([decision](_docs/decisions/2026-11-16T0400Z-observability-backend-agent-alert.md)). The work is filed as [roadmap 4](_docs/planning/roadmap-4-devops.md). The app writes plain logs today. |
+| Alerting on user impact | 0 / 1 | **Planned:** an alert when new alerts take more than 5 seconds to reach the queue (the product's own promise), [#296](https://github.com/andrew-chung-au/socboard/issues/296). |
+| On-call agent | 0 / 2 | **Planned:** an agent woken by that alert, with a written mandate and guards, and a drill with a planted defect ([#297](https://github.com/andrew-chung-au/socboard/issues/297) to [#299](https://github.com/andrew-chung-au/socboard/issues/299)). |
+
+### Dig deeper
+
+- **How the team works:** [`process.md`](_docs/agent-kit/process.md), the [backlog order](.kiro/steering/backlog-order.md) and [delivery pace](.kiro/steering/delivery-pace.md) rules, and the [session summaries](_session-summaries/).
+- **Why things are the way they are:** the [decision records](_docs/decisions/) (`make decisions` lists them with their status), starting with the [stack choice](_docs/decisions/20261105T133030Z-stack-choice.md) and the [deploy design](_docs/decisions/2026-11-13T2156Z-deploy.md).
+- **What was checked on real systems, and when:** the [deploy evidence timeline](_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md), including two incidents and how they were handled.
+- **The plan:** roadmaps for [Core](_docs/planning/roadmap-1-core.md), [Deploy](_docs/planning/roadmap-3-deploy.md) and [DevOps](_docs/planning/roadmap-4-devops.md).
+- **Security choices:** an append-only audit trail enforced by database triggers and a role that cannot disable them ([Compose stack](#compose-stack)), login and ingest rate limits ([Development](#development)), no secret in Terraform state, images or logs ([deploy decision](_docs/decisions/2026-11-13T2156Z-deploy.md)).
+
+## About SOCBoard
+
 SOCBoard is a web-based case management board for a security operations centre (SOC). Alerts arrive through an API, receive a severity from fixed rules, and appear in a shared analyst queue. Analysts claim an alert, investigate it and move it through a defined workflow to closure. Every status change, assignment and note is recorded in an audit trail.
 
 All data is synthetic. The graded version uses no machine learning in its critical path, so every severity and every status change can be explained and tested.
@@ -194,7 +243,9 @@ CI pushes the image that the Compose job tested to the GitHub Container Registry
 
 ### Deploy to dev
 
-After a push to `main` is published, CI deploys that digest to dev (`.github/workflows/deploy-dev.yml`, logic in `scripts/ci_deploy.py`; the decision is `_docs/decisions/2026-11-15T2100Z-deploy-dev-from-ci.md`). Dev and prod are two Compose stacks on one server; this workflow deploys dev only.
+**Status:** the workflow is written and tested but not yet installed: it is proposed in `_human-tasks/238-proposed/deploy-dev.yml` until the maintainer installs it (#238). Until then dev is deployed by hand with the same Systems Manager document (`_docs/runbooks/deploy-and-teardown.md`, section 2.2).
+
+After a push to `main` is published, CI deploys that digest to dev (`.github/workflows/deploy-dev.yml` once installed, logic in `scripts/ci_deploy.py`; the decision is `_docs/decisions/2026-11-15T2100Z-deploy-dev-from-ci.md`). Dev and prod are two Compose stacks on one server; this workflow deploys dev only.
 
 - **When:** the workflow runs every time `socboard publish` completes. Its `find` job, which holds no cloud role, deploys only when that run was a push to `main` of this repository, published an image (it left the artifact `published-image`), and its commit is still the head of `main`. Otherwise it ends green saying "this publish run published nothing" or "superseded: main has moved on". A pull request, a fork or another branch never reaches the `deploy` job.
 - **How:** the `deploy` job runs in the `deploy` Environment, assumes the deploy role by OIDC (secret `AWS_DEPLOY_ROLE_ARN`, no stored key), and sends the Systems Manager document `socboard-deploy` with the digest as its one parameter. It waits up to 20 minutes and reads the result by the deploy script's fixed lines: `socboard-deploy: deployed.` or `socboard-deploy: already deployed. Nothing was changed.` pass; any other status, response code or output fails. Then it checks `https://<host>/api/health` from the runner (200, up to 6 tries). Only the status, the response code and the script's fixed `socboard-deploy:` lines reach the public log; the rest of the output stays in Systems Manager.
@@ -212,5 +263,8 @@ A person promotes to prod, by hand, the digest dev is running, and rolls prod ba
 Real log sources, real customer data, automated response actions and any AI-generated verdicts.
 
 ## Planned Future Development
+
+- Deploy to dev from CI (#238) and a manual promote to prod with approval and rollback (#269): written and tested, waiting to be installed.
+- Observability, an alert on user impact and an on-call agent: [roadmap 4](_docs/planning/roadmap-4-devops.md), signal contract in [`observability/CONTRACT.md`](observability/CONTRACT.md).
 
 A LangGraph triage step that suggests severity and a summary for an analyst to confirm, n8n for intake and escalation, and an MCP server for querying cases and checking a vulnerability tracker for known exposures.
