@@ -18,7 +18,7 @@ The lanes as of 2026-11-16 (the maintainer's split). The two-session setup this 
 | Terraform A (server) | #256, #236, #266 | `terraform/server/`, the bootstrap, `terraform/README.md` (the server and bootstrap sections), the human tasks for the server applies |
 | Terraform B (access) | #268 | `terraform/ci-access/`, `terraform/iam-and-budgets/`, `terraform/README.md` (the CI access and IAM sections) |
 | Application | #281, #267, #240 | `socboard/` (except the instrumentation), `tests/` for the app, `frontend/`, `terraform/server/socboard-deploy.sh` and its document and tests |
-| Compose and CI | #209, #269 | `compose.yaml`, `compose/`, `.github/workflows/` (all, including `terraform-*.yml`), `e2e/`, the image |
+| CI (the session that owns #209; it took over the Compose and CI lane on 2026-11-16) | #209, the masking in `_human-tasks/238-proposed/`, #269 | `compose.yaml`, `compose/`, `.github/workflows/` (all, including `terraform-*.yml`), `e2e/`, the image |
 | DevOps | the Phase 3 roadmap and its issues, once filed | `compose.observability.yaml` (layered on `compose.yaml`), `observability/`, the telemetry code in `socboard/`, their tests, and the observability CI checks (as diffs for the Compose and CI lane or the maintainer, since workflows are protected) |
 
 `terraform/README.md` is shared: each Terraform lane edits only its own sections and merges `origin/main` before marking a pull request ready. `socboard/` is shared between Application and DevOps: DevOps adds telemetry only, and says which files it touched in its claim.

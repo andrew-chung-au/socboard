@@ -1,5 +1,7 @@
 # First apply, part A: state, IAM and budgets, CI access and the server
 
+> **Record of a finished run.** The maintainer ran this checklist on 2026-11-15/16; its results are in "Record the result" below and in `_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md`. Do not run it again. Its commands are as they were then: since #268, `iam-and-budgets/` also requires `app_prod_secret_arn`, so a new apply follows the steps in `terraform/README.md`, not this file.
+
 ## Purpose
 
 Take the AWS account from nothing to the four Terraform parts applied (`state/`, `iam-and-budgets/`, `ci-access/`, `server/`), set the GitHub Environments, the repository secrets and the state bucket variable, and record every `VERIFY:` this apply can settle. Issue: #207 (Deploy item D19a).
@@ -219,40 +221,42 @@ If different: an empty list can mean no snapshot or a snapshot without the tag. 
 
 ## Record the result
 
+Filled on 2026-11-16 by the planning session from the maintainer's run and outputs (maintainer's run, 2026-11-15/16). "As reported" means the maintainer reported the result and the output was not kept.
+
 Write PASS, FAIL or NOT SETTLED in each row, with a short note. A FAIL note says what you saw and links the new issue. Commit this file with the results. Results contain no account number, no ARN with it, no e-mail address, no token, key or secret value.
 
 | Row | What is checked | Source | Result | Note |
 |---|---|---|---|---|
-| 1 | Terraform is 1.17.2; every provider and backend example names `us-east-1`; the caller is the intended account | step 1 | NOT CHECKED | |
-| 2 | A secret with no version can be created and its ARN used by `iam-and-budgets/` | step 2; `iam-and-budgets/main.tf` (`read_app_secret`) | NOT CHECKED | |
-| 3 | `state/` steps 1 to 6 as expected: 6 resources, provider 6.x and backend argument names accepted, the empty lifecycle `filter {}` gives no warning, the native lock file seen | step 3.1; `state/main.tf`, `state/backend.tf.example` | NOT CHECKED | |
-| 4 | `iam-and-budgets/` steps 1 to 6 as expected: 8 resources, the inline policy names only the one secret, the lifecycle policy `ENABLED`; whether the second apply was needed | step 3.2; `iam-and-budgets/main.tf` | NOT CHECKED | |
-| 5 | The budget notification address is confirmed (or no confirmation mail was sent: say which); the budget was accepted in `us-east-1` | step 3.2; `iam-and-budgets/main.tf` (`aws_budgets_budget`) | NOT CHECKED | |
-| 6 | Width of `AmazonSSMManagedInstanceCore`, as you read its current document | step 3.2 (README step 6); #162's trade-offs | NOT CHECKED | |
-| 7 | Width of `AWSDataLifecycleManagerServiceRole` (account-wide, no tag condition?), as you read its current document | step 3.2 (README step 6); #162's trade-offs | NOT CHECKED | |
-| 8 | `ci-access/` steps 1 to 6 as expected: 7 resources (6 if the provider was reused), the provider made without `thumbprint_list` | step 3.3; `ci-access/main.tf` | NOT CHECKED | |
-| 9 | The real OIDC subject has the numeric-id form (#156 step 1 passes); if not, the README's "If the subject has no ids" path was followed, never a looser trust | step 5; `ci-access/main.tf`, `ci-access/plan.tf` | NOT CHECKED | |
-| 10 | Branch check: see the #156 task file's own table (steps 2 and 3 refused) | step 5 | NOT CHECKED | |
-| 11 | `infra`: named reviewer, administrators not exempt, `main` only; `deploy`: `main` only; the three role ARNs set as repository secrets (write "ARN set") and `TF_STATE_BUCKET` as a variable | step 4 | NOT CHECKED | |
-| 12 | T3 is offered in the chosen zone (default `us-east-1a`); whether `us-east-1e` is listed | step 6; `server/variables.tf` | NOT CHECKED | |
-| 13 | The `aws_ami` lookup (owner `099720109477`, the noble 24.04 amd64 name pattern) finds an image, and the default subnet of the zone is found | step 6 (README step 4); `server/main.tf` | NOT CHECKED | |
-| 14 | `server/` steps 1 to 6 as expected: 9 resources, three outputs | step 6; `server/main.tf` | NOT CHECKED | |
-| 15 | The instance, data volume, security group and Elastic IP each carry `project=socboard` in their create call (CloudTrail) | step 6; `server/main.tf`, `ci-access/apply.tf` | NOT CHECKED | |
-| 16 | The root volume is untagged and the data volume tagged `project=socboard`; both encrypted | step 6 (README step 6) | NOT CHECKED | |
-| 17 | Metadata tokens required, hop limit 1 | step 6 (README step 6) | NOT CHECKED | |
-| 18 | The security group's egress is only TCP 80 and 443 (the allow-all rule was removed) | step 6; `server/main.tf` | NOT CHECKED | |
-| 19 | The instance is online in Systems Manager within about ten minutes, with egress limited to TCP 80 and 443 | step 6 (README step 6); `server/main.tf` | NOT CHECKED | |
-| 20 | `apt-get update` and an HTTPS request to `ghcr.io` work through that egress | step 6; `server/main.tf` (`egress_ports`) | NOT CHECKED | |
-| 21 | The data volume shows as an NVMe device | step 6; `server/main.tf` (`aws_volume_attachment`) | NOT CHECKED | |
-| 22 | The Elastic IP (write it: it is public, and D17c builds the hostname from it) | step 6 | NOT CHECKED | |
-| 23 | A second plan shows "No changes." in all four folders | step 7 | NOT CHECKED | |
-| 24 | The plan role's write is refused (`create-tags` dry run: `UnauthorizedOperation`) | step 8; `ci-access/plan.tf` | NOT CHECKED | |
-| 25 | The plan role's secret read is refused (`AccessDeniedException`) | step 8; `ci-access/plan.tf` (`DenySecretValues`) | NOT CHECKED | |
-| 26 | The plan role is enough for a plan of `server/` (no read denied). Recorded for D18b; this apply used your own credentials, so expect NOT SETTLED unless D18b's first plan has run | `ci-access/plan.tf` | NOT CHECKED | |
-| 27 | The apply role's EC2 list is enough to apply `server/`. Recorded for D22b; expect NOT SETTLED (row 15 is the evidence so far) | `ci-access/apply.tf` | NOT CHECKED | |
-| 28 | The snapshot schedule took a snapshot of the data volume only, not the root volume, with the tag copied | step 9; `iam-and-budgets/main.tf` (`copy_tags`) | NOT CHECKED | |
-| 29 | `backend.tf` and `.terraform.lock.hcl` committed in all four folders | step 3, step 6 | NOT CHECKED | |
-| 30 | Whether Data Lifecycle Manager needs the `socboard-snapshot` role: the lifecycle policy applies with it as its execution role (Lifecycle Manager console, the policy's IAM role) and takes the step 9 snapshot with it | step 3.2, step 9; `iam-and-budgets/main.tf` (`aws_iam_role.snapshot`) | NOT CHECKED | |
+| 1 | Terraform is 1.17.2; every provider and backend example names `us-east-1`; the caller is the intended account | step 1 | PASS | Terraform v1.17.2 installed as the exact release binary (SHA-256 checked against HashiCorp's list) beside an older package copy; the shell's cached path had to be cleared (`hash -r`). Every resource landed in `us-east-1`. Caller: the SSO member account (profile `socboard`), after a first attempt ran in the organisation's main account by mistake (see the evidence timeline). |
+| 2 | A secret with no version can be created and its ARN used by `iam-and-budgets/` | step 2; `iam-and-budgets/main.tf` (`read_app_secret`) | PASS | `socboard/app` created empty in the member account and its ARN used by `iam-and-budgets/` (plan named only that secret). |
+| 3 | `state/` steps 1 to 6 as expected: 6 resources, provider 6.x and backend argument names accepted, the empty lifecycle `filter {}` gives no warning, the native lock file seen | step 3.1; `state/main.tf`, `state/backend.tf.example` | PASS | 6 resources, `No changes` after the move, state in the bucket under `state/`. Lock file and the lifecycle-filter warning not observed. In the first (main-account) attempt the local state was deleted before the move and the 6 resources were re-adopted with `terraform import`; that bucket was later destroyed. |
+| 4 | `iam-and-budgets/` steps 1 to 6 as expected: 8 resources, the inline policy names only the one secret, the lifecycle policy `ENABLED`; whether the second apply was needed | step 3.2; `iam-and-budgets/main.tf` | PASS | 8 resources applied; reported as expected. Whether the second apply was needed: not reported. |
+| 5 | The budget notification address is confirmed (or no confirmation mail was sent: say which); the budget was accepted in `us-east-1` | step 3.2; `iam-and-budgets/main.tf` (`aws_budgets_budget`) | NOT SETTLED | Confirmation mail not reported. |
+| 6 | Width of `AmazonSSMManagedInstanceCore`, as you read its current document | step 3.2 (README step 6); #162's trade-offs | NOT SETTLED | The managed policy's current document was not read in this run. |
+| 7 | Width of `AWSDataLifecycleManagerServiceRole` (account-wide, no tag condition?), as you read its current document | step 3.2 (README step 6); #162's trade-offs | NOT SETTLED | The managed policy's current document was not read in this run. |
+| 8 | `ci-access/` steps 1 to 6 as expected: 7 resources (6 if the provider was reused), the provider made without `thumbprint_list` | step 3.3; `ci-access/main.tf` | PASS | No GitHub provider existed in the member account (count 0), so this part created it: 7 resources and three role ARNs. `thumbprint_list` not checked. |
+| 9 | The real OIDC subject has the numeric-id form (#156 step 1 passes); if not, the README's "If the subject has no ids" path was followed, never a looser trust | step 5; `ci-access/main.tf`, `ci-access/plan.tf` | PASS | #156 step 1: `assumed socboard-ci-plan/probe-plan` (draft PR #255), so the trust's numeric-id subject matches a real token. |
+| 10 | Branch check: see the #156 task file's own table (steps 2 and 3 refused) | step 5 | PASS | #156 steps 2 and 3 refused by GitHub's environment rule; see that file's table. |
+| 11 | `infra`: named reviewer, administrators not exempt, `main` only; `deploy`: `main` only; the three role ARNs set as repository secrets (write "ARN set") and `TF_STATE_BUCKET` as a variable | step 4 | PASS | Read back by `gh api`: `infra` with the maintainer as required reviewer, admin bypass off, `main` only; `deploy` with `main` only and admin bypass turned off (it was on); `AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN` as secrets (ARN set); `TF_STATE_BUCKET` as a variable. |
+| 12 | T3 is offered in the chosen zone (default `us-east-1a`); whether `us-east-1e` is listed | step 6; `server/variables.tf` | PASS | `us-east-1a` offers `t3.small`. Whether `us-east-1e` was listed: not recorded. |
+| 13 | The `aws_ami` lookup (owner `099720109477`, the noble 24.04 amd64 name pattern) finds an image, and the default subnet of the zone is found | step 6 (README step 4); `server/main.tf` | PASS | The lookup found a noble 24.04 amd64 image and the default subnet (the apply succeeded). |
+| 14 | `server/` steps 1 to 6 as expected: 9 resources, three outputs | step 6; `server/main.tf` | PASS | Applied at `5cc7352`, which already included #233's bootstrap, so the plan was 10 resources (the 9 here plus the Elastic IP association) and four outputs, including `hostname`. |
+| 15 | The instance, data volume, security group and Elastic IP each carry `project=socboard` in their create call (CloudTrail) | step 6; `server/main.tf`, `ci-access/apply.tf` | NOT SETTLED | CloudTrail create calls not read in this run. |
+| 16 | The root volume is untagged and the data volume tagged `project=socboard`; both encrypted | step 6 (README step 6) | NOT SETTLED | Not checked directly; row 28 (step 9) shows which volume is snapshotted. |
+| 17 | Metadata tokens required, hop limit 1 | step 6 (README step 6) | NOT SETTLED | Not checked in this run. |
+| 18 | The security group's egress is only TCP 80 and 443 (the allow-all rule was removed) | step 6; `server/main.tf` | PASS | `describe-security-groups` egress: exactly `tcp 80 80` and `tcp 443 443`. |
+| 19 | The instance is online in Systems Manager within about ten minutes, with egress limited to TCP 80 and 443 | step 6 (README step 6); `server/main.tf` | PASS | Online in Systems Manager within the wait loop. |
+| 20 | `apt-get update` and an HTTPS request to `ghcr.io` work through that egress | step 6; `server/main.tf` (`egress_ports`) | PASS | The bootstrap installed its packages through that egress; `curl https://ghcr.io/v2/` on the server returned `401`. |
+| 21 | The data volume shows as an NVMe device | step 6; `server/main.tf` (`aws_volume_attachment`) | PASS | `findmnt` shows the data volume as `/dev/nvme1n1` (D19b, 2026-11-16). |
+| 22 | The Elastic IP (write it: it is public, and D17c builds the hostname from it) | step 6 | PASS | 44.216.250.242; hostname `44-216-250-242.sslip.io`. |
+| 23 | A second plan shows "No changes." in all four folders | step 7 | PASS | `No changes` in all four folders, as reported. |
+| 24 | The plan role's write is refused (`create-tags` dry run: `UnauthorizedOperation`) | step 8; `ci-access/plan.tf` | PASS | `create-tags (dry run): UnauthorizedOperation`. |
+| 25 | The plan role's secret read is refused (`AccessDeniedException`) | step 8; `ci-access/plan.tf` (`DenySecretValues`) | PASS | `get-secret-value: AccessDeniedException`. |
+| 26 | The plan role is enough for a plan of `server/` (no read denied). Recorded for D18b; this apply used your own credentials, so expect NOT SETTLED unless D18b's first plan has run | `ci-access/plan.tf` | PASS | #209's plan job (`plan: success`) on PR #263, run 43747150371, planned `server/` with the plan role. Its logs were deleted on 2026-11-16 because the credentials action printed the role's unique ID; the run's result remains. |
+| 27 | The apply role's EC2 list is enough to apply `server/`. Recorded for D22b; expect NOT SETTLED (row 15 is the evidence so far) | `ci-access/apply.tf` | NOT SETTLED | Waits for an apply from CI (D22b, deferred). |
+| 28 | The snapshot schedule took a snapshot of the data volume only, not the root volume, with the tag copied | step 9; `iam-and-budgets/main.tf` (`copy_tags`) | NOT CHECKED | Pending: step 9 on 2026-11-16 after 04:00 UTC. |
+| 29 | `backend.tf` and `.terraform.lock.hcl` committed in all four folders | step 3, step 6 | PASS | Committed on `main`: `4073f78` (state), `588028d` (state, iam-and-budgets, ci-access), `4e6c7d1` (server). |
+| 30 | Whether Data Lifecycle Manager needs the `socboard-snapshot` role: the lifecycle policy applies with it as its execution role (Lifecycle Manager console, the policy's IAM role) and takes the step 9 snapshot with it | step 3.2, step 9; `iam-and-budgets/main.tf` (`aws_iam_role.snapshot`) | NOT CHECKED | Pending step 9. |
 
 Not settled by this apply, so no row: the deploy role's resource split and its AWS-owned-document deny (`ci-access/deploy.tf`; needs the D20 document), the Environment subject form from a `main` run (`ci-access/apply.tf`, `deploy.tf`; D22, unless the #156 task's optional step 4 shows it), fork pull requests getting no token (D18b), and `stop_instance_before_detaching` (seen only at a detach or teardown).
 

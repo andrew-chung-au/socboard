@@ -119,11 +119,11 @@ Paste the output or write pass or fail for each step, with the run links. Commit
 
 | Step | Pass or fail | Output or note |
 |---|---|---|
-| 1 | NOT CHECKED | |
-| 2 | NOT CHECKED | |
-| 3 | NOT CHECKED | |
-| 4 | NOT CHECKED | |
-| 5 | NOT CHECKED | |
+| 1 | PASS | `assumed socboard-ci-plan/probe-plan` (draft PR #255, 2026-11-16). |
+| 2 | PASS | Refused before AWS: "Branch "oidc-probe-apply" is not allowed to deploy to infra due to environment protection rules." |
+| 3 | PASS | Refused before AWS: "Branch "oidc-probe-deploy" is not allowed to deploy to deploy due to environment protection rules." |
+| 4 | SKIPPED | Not needed: GitHub refused both before any AWS call, so the refusal is the branch rule; skipping avoids opening the role. |
+| 5 | PASS | Throwaway branches deleted and PR #255 closed, not merged. The probes were pushed with `--no-verify` because the publish workflow's test refused extra workflow files (since fixed in #258). |
 
 ## Risk
 
