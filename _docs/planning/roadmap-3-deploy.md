@@ -2,7 +2,7 @@
 
 Order and status only. Acceptance criteria live on the issues; open/closed is read from the tracker. Scope and reasons: `_docs/specs.md` (§3 journey 3, §4 Deploy stories, §5 invariants, §6 Phase 2). Method: `_docs/planning/03_deployment.md` (course material for this project, followed here). Roadmap 1 (Core) is `roadmap-1-core.md`; DevOps becomes roadmap 4.
 
-- **Status:** next (Core is now). It starts when Core ends and when the Deploy spec changes (human-approved 2026-11-12) are committed to `_docs/specs.md`. Tasks are proposed issues without numbers; each is filed after the human approves the backlog proposal and gets its number then.
+- **Status:** in progress, near the end. See "Status at 2026-11-16" under Tasks; the tracker wins where they differ.
 - **Revision, 2026-11-13 (human-approved recommendations):** the task list below is superseded in detail by `_docs/planning/deploy-backlog-proposal.md` (D1 to D23). Changes: task 4 is split (Postgres support, then the append-only audit rule on Postgres); login and ingest limiting are added; task 3 gains the token secret and treats the poll interval as a build argument; #100 is a prerequisite of the image; the image build joins CI with the Dockerfile. Region: deployment `us-east-1` (the human's own account, home region `ap-southeast-2`). Wave 1 is filed: #139 (decision record), #140 (serve the build), #141 (deployed-mode settings), #142 (container bind opt-in), #143 (Postgres). Later items are filed as wave 1 progresses.
 - **Goal:** SOCBoard runs from one container image with Postgres, starts with one Docker Compose command, is covered by integration and end-to-end tests, is reachable at a public HTTPS URL on AWS created by Terraform, and is deployed by CI/CD only when the tests pass.
 - **Who:** **CI** = GitHub Actions can run it; **Human** = needs the human (AWS account, `terraform apply`, GitHub settings, secrets); **Eng** = the Engineer in the sandbox (no Docker, Terraform, AWS credentials or push).
@@ -36,6 +36,20 @@ Order and status only. Acceptance criteria live on the issues; open/closed is re
   - Nothing is proven until a real apply. Eng cannot run `plan` or `apply`, so CI runs `fmt` and `validate` and the human runs the first apply. Mark AWS-specific details unverified (`VERIFY:`) in the Terraform issues.
 
 ## Tasks, in order (D-labels; the issue text is in `_docs/planning/deploy-backlog-proposal.md` and the draft files beside it)
+
+**Status at 2026-11-16** (read from `origin/main` and the tracker; it goes stale, the tracker wins)
+
+- **Done, applied and checked on the real systems:** D15 state bucket, D16 CI access, D17a instance IAM and budgets, D17b server, D17c bootstrap, #256 hardened bootstrap, D19a first apply (#207), D19b re-apply (#236), #266 prod Caddy site and data folder (applied 2026-11-16, record pending in #266), #268 prod access (code merged; the maintainer's re-apply pending). The results are in `_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md`.
+- **Done in code:** D1 to D14 (app, Postgres, image, Compose, integration and browser tests, image publish), D20 deploy script (#237 stage a), D21 smoke check, D22a deploy to dev (#238, its workflow is a proposal the maintainer applies after the first deploy), D24, #261, #271, #281.
+- **Next, in order (each names the event that ends its wait, `.kiro/steering/real-dependencies-only.md`):**
+  1. #314 (deploy script points Postgres at `/srv/socboard-data/postgres`): must merge before the first deploy.
+  2. **D20 first deploy to dev** (#237 stage b, the maintainer's run): after #314 merges. Unlocks the Deployment criterion.
+  3. Apply #238's workflow and set `DEPLOY_INSTANCE_ID` (now `i-071fe10ec49fbbbe5`) and `DEPLOY_URL`: after the first deploy. Unlocks CD to dev.
+  4. #268 re-apply of `iam-and-budgets/` and `ci-access/`, with the plan role's `ssm:DescribeDocumentPermission` fix: after that fix merges.
+  5. #267 (deploy script `dev`/`prod` parameter) and #269 (manual promote with rollback), then one promote run: unlocks the manual production deploy.
+  6. #240 (D23 runbook and teardown): after the first deploy, so its facts are real.
+- **Not needed for the rubric, kept at low priority:** #209 (read-only plan on pull requests), #307, #239 (D22b, deferred), #218. Step 9 (the snapshot check) blocks nothing.
+- **Lanes:** see the table in `_docs/planning/deploy-coordination.md`. DevOps (Phase 3) runs in parallel from `roadmap-4-devops.md`.
 
 Order and status only. An item with an issue number is filed; open or closed is read from the tracker. The earlier 20-task list is replaced by this one (changes and reasons: the proposal, sections 2 and 9). No item starts before the human approves its issue.
 
