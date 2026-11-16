@@ -220,7 +220,7 @@ def job_step(doc, job, needle):
         (lambda doc, text: text + "\n# ${{ secrets.OTHER }}\n", "reads secrets other than"),
         (lambda doc, text: text.replace("secrets.AWS_DEPLOY_ROLE_ID", "secrets.AWS_PLAN_ROLE_ID"), "reads secrets other than"),
         (lambda doc, text: text + "\n# ${{ vars.OTHER }}\n", "variables other than"),
-        (lambda doc, text: doc["jobs"]["promote"]["steps"].pop(2), "lacks the check, mask, role, deploy or upload step"),
+        (lambda doc, text: doc["jobs"]["promote"]["steps"].pop(2) and None, "lacks the check, mask, role, deploy or upload step"),
         (lambda doc, text: doc["jobs"]["promote"]["steps"].insert(1, doc["jobs"]["promote"]["steps"].pop(3)), "not check, mask, role, deploy"),
         (lambda doc, text: job_step(doc, "promote", "::add-mask::")["env"].update(AWS_DEPLOY_ROLE_ID="${{ secrets.AWS_DEPLOY_ROLE_ARN }}"), "mask step"),
         (lambda doc, text: job_step(doc, "promote", "configure-aws-credentials")["with"].update({"aws-region": "eu-west-1"}), "us-east-1"),
