@@ -70,6 +70,7 @@ class StepFailed(Exception):
 class Answer:
     status: int
     body: bytes
+    retry_after: str | None = None  # the raw `Retry-After` header text, for a caller that waits on a 429
 
 
 def _error_text(answer: Answer) -> str:
@@ -200,7 +201,7 @@ class Client:
             # (None when there is no valid length or the answer is chunked, 0 once all arrived).
             if getattr(response, "length", None):
                 raise StepFailed(CUT_SHORT)
-            return Answer(response.status, b"".join(chunks))
+            return Answer(response.status, b"".join(chunks), response.getheader("Retry-After"))
         except StepFailed:
             raise
         except TimeoutError:
