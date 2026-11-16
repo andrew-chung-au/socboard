@@ -17,3 +17,10 @@ Not part of the approved text above; it records two rulings the human made after
 - **Ruling B:** a second job, `log-check` (`needs: plan`, `if: always()` and the same-repository condition, `permissions: actions: read` only, no secret), downloads the plan job's log through the REST API after it ends and fails if it matches `AROA[A-Z0-9]+`. A step cannot read its own job's log, hence the second job. It prints only fixed pass or fail lines and fails closed when the log cannot be fetched or is empty.
 - **Trade-offs:** the check detects a leak after the log is public; it does not undo it, so the human deletes that run's logs. A transient API error turns a clean run red. A same-repository pull request can edit the `log-check` job, which holds only `actions: read`.
 - **Evidence:** `.github/workflows/terraform-plan.yml`, `tests/test_terraform_plan_workflow.py`; the secret `AWS_PLAN_ROLE_ID` is not yet in the D19a secret list or `terraform/README.md`.
+
+## Addendum 2, 2026-11-16: the log-check job is removed; follow-up #307
+
+- **Finding:** in three runs at PR #263 (43777278028 at 450fbd5, 43780300200 at 342bb88, 43784106149 at 2988b71) the mask step and the credentials step passed and the plan job's log held 0 matches of `AROA[A-Z0-9]+` when counted from outside the run, so ruling A works. The `log-check` job failed in all three: the jobs listing worked, the log download failed inside the run on all 5 tries 15 s apart ("no HTTP status" in the last run); the same download works from outside the run after it ends.
+- **Ruling (the human, Decision 1):** the in-run check is removed from this workflow and moved to follow-up issue #307, so #209 is not held up by the backstop. Ruling A stands. The workflow is one job again. Its last version with the job is commit 2988b71.
+- **Trade-offs:** until #307, nothing checks the public log after a run; masking is best-effort and depends on the secret `AWS_PLAN_ROLE_ID` holding the current role's unique ID (a recreated role has a new one).
+- **Evidence:** `.github/workflows/terraform-plan.yml`, `tests/test_terraform_plan_workflow.py`, issue #307.
