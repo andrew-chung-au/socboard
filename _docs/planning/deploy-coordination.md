@@ -38,6 +38,8 @@ Adding a new issue to a lane is the Planning lane's call, announced to the maint
 9. **CI is the evidence.** Neither session can install packages or run Docker, Terraform or Postgres here. Every issue pushes early, opens a draft pull request, and reads CI. Anything CI cannot run goes in a human task file.
 10. **Handoffs go through GitHub.** Status lives in the tracker (labels, comments, pull requests, CI), not in a document that goes stale. At each decision point a session sends the human one message with the pull request, the head commit, the CI run, the QA verdicts, the Reviewer findings and what it needs decided.
 
+11. **Wait only for a real dependency** (the maintainer's ruling, 2026-11-16). A start condition, an order or a time holds work back only while the reason behind it is still true; say in one sentence what would break or be done twice. Writing, testing and merging code never wait for a deploy, an apply or a human run. A change that replaces the server is best made before anything runs on it. Recording a result never blocks work. The full text is `.kiro/steering/real-dependencies-only.md`.
+
 ## Message hygiene (so a reply reaches the right session)
 
 - Start every message to the human with `[A]` or `[B]`.

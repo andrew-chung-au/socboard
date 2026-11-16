@@ -585,7 +585,7 @@ In the record, each row is PASS, FAIL or NOT CHECKED. A FAIL says what you saw, 
 
 #### What changes in these steps for the prod change (issue #266)
 
-For the replacement that adds the prod site, this is what differs. It is the maintainer's apply, and it waits for #237's first deploy.
+For the replacement that adds the prod site, this is what differs. It is the maintainer's apply. It does not need to wait for #237's first deploy: the maintainer applied it on 2026-11-16, before the first deploy, so the replacement restarted nothing and no instance id had to be updated.
 
 - Step 2: `terraform output` shows four values, because `prod_hostname` does not exist yet.
 - Step 3: the counts are the usual ones (3/0/3 once the deploy document exists); the plan also lists "Changes to Outputs" with `prod_hostname`. The stop rule is unchanged.
