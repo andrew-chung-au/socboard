@@ -61,18 +61,18 @@ The Engineer and the PM were this session (Terraform lane B). The QA blocks are 
 - `_human-tasks/269-proposed/promote-prod.yml` (new; protected workflow proposal)
 - `_human-tasks/2026-11-16T0332Z-human-task-269-engineer-promote-and-rollback.md` (new; result table not yet filled)
 - `_docs/decisions/2026-11-16T0332Z-promote-to-prod.md` (new, proposed), `_docs/index.md` (one row), `README.md` (`### Promote to prod`)
-- `_docs/records/findings/269.json`, this summary
+- `_docs/records/findings/269.json`, this summary, and (close-out branch) one sentence in the "Prod access" section of `terraform/README.md`
 
 ## Decisions made by the human
 
 - Assigned #269 to this lane ("take and groom #269, then build it once D20 has run") and labelled it `approved` at body hash `0877a2615a879096fc9198b8d474ed26d81510b860844494a1d5b3ec3f491fb5`.
 - Merged PR #320 after the "ship or fix?" question at the second fix round; the merge is taken as "ship".
 - Not answered: the decision questions 1 (the post-deploy check) and 2 (naming the approver); the build uses option A for both, as the Claim comment and the decision record say. The decision record is still `proposed`; the human has not approved it by name.
-- Not answered: whether to correct the body's two wording slips (F-269-6).
+- Said "ok complete documentation" after the close-out questions. Done on that word: the body's two wording slips (F-269-6) corrected by a PM edit (new hash `a8e4762e654ac600c50bac9b1ad135c2b2f9c74be7857a8ccee4629a790f0c54`, waiting for the human's confirm), and the `terraform/README.md` "Prod access" masking line now names the promote workflow's mask step. Not done on that word: the decision record's `approved` status and decision questions 1 and 2, which need the human's explicit approval by name (`deploy-coordination.md`, message hygiene).
 
 ## Mismatches with the spec or design docs
 
-The body's "three jobs" and `already` (F-269-6). No mismatch with the spec.
+The body's "three jobs" and `already` (F-269-6), corrected after the merge. No mismatch with the spec.
 
 ## Commands to validate
 
