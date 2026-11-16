@@ -162,10 +162,20 @@ def check_environment(env):
     return instance, url
 
 
-def send(instance, digest, revision):
+def send(instance, digest, revision, environment="dev"):
+    # A dev run sends the digest alone, exactly as before the document had a second parameter (#267), so the
+    # dev call is unchanged. A prod run (the promote workflow, #269) names the environment as well: the
+    # document's second parameter. VERIFY: that the JSON form of --parameters is accepted for a document with
+    # two parameters (the first prod promote shows it; a refusal is "aws ssm send-command failed").
+    if environment == "dev":
+        parameters = f"digest={digest}"
+    elif environment == "prod":
+        parameters = json.dumps({"digest": [digest], "environment": ["prod"]}, separators=(",", ":"))
+    else:
+        raise Refused("the environment must be dev or prod")
     code, stdout, _ = run_aws(
         ["ssm", "send-command", "--region", REGION, "--document-name", DOCUMENT, "--instance-ids", instance,
-         "--parameters", f"digest={digest}", "--comment", f"socboard deploy {revision[:7]}", "--output", "json"]
+         "--parameters", parameters, "--comment", f"socboard deploy {revision[:7]}", "--output", "json"]
     )
     if code != 0:
         raise Refused(f"aws ssm send-command failed (exit {code}); the instance id in DEPLOY_INSTANCE_ID may be stale")
