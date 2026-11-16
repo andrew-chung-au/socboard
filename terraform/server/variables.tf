@@ -15,7 +15,7 @@ variable "instance_type" {
 variable "data_volume_gib" {
   description = "Size of the data volume in GiB. It can grow later, never shrink."
   type        = number
-  default     = 10
+  default     = 11
 
   validation {
     condition     = var.data_volume_gib >= 8 && var.data_volume_gib <= 50 && floor(var.data_volume_gib) == var.data_volume_gib
