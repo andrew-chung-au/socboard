@@ -59,7 +59,7 @@ RAW_BASE='https://raw.githubusercontent.com/andrew-chung-au/socboard'
 SECRET_ID='socboard/app'
 SECRET_REGION='us-east-1'
 IMDS='http://169.254.169.254'
-DATA_DIR='/srv/socboard-data'
+DATA_DIR='/srv/socboard-data/postgres'
 # The stack network's gateway as the app sees Caddy's requests (README, "The forwarded address").
 # VERIFY: Compose pins this gateway; the check below fails the run if the network has another.
 PROXY_ADDR='10.231.77.1'
