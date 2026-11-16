@@ -107,7 +107,9 @@ gh api repos/andrew-chung-au/socboard/environments/deploy-prod/deployment-branch
 Expected: `["main"]` and nothing else.
 Risk: changes who may deploy to prod. Undo: `gh api -X DELETE repos/andrew-chung-au/socboard/environments/deploy-prod`.
 
-### Step 5: Register the role's unique ID so GitHub masks it
+### Step 5: The role's unique ID is registered so GitHub masks it (done: the maintainer set `AWS_DEPLOY_ROLE_ID` on 2026-11-16)
+
+Nothing to set now. The `aws iam get-role` command below is kept for a recreated role; the list command after it is the read-back to run now.
 
 The credentials action prints the role's unique ID (it starts `AROA`) in clear, and GitHub masks only registered values. `deploy-prod` uses the same role as `deploy`, so one repository secret, visible to both Environments' jobs, covers both. A job masks it only if its workflow references the secret before the credentials step; that edit is the Compose and CI lane's.
 
@@ -246,7 +248,7 @@ Fill the table once, when you run the steps, with the date, what you saw, and th
 | 2 `iam-and-budgets/` plan and apply | | NOT CHECKED | | |
 | 3 `ci-access/` plan and apply | | NOT CHECKED | | |
 | 4 Environment and read-back | 2026-11-16 | DONE: Environment `deploy-prod` created (maintainer); `can_admins_bypass` verified as the field name. The read-back of this step: NOT CHECKED | | |
-| 5 `AWS_DEPLOY_ROLE_ID` | | NOT CHECKED | | |
+| 5 `AWS_DEPLOY_ROLE_ID` | 2026-11-16 | DONE: secret set (maintainer). The read-back of this step: NOT CHECKED | | |
 | 6a refused run (throwaway branch) | | NOT CHECKED | | |
 | 6b control run (branch allowed, approved) | | NOT CHECKED | | |
 | 6c refused again (allowance removed) | | NOT CHECKED | | |
