@@ -31,7 +31,17 @@ LOG_CHECK_ENV = {
     "REPO": "${{ github.repository }}",
     "RUN_ID": "${{ github.run_id }}",
     "RUN_ATTEMPT": "${{ github.run_attempt }}",
+    "RETRY_SLEEP": "15",
 }
+LOG_CHECK_MESSAGES = (
+    "log check failed: could not list the run's jobs",
+    "log check failed: plan job not found",
+    "log check failed: could not download the plan job's log",
+    "log check failed: the plan job's log is empty",
+    "log check failed: grep failed",
+    "log check FAILED: the plan job's log holds a role unique ID",
+    "log check passed: the plan job's log holds no role unique ID",
+)
 CHDIR = "terraform -chdir=terraform/server "
 PLAN_FILE = '"$RUNNER_TEMP/server.tfplan"'
 ALLOWED_TERRAFORM_LINES = {
@@ -284,8 +294,15 @@ def log_check_problems(job):
         return found + ["log-check is not one run step with no action (no checkout, no upload)"]
     step = steps[0]
     if step.get("env") != LOG_CHECK_ENV:
-        found.append("log-check env is not GH_TOKEN, REPO, RUN_ID and RUN_ATTEMPT from the github context")
+        found.append("log-check env is not GH_TOKEN, REPO, RUN_ID and RUN_ATTEMPT from the github context, and RETRY_SLEEP 15")
     run = step.get("run", "")
+    for message in LOG_CHECK_MESSAGES:
+        if f'echo "{message}"' not in run:
+            found.append(f"log-check does not print {message!r}")
+    if run.count('sleep "$RETRY_SLEEP"') != 2 or re.search(r"\bsleep\b(?! \"\$RETRY_SLEEP\")", run):
+        found.append("log-check does not sleep RETRY_SLEEP seconds between tries, in two loops")
+    if len(re.findall(r"for try in 1 2 3 4 5; do", run)) != 2:
+        found.append("log-check does not retry the listing and the download up to 5 times")
     for needle in ('"repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs"', '"repos/$REPO/actions/jobs/$job_id/logs"', 'log="$RUNNER_TEMP/', "rm -f \"$log\"", "'.jobs[] | select(.name == \"plan\") | .id'"):
         if needle not in run:
             found.append(f"log-check run lacks {needle}")
@@ -474,6 +491,14 @@ BROKEN = {
     "log-check with a second run step": lambda doc: doc["jobs"]["log-check"]["steps"].append({"run": "true"}),
     "log-check token from elsewhere": lambda doc: lc_step(doc)["env"].update({"GH_TOKEN": "${{ secrets.PAT }}"}),
     "log-check grep without q": lc_edit("grep -Eq", "grep -E"),
+    "log-check without retry sleep env": lambda doc: lc_step(doc)["env"].pop("RETRY_SLEEP"),
+    "log-check sleep hard-coded": lc_edit('sleep "$RETRY_SLEEP"', "sleep 15"),
+    "log-check sleep from a secret": lambda doc: lc_step(doc)["env"].update({"RETRY_SLEEP": "${{ secrets.OTHER }}"}),
+    "log-check without the download retry": lc_edit("for try in 1 2 3 4 5; do\n  if gh", "for try in 1; do\n  if gh"),
+    "log-check without the listing message": lc_edit("could not list the run's jobs", "could not be checked"),
+    "log-check without the empty message": lc_edit("the plan job's log is empty", "could not be checked"),
+    "log-check without the grep message": lc_edit("log check failed: grep failed", "log check failed: could not be checked"),
+    "log-check timeout too long": set_key(["jobs", "log-check", "timeout-minutes"], 11),
     "log-check grep with another flag": lc_edit("grep -Eq 'AROA", "grep -Eqo 'AROA"),
     "log-check extra grep that prints": lc_edit('rm -f "$log"\necho "log check passed', 'grep AROA "$log"\necho "log check passed'),
     "log-check other pattern": lc_edit("AROA[A-Z0-9]+", "ASIA[A-Z0-9]+"),
@@ -543,14 +568,22 @@ def test_terraform_word_ignores_names_and_folders(text):
 # The log-check step's script, run under bash with a fake `gh` first on PATH.
 
 FAKE_GH = """#!/bin/bash
-# Fake gh: FAKE_JOB_ID answers the job lookup, FAKE_LOG_FILE the log download; FAKE_FAIL names the call that fails.
+# Fake gh: FAKE_JOB_ID answers the job lookup, FAKE_LOG_FILE the log download.
+# FAKE_JOBS_FAILS and FAKE_LOGS_FAILS: how many of the first calls fail. Calls are counted in files in FAKE_DIR.
+count() {
+  n=$(cat "$FAKE_DIR/count-$1" 2> /dev/null || echo 0)
+  n=$((n + 1))
+  echo "$n" > "$FAKE_DIR/count-$1"
+}
 case "$*" in
   *attempts*)
-    if [ "$FAKE_FAIL" = jobs ]; then echo "fake gh error AROAERRORTEXT1" >&2; exit 1; fi
+    count jobs
+    if [ "$n" -le "$FAKE_JOBS_FAILS" ]; then echo "fake gh error AROAERRORTEXT1" >&2; exit 1; fi
     echo "$FAKE_JOB_ID"
     ;;
   *logs*)
-    if [ "$FAKE_FAIL" = logs ]; then echo "fake gh error AROAERRORTEXT2" >&2; exit 1; fi
+    count logs
+    if [ "$n" -le "$FAKE_LOGS_FAILS" ]; then echo "fake gh error AROAERRORTEXT2" >&2; exit 1; fi
     cat "$FAKE_LOG_FILE"
     ;;
   *)
@@ -559,9 +592,11 @@ case "$*" in
 esac
 """
 
+ALWAYS = 99
 
-def run_log_check(tmp_path, log_text, job_id="4242", fail=""):
-    """Run the real log-check step text; returns (exit code, combined output, the temp dir)."""
+
+def run_log_check(tmp_path, log_text, job_id="4242", jobs_fails=0, logs_fails=0):
+    """Run the real log-check step text with RETRY_SLEEP=0; returns (exit code, combined output, the temp dir)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
@@ -580,12 +615,20 @@ def run_log_check(tmp_path, log_text, job_id="4242", fail=""):
         "REPO": "owner/repo",
         "RUN_ID": "1",
         "RUN_ATTEMPT": "1",
+        "RETRY_SLEEP": "0",
+        "FAKE_DIR": str(tmp_path),
         "FAKE_JOB_ID": job_id,
         "FAKE_LOG_FILE": str(log_file),
-        "FAKE_FAIL": fail,
+        "FAKE_JOBS_FAILS": str(jobs_fails),
+        "FAKE_LOGS_FAILS": str(logs_fails),
     }
     done = subprocess.run(["bash", "-eo", "pipefail", str(script)], env=env, capture_output=True, text=True, check=False, timeout=30)
     return done.returncode, done.stdout + done.stderr, temp
+
+
+def calls(tmp_path, name):
+    file = tmp_path / f"count-{name}"
+    return int(file.read_text(encoding="utf-8")) if file.exists() else 0
 
 
 CLEAN_LOG = "Run terraform plan\nAuthenticated as assumedRoleId ***\nPlan: 0 to add, 0 to change, 0 to destroy.\n"
@@ -612,19 +655,62 @@ def test_log_check_fails_on_a_role_id_and_prints_none_of_it(tmp_path):
     assert list(temp.iterdir()) == []
 
 
-@pytest.mark.parametrize("fail", ["jobs", "logs"])
-def test_log_check_fails_when_gh_fails_and_prints_no_gh_text(tmp_path, fail):
-    code, output, temp = run_log_check(tmp_path, CLEAN_LOG, fail=fail)
-    assert code != 0
-    assert "could not be checked" in output
+def test_log_check_retries_the_download_and_passes_when_the_second_try_works(tmp_path):
+    code, output, temp = run_log_check(tmp_path, CLEAN_LOG, logs_fails=1)
+    assert code == 0
+    assert "passed" in output
     assert "AROA" not in output and "fake gh" not in output
+    assert calls(tmp_path, "logs") == 2
     assert list(temp.iterdir()) == []
 
 
-def test_log_check_fails_on_an_empty_log(tmp_path):
+def test_log_check_retries_the_job_listing_and_passes_when_the_second_try_works(tmp_path):
+    code, output, temp = run_log_check(tmp_path, CLEAN_LOG, jobs_fails=1)
+    assert code == 0
+    assert "passed" in output
+    assert calls(tmp_path, "jobs") == 2
+    assert list(temp.iterdir()) == []
+
+
+def test_log_check_still_finds_a_role_id_after_a_retry(tmp_path):
+    code, output, temp = run_log_check(tmp_path, CLEAN_LOG + "assumedRoleId AROAEXAMPLE123\n", logs_fails=2)
+    assert code != 0
+    assert "FAILED" in output
+    assert "AROA" not in output and "EXAMPLE123" not in output
+    assert list(temp.iterdir()) == []
+
+
+def test_log_check_fails_after_five_download_tries_and_prints_no_gh_text(tmp_path):
+    code, output, temp = run_log_check(tmp_path, CLEAN_LOG, logs_fails=ALWAYS)
+    assert code != 0
+    assert "could not download the plan job's log" in output
+    assert "AROA" not in output and "fake gh" not in output
+    assert calls(tmp_path, "logs") == 5
+    assert list(temp.iterdir()) == []
+
+
+def test_log_check_passes_when_only_the_fifth_download_try_works(tmp_path):
+    code, output, temp = run_log_check(tmp_path, CLEAN_LOG, logs_fails=4)
+    assert code == 0
+    assert calls(tmp_path, "logs") == 5
+    assert list(temp.iterdir()) == []
+
+
+def test_log_check_fails_after_five_listing_tries_and_prints_no_gh_text(tmp_path):
+    code, output, temp = run_log_check(tmp_path, CLEAN_LOG, jobs_fails=ALWAYS)
+    assert code != 0
+    assert "could not list the run's jobs" in output
+    assert "AROA" not in output and "fake gh" not in output
+    assert calls(tmp_path, "jobs") == 5
+    assert calls(tmp_path, "logs") == 0
+    assert list(temp.iterdir()) == []
+
+
+def test_log_check_fails_on_an_empty_log_after_five_tries(tmp_path):
     code, output, temp = run_log_check(tmp_path, "")
     assert code != 0
-    assert "could not be checked" in output
+    assert "the plan job's log is empty" in output
+    assert calls(tmp_path, "logs") == 5
     assert list(temp.iterdir()) == []
 
 
@@ -632,5 +718,6 @@ def test_log_check_fails_on_an_empty_log(tmp_path):
 def test_log_check_fails_when_the_plan_job_is_not_found_once(tmp_path, job_id):
     code, output, temp = run_log_check(tmp_path, CLEAN_LOG, job_id=job_id)
     assert code != 0
-    assert "could not be checked" in output
+    assert "plan job not found" in output
+    assert calls(tmp_path, "logs") == 0
     assert list(temp.iterdir()) == []
