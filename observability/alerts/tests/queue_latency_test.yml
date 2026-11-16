@@ -101,6 +101,13 @@ tests:
         values: '0+1x210'
       - series: 'target_info{job="socboard-probe", deployment_environment_name="dev", service_version="0.0.0-test"}'
         values: '1+0x210'
+    promql_expr_test:
+      # The pending state itself: promtool's `exp_alerts: []` ignores pending alerts, so ALERTS shows it.
+      - expr: ALERTS{alertname="QueueLatencyOverSLO", alertstate="pending"}
+        eval_time: 690s
+        exp_samples:
+          - labels: 'ALERTS{alertname="QueueLatencyOverSLO", alertstate="pending", severity="page", service="socboard"}'
+            value: 1
     alert_rule_test:
       - eval_time: 690s
         alertname: QueueLatencyOverSLO
@@ -227,7 +234,11 @@ tests:
 
   # (f) One lone measurement of 40 s (above the top bound, so only the +Inf bucket counts it) at second 305,
   #     nothing else: the percentile is 30 s (over 5), but the window has far fewer than 20 measurements,
-  #     so the volume guard keeps the alert quiet.
+  #     so the volume guard keeps the alert quiet. The first half of the expression is true from second
+  #     315 to second 585 (at 600 the sample has left the window and the rate is 0), so with no guard the
+  #     alert would be pending from 315 and firing from 435 to 585. The checks at 450 s and 585 s fall in
+  #     that firing stretch; 330 s is inside the `for` hold and 600 s is after the window, so only 450 s
+  #     and 585 s fail when the guard is removed.
   - name: f-one-lone-40s-sample
     interval: 5s
     input_series:
@@ -266,6 +277,12 @@ tests:
             value: 30
     alert_rule_test:
       - eval_time: 330s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 450s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 585s
         alertname: QueueLatencyOverSLO
         exp_alerts: []
       - eval_time: 600s

@@ -23,6 +23,20 @@ CONTRACT = ROOT / "observability" / "CONTRACT.md"
 # VERIFY: the digest is the index digest of the v3.16.0 tag, read from the Docker Hub registry API on 2026-11-16
 IMAGE = "prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06"
 
+# The contract says these three are "written in the rule" without giving the text, so the text is fixed here.
+WRITTEN_IN_THE_RULE = {
+    "summary": (
+        "A new alert took more than 5 seconds to show in the SOCBoard queue "
+        "(95th percentile of the probe over 5 minutes)."
+    ),
+    "owner": "socboard on-call (the maintainer)",
+    "dashboard_url": "http://localhost:3000/d/socboard-queue-latency",
+}
+
+# `environment` and `version` come from the probe's own target_info series, never from $labels,
+# because the percentile sums by le and drops every other label.
+TARGET_INFO = 'target_info{job="socboard-probe"}'
+
 MEANING = re.compile(
     r"(\d+)th percentile of `(\w+)`, over the last (\d+) minutes, is above (\d+) seconds, "
     r"and `([^`]+)` is at least (\d+)"
@@ -76,11 +90,14 @@ def problems(rule_file: dict, contract: str) -> list[str]:
     if sorted(annotations) != sorted(names):
         found.append(f"annotations: {sorted(annotations)!r} is not {sorted(names)!r}")
     for name, label in (("environment", "deployment_environment_name"), ("version", "service_version")):
-        if label not in str(annotations.get(name, "")):
-            found.append(f"annotation {name} does not read {label}")
-    for name in ("summary", "owner", "dashboard_url"):
-        if not str(annotations.get(name, "")).strip():
-            found.append(f"annotation {name} is empty")
+        template = (
+            "{{ with query `" + TARGET_INFO + "` }}{{ (index . 0).Labels." + label + " }}{{ end }}"
+        )
+        if annotations.get(name) != template:
+            found.append(f"annotation {name}: {annotations.get(name)!r} is not {template!r}")
+    for name, text in WRITTEN_IN_THE_RULE.items():
+        if annotations.get(name) != text:
+            found.append(f"annotation {name}: {annotations.get(name)!r} is not {text!r}")
     return found
 
 
@@ -113,6 +130,15 @@ def severity_ticket(rule):
     only_rule(rule)["labels"]["severity"] = "ticket"
 
 
+def annotation_replaced(name: str, old: str, new: str):
+    def mutate(rule):
+        annotations = only_rule(rule)["annotations"]
+        assert old in annotations[name]
+        annotations[name] = annotations[name].replace(old, new)
+
+    return mutate
+
+
 MUTATIONS = {
     "threshold 10 s": with_expr("> 5 and", "> 10 and"),
     "no for": without("for"),
@@ -121,6 +147,25 @@ MUTATIONS = {
     "a 4 minute window": with_expr("[5m]", "[4m]"),
     "a guard of 10": with_expr(">= 20", ">= 10"),
     "another severity": severity_ticket,
+    "a summary that says 10 seconds": annotation_replaced("summary", "5 seconds", "10 seconds"),
+    "another owner": annotation_replaced("owner", "the maintainer", "nobody"),
+    "another dashboard_url": annotation_replaced("dashboard_url", "socboard-queue-latency", "elsewhere"),
+    "environment read from $labels": annotation_replaced(
+        "environment",
+        "{{ with query `target_info{job=\"socboard-probe\"}` }}{{ (index . 0).Labels.deployment_environment_name }}{{ end }}",
+        "{{ $labels.deployment_environment_name }}",
+    ),
+    "version read from $labels": annotation_replaced(
+        "version",
+        "{{ with query `target_info{job=\"socboard-probe\"}` }}{{ (index . 0).Labels.service_version }}{{ end }}",
+        "{{ $labels.service_version }}",
+    ),
+    "an environment query without the job filter": annotation_replaced(
+        "environment", 'target_info{job="socboard-probe"}', "target_info"
+    ),
+    "a version query without the job filter": annotation_replaced(
+        "version", 'target_info{job="socboard-probe"}', "target_info"
+    ),
 }
 
 
