@@ -4,7 +4,7 @@ The names the observability work shares (roadmap 4, `_docs/planning/roadmap-4-de
 
 Rules that apply to every table:
 
-- No value in any row is free text. Every value derived from a request is a fixed word, a number, an id or a version, so alert and case text cannot reach a signal. The only exceptions are `deployment.environment.name` and `service.version`, which an operator sets (section 1) and no request can reach.
+- A value derived from a request is a fixed word, a number, an id or a version, never free text, so alert and case text cannot reach a signal. The values not derived from a request are `deployment.environment.name` and `service.version`, which an operator sets (section 1) and no request can reach.
 - The allowed labels and fields are the whole list. Anything not listed is refused.
 - `socboard.case.id` is the public case id exactly as the API returns it, an opaque string (`openapi.yaml`), never a database key shown in another form.
 
@@ -15,10 +15,12 @@ Set once on the telemetry resource, so they appear on every metric, span and log
 | Name | Type | Value | Set from | Implemented by |
 |---|---|---|---|---|
 | `service.name` | string | `socboard` | fixed in code | #289 |
+| `service.name` (the probe) | string | `socboard-probe` | fixed in the probe | #294 |
 | `deployment.environment.name` | string | for example `dev`, `ci` | `OTEL_RESOURCE_ATTRIBUTES` | #289 |
 | `service.version` | string | the image or commit version | `OTEL_RESOURCE_ATTRIBUTES` | #289 |
 
 - `deployment.environment.name` and `service.version` are operator-set: read from `OTEL_RESOURCE_ATTRIBUTES` at start-up, never from a request, so alert and case text cannot reach them.
+- The probe's resource is `service.name` = `socboard-probe` for every signal the probe sends, with the same two operator-set attributes (`deployment.environment.name`, `service.version`). The app's `service.name` stays `socboard`.
 - No new application variable is added for these.
 - Telemetry is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Unset or empty means nothing is created or exported.
 
@@ -28,10 +30,13 @@ Set once on the telemetry resource, so they appear on every metric, span and log
 |---|---|---|---|---|---|
 | `socboard.ingest.alerts` | counter | `{alert}` | `outcome` (`accepted`, `refused`) | `socboard_ingest_alerts_total` | #290 |
 | `socboard.alert.time_to_queue` | histogram | `s` | none other than the resource attributes | `socboard_alert_time_to_queue_seconds_bucket` (also `_sum`, `_count`) | #291 |
+| `socboard.probe.time_to_queue` | histogram | `s` | none other than the resource attributes | `socboard_probe_time_to_queue_seconds_bucket` (also `_sum`, `_count`) | #294 |
 
-- `socboard.alert.time_to_queue` has explicit bucket bounds, in seconds: `0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30`.
+- `socboard.alert.time_to_queue` has explicit bucket bounds, in seconds: `0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30`. `socboard.probe.time_to_queue` has the same bounds.
 - The histogram measures the time from the accepted ingest to the first queue read that returns the case.
 - Exemplars carry the ingest trace id (section 5). The metric has no other label, so the exemplar is the only link from a bucket to a trace.
+- The exemplar of `socboard.probe.time_to_queue` carries the probe's own trace id, the one it sends as `traceparent` on the ingest.
+- `socboard.alert.time_to_queue` is a diagnostic. It is recorded only while the queue is being watched: a queue read happened in the 6 seconds before the ingest, or between the ingest and the read that returns the case. A case ingested before the process started is never recorded. The rule and its tests are in #291.
 - `refused` counts ingest requests the API refuses (bad key, bad body, limit). It records no reason text.
 
 ## 3. Spans
@@ -50,6 +55,7 @@ Set once on the telemetry resource, so they appear on every metric, span and log
 - No SQL, HTTP-client or other auto-instrumentation is used. Spans are written by hand.
 - The only attributes any span may carry are the two above. No URL, header, query string or HTTP status attribute is set.
 - No span carries an event or status message built from request text.
+- The sampler is always on, not parent-based, so a caller's unsampled `traceparent` cannot drop a trace or an exemplar. The trace id still comes from the caller's `traceparent` when there is one.
 
 ## 4. Logs
 
@@ -71,7 +77,8 @@ One JSON object per line, on standard output.
 | `alert.first_in_queue` | the first queue read returned the case | none | #291 |
 
 - `event` is a fixed word from this table, never built from alert text.
-- A log line carries no field beyond the seven above. `trace_id` and `span_id` are absent, not zero or empty, when no span is active. The case id and severity are found through the trace id.
+- A log line has at most these seven fields. `trace_id` and `span_id` are absent, not zero or empty, when no span is active. The case id and severity are found through the trace id.
+- When telemetry is on, logs are also exported over OTLP to the collector. In Loki, `trace_id` and `span_id` are structured metadata, never labels. No Loki label holds a trace id, span id or case id. The search is `{service_name="socboard"} | trace_id="<id>"`.
 
 ## 5. Trace id format
 
@@ -85,7 +92,7 @@ A Prometheus rule, so `promtool` can test it offline (#296).
 | Part | Value |
 |---|---|
 | Name | `QueueLatencyOverSLO` |
-| Meaning of the expression | the 95th percentile of `socboard_alert_time_to_queue_seconds_bucket`, over the last 5 minutes, is above 5 seconds |
+| Meaning of the expression | the 95th percentile of `socboard_probe_time_to_queue_seconds_bucket`, over the last 5 minutes, is above 5 seconds, and `sum(increase(socboard_probe_time_to_queue_seconds_count[5m]))` is at least 20 |
 | `for` | `2m` |
 | Label `severity` | `page` |
 | Label `service` | `socboard` |
@@ -100,6 +107,7 @@ A Prometheus rule, so `promtool` can test it offline (#296).
 | `dashboard_url` | a link to the Grafana dashboard | written in the rule |
 
 - The 5 seconds is N of `_docs/specs.md` section 5 (N = 5s), the product SLO. The 2 minutes is the proposal of #285, confirmed by the human with the issue.
+- The client polls every 3 seconds, so up to 3 of the 5 seconds can be poll wait. The probe polls every 1 second within a cycle (#294), so its delay is close to the server's share plus at most 1 second.
 
 ## 7. Alertmanager payload
 

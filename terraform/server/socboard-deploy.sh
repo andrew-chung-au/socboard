@@ -10,8 +10,9 @@
 # Nothing before the swap touches the running app. The swap is not zero downtime.
 #
 # Never printed: this script prints only the fixed lines of the failure table and, after exits 6, 7
-# and 9, the last 20 log lines of the app with the secret's eight values replaced. It never runs
-# with tracing on, never prints a command's own output, and passes no secret on a command line.
+# and 9, the last 20 log lines of the app, and after exit 5 the failing step's name and the last 20 lines of
+# its output, all with the secret's eight values replaced. It never runs with tracing on, prints a command's
+# own output only in those cases, and passes no secret on a command line.
 # No migration is undone by a restore. The script runs no SQL and sets no database URL.
 #
 # Nothing of its behaviour is read from the environment except what Systems Manager and the host
@@ -70,6 +71,8 @@ CAND_HOST_PORT='8001'
 STACK_NETWORK="${PROJECT}_stack"
 # VERIFY: the name Compose gives the app container (project, service `app`, number 1).
 APP="$PROJECT-app-1"
+# VERIFY: the name Compose gives the database container (project, service `db`, number 1).
+DB="$PROJECT-db-1"
 CAND="$PROJECT-deploy-candidate"
 CAND_PORT="127.0.0.1:$CAND_HOST_PORT:$APP_PORT"
 RUN_DIR='/run/socboard-deploy'
@@ -117,13 +120,35 @@ die() {
 # The last 20 lines of a container's log, each secret value replaced, longest value first.
 # The only `docker logs` form in this script.
 logs_of() {
-  local out line v
+  local out
   out=$(docker logs --tail 20 "$1" 2>&1) || return 0
-  [ -n "$out" ] || return 0
-  while IFS= read -r line; do
+  redact_tail "$out"
+}
+
+# The last 20 lines of the text in $1, each secret value replaced, longest value first.
+redact_tail() {
+  local -a all
+  local line v start
+  [ -n "$1" ] || return 0
+  mapfile -t all <<<"$1"
+  start=0
+  [ "${#all[@]}" -gt 20 ] && start=$((${#all[@]} - 20))
+  for line in "${all[@]:start}"; do
     for v in "${REDACT[@]}"; do line=${line//"$v"/[redacted]}; done
     printf '%s\n' "$line"
-  done <<<"$out"
+  done
+}
+
+# Exit 5: the fixed line, the failing step's name, then the last 20 lines of its output (redacted). $2 is the step's
+# captured output; it is never printed on success.
+die_step() {
+  local lines
+  lines=$(redact_tail "$2")
+  text_for 5
+  # Not a fixed line of the failure table (it varies with the step), so it is printed with printf, which the CI reader does not count.
+  printf 'socboard-deploy: failed step: %s\n' "$1"
+  [ -z "$lines" ] || printf '%s\n' "$lines"
+  exit 5
 }
 
 # Exits 6, 7 and 9: the fixed line, then the log lines (read before anything removes the container).
@@ -268,6 +293,9 @@ for f in compose.yaml compose/db_init.py; do
   fi
   mv -f "$REL/$f.part" "$REL/$f" || die 4
 done
+# umask 077 made both files root 0600, and db-init (the app image's uid 10001) reads compose/db_init.py through a bind mount,
+# which keeps the host mode. Both files are public files of this repository: no secret in either (the variable file stays 0600).
+chmod 755 "$REL/compose" && chmod 644 "$REL/compose.yaml" "$REL/compose/db_init.py" || die 4
 # The restart policy and the proxy address are set here, so compose.yaml stays as the repository has it.
 {
   printf '%s\n' 'services:' '  db:' '    restart: unless-stopped' '  app:' '    restart: unless-stopped' \
@@ -322,13 +350,15 @@ done
 chmod 600 "$VARS" || die 3
 
 # --- 8. the database, the gateway check, then db-init, migrate and seed ---------------------------------
-compose up -d --no-deps --wait --wait-timeout 120 --pull never --no-build db >/dev/null 2>&1 || die 5
+out=$(compose up -d --no-deps --wait --wait-timeout 120 --pull never --no-build db 2>&1) || die_step db "$out
+$(logs_of "$DB")"
 gateway=$(docker network inspect --format "$(tpl 'range .IPAM.Config')$(tpl .Gateway) $(tpl end)" "$STACK_NETWORK" 2>/dev/null) || die 10
 gateway=${gateway%% }
 [ "$gateway" = "$PROXY_ADDR" ] || die 10
 for service in db-init migrate seed; do
-  compose run --rm --no-deps --pull never "$service" >/dev/null 2>&1 || die 5
+  out=$(compose run --rm --no-deps --pull never "$service" 2>&1) || die_step "$service" "$out"
 done
+unset out
 
 # --- 9. the candidate ---------------------------------------------------------------------------------
 CAND_UP=1

@@ -159,8 +159,8 @@ def problems(doc, text):
         for step in steps(job):
             if uses(step) and (action(step) not in PINS or uses(step) != f"{action(step)}@{PINS[action(step)]}"):
                 found.append(f"{name} uses {uses(step)}, not one of the pinned actions")
-    if set(re.findall(r"secrets\.([A-Za-z0-9_]+)", text)) != {"AWS_DEPLOY_ROLE_ARN"}:
-        found.append("the workflow reads a secret other than AWS_DEPLOY_ROLE_ARN, or none")
+    if set(re.findall(r"secrets\.([A-Za-z0-9_]+)", text)) != {"AWS_DEPLOY_ROLE_ARN", "AWS_DEPLOY_ROLE_ID"}:
+        found.append("the workflow reads a secret other than AWS_DEPLOY_ROLE_ARN and AWS_DEPLOY_ROLE_ID, or none")
     if set(re.findall(r"vars\.([A-Za-z0-9_]+)", text)) != {"DEPLOY_INSTANCE_ID", "DEPLOY_URL"}:
         found.append("the workflow reads variables other than DEPLOY_INSTANCE_ID and DEPLOY_URL")
     for block in run_blocks(doc):
@@ -211,6 +211,10 @@ def deploy_step_problems(deploy):
         return ["the deploy job lacks the check, role, deploy or upload step"]
     if not check < role < send < upload == len(names) - 1:
         found.append("the deploy job's steps are not check, role, deploy, then the record upload last")
+    # The credentials action prints the role's unique ID in clear; GitHub masks only registered values (#268 hand-over on #238).
+    mask = steps(deploy)[role - 1] if role > 0 else {}
+    if mask.get("run") != 'echo "::add-mask::$AWS_DEPLOY_ROLE_ID"' or (mask.get("env") or {}) != {"AWS_DEPLOY_ROLE_ID": "${{ secrets.AWS_DEPLOY_ROLE_ID }}"} or role - 1 <= check:
+        found.append("the step right before the role step does not mask AWS_DEPLOY_ROLE_ID")
     credentials = steps(deploy)[role].get("with") or {}
     if credentials.get("role-to-assume") != "${{ secrets.AWS_DEPLOY_ROLE_ARN }}" or credentials.get("aws-region") != "us-east-1":
         found.append("the role is not AWS_DEPLOY_ROLE_ARN in us-east-1")
@@ -360,23 +364,26 @@ def test_a_direct_aws_call_is_refused():
         (lambda deploy: deploy["steps"].reverse(), "not check, role, deploy"),
         (lambda deploy: deploy["steps"].append({"run": "echo done"}), "not check, role, deploy"),
         (lambda deploy: deploy["steps"].pop(1), "lacks the check"),
-        (lambda deploy: deploy["steps"][2]["with"].update({"role-to-assume": "${{ vars.ROLE }}"}), "AWS_DEPLOY_ROLE_ARN in us-east-1"),
-        (lambda deploy: deploy["steps"][2]["with"].update({"aws-region": "eu-west-1"}), "AWS_DEPLOY_ROLE_ARN in us-east-1"),
-        (lambda deploy: deploy["steps"][2]["with"].update({"role-session-name": "socboard"}), "session name"),
-        (lambda deploy: deploy["steps"][2]["with"].update({"aws-access-key-id": "x"}), "stored key"),
+        (lambda deploy: deploy["steps"][3]["with"].update({"role-to-assume": "${{ vars.ROLE }}"}), "AWS_DEPLOY_ROLE_ARN in us-east-1"),
+        (lambda deploy: deploy["steps"][3]["with"].update({"aws-region": "eu-west-1"}), "AWS_DEPLOY_ROLE_ARN in us-east-1"),
+        (lambda deploy: deploy["steps"][3]["with"].update({"role-session-name": "socboard"}), "session name"),
+        (lambda deploy: deploy["steps"][3]["with"].update({"aws-access-key-id": "x"}), "stored key"),
         (lambda deploy: deploy["steps"][-1]["with"].update({"retention-days": 7}), "kept 90 days"),
         (lambda deploy: deploy["steps"][-1]["with"].update({"name": "deploy-record"}), "deploy-record-dev"),
         (lambda deploy: deploy["steps"][-1].update({"if": "always()"}), "its own if"),
         (lambda deploy: deploy["steps"][-1]["with"].pop("overwrite"), "overwritten on a re-run"),
         (lambda deploy: deploy["steps"][0]["with"].update(ref="${{ needs.find.outputs.revision }}"), "default branch's commit"),
         (lambda deploy: deploy["steps"][0]["with"].update({"persist-credentials": True}), "default branch's commit"),
-        (lambda deploy: deploy["steps"][3].update({"continue-on-error": True}), "continue-on-error"),
+        (lambda deploy: deploy["steps"][4].update({"continue-on-error": True}), "continue-on-error"),
         (lambda deploy: deploy.update({"continue-on-error": True}), "continue-on-error"),
-        (lambda deploy: deploy["steps"][3]["env"].update(DIGEST="${{ needs.find.outputs.tag }}"), "deploy step's environment"),
-        (lambda deploy: deploy["steps"][3]["env"].update(DEPLOY_URL="${{ vars.DEPLOY_INSTANCE_ID }}"), "deploy step's environment"),
+        (lambda deploy: deploy["steps"][4]["env"].update(DIGEST="${{ needs.find.outputs.tag }}"), "deploy step's environment"),
+        (lambda deploy: deploy["steps"][4]["env"].update(DEPLOY_URL="${{ vars.DEPLOY_INSTANCE_ID }}"), "deploy step's environment"),
         (lambda deploy: deploy["steps"][1]["env"].update(DEPLOY_URL="${{ vars.OTHER }}"), "check step"),
+        (lambda deploy: deploy["steps"].pop(2), "does not mask AWS_DEPLOY_ROLE_ID"),
+        (lambda deploy: deploy["steps"][2]["env"].update(AWS_DEPLOY_ROLE_ID="${{ secrets.AWS_DEPLOY_ROLE_ARN }}"), "does not mask AWS_DEPLOY_ROLE_ID"),
+        (lambda deploy: deploy["steps"].insert(2, deploy["steps"].pop(3)), "does not mask AWS_DEPLOY_ROLE_ID"),
     ],
-    ids=["reversed", "step after the upload", "no check", "role from a variable", "region", "session name", "stored key", "retention", "record name", "upload always", "no overwrite", "checkout ref", "credentials kept", "step continues", "job continues", "digest from the tag", "swapped variables", "check reads another"],
+    ids=["reversed", "step after the upload", "no check", "role from a variable", "region", "session name", "stored key", "retention", "record name", "upload always", "no overwrite", "checkout ref", "credentials kept", "step continues", "job continues", "digest from the tag", "swapped variables", "check reads another", "no mask", "mask of another secret", "mask after the role"],
 )
 def test_a_wrong_deploy_step_is_refused(change, expected):
     def apply(doc, text):

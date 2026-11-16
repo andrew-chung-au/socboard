@@ -89,6 +89,8 @@ In the repository's settings, in a browser:
 Expected: the two Environments show the rules above, the Secrets tab lists the three role secrets, and the Variables tab lists `TF_STATE_BUCKET`. This covers the #156 task file's "Before you start" items 2 and 3, and the `AWS_PLAN_ROLE_ARN` secret it asks for in its step 1.
 Risk: changes who may deploy. Undo: edit or delete the Environment, secret or variable in the same page.
 
+Note: the secret `AWS_PLAN_ROLE_ID` was added later by #209 (set on 2026-11-16); see `terraform/README.md`, Outputs.
+
 ### Step 5: The #156 branch check
 
 Do `_human-tasks/2026-11-14T0928Z-human-task-156-engineer-ci-access-apply-and-branch-check.md`, steps 1 to 5. Its "Before you start" is done by steps 3 and 4 above.
