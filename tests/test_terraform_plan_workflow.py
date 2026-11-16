@@ -84,9 +84,28 @@ def rule_problems(name, text):
     grants += [grants_id_token(job.get("permissions")) if isinstance(job, dict) else None for job in doc["jobs"].values()]
     if None in grants:
         found.append(f"{name}: permissions in a form the rule does not know")
-    elif any(grants) and triggers != ["pull_request"]:
+    elif any(grants) and triggers != ["pull_request"] and not deploy_workflow_allowed(name, doc, triggers):
         found.append(f"{name}: grants id-token: write with triggers {triggers}, not pull_request only")
     return found
+
+
+DEPLOY_DEV = "deploy-dev.yml"
+
+
+def deploy_workflow_allowed(name, doc, triggers):
+    """The one exception to the pull_request-only rule (#238): the dev deploy workflow.
+
+    It runs on workflow_run, which GitHub starts only from the default branch's copy of the file, never from a pull
+    request or a fork. Only a job in an Environment may grant id-token: write, so the deploy role's token carries the
+    Environment subject (the role trusts `environment:deploy`), never the `:pull_request` subject this rule protects.
+    """
+    jobs = doc["jobs"]
+    return (
+        name == DEPLOY_DEV
+        and triggers == ["workflow_run"]
+        and not grants_id_token(doc.get("permissions"))
+        and all(job.get("environment") for job in jobs.values() if grants_id_token(job.get("permissions")))
+    )
 
 
 def grants_any_id_token(text):
@@ -146,13 +165,49 @@ def test_the_rule_allows(text):
     assert rule_problems("fixture.yml", text) == []
 
 
-def test_replay_every_workflow_passes_and_only_the_plan_workflow_grants_id_token():
+DEPLOY_GOOD = """
+on:
+  workflow_run:
+    workflows: [socboard publish]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    steps: [{run: "true"}]
+  deploy:
+    environment: deploy
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+    steps: [{run: "true"}]
+"""
+
+
+def test_the_dev_deploy_workflow_is_the_one_exception_and_only_in_this_shape():
+    assert rule_problems(DEPLOY_DEV, DEPLOY_GOOD) == []
+    refused = {
+        "another file name": ("other.yml", DEPLOY_GOOD),
+        "a pull_request trigger added": (DEPLOY_DEV, DEPLOY_GOOD.replace("on:\n", "on:\n  pull_request:\n")),
+        "a push trigger added": (DEPLOY_DEV, DEPLOY_GOOD.replace("on:\n", "on:\n  push:\n")),
+        "another trigger": (DEPLOY_DEV, DEPLOY_GOOD.replace("workflow_run:", "workflow_dispatch:")),
+        "no Environment": (DEPLOY_DEV, DEPLOY_GOOD.replace("    environment: deploy\n", "")),
+        "the grant at workflow level": (DEPLOY_DEV, DEPLOY_GOOD.replace("permissions:\n  contents: read\n", "permissions:\n  id-token: write\n", 1)),
+        "pull_request_target": (DEPLOY_DEV, DEPLOY_GOOD.replace("workflow_run:", "pull_request_target:")),
+    }
+    for label, (name, text) in refused.items():
+        assert rule_problems(name, text), label
+
+
+def test_replay_every_workflow_passes_and_only_the_plan_and_dev_deploy_workflows_grant_id_token():
     files = workflow_files()
     assert files, "no workflow file found"
     problems = [p for f in files for p in rule_problems(f.name, f.read_text(encoding="utf-8"))]
     assert problems == []
     granting = {f.name for f in files if grants_any_id_token(f.read_text(encoding="utf-8"))}
-    assert granting == {PLAN}
+    assert granting == {PLAN, DEPLOY_DEV}
 
 
 # The plan workflow's own rules.
