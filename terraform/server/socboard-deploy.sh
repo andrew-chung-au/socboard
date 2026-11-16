@@ -31,8 +31,11 @@
 # The digest travels as the first argument of the new run.
 CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'
 set +x
+[ -n "${BASH_VERSION-}" ] && [ "${CLEAN_START-}" = 1 ] && [ "$PATH" = "$CLEAN_PATH" ] || exec /usr/bin/env -i PATH="$CLEAN_PATH" CLEAN_START=1 /bin/bash --norc --noprofile "$0" "$@" || exit 1
+# Everything above this line is POSIX sh: Systems Manager starts the script with `sh` (dash on Ubuntu), which
+# reads one line at a time and takes the hand-over above, so it never parses a line below. From here on only
+# the bash run of the hand-over (or an outer bash that passed the test above) is reading, and it checks strictly.
 clean=1
-[ "${CLEAN_START-}" = 1 ] && [ "$PATH" = "$CLEAN_PATH" ] || clean=0
 while IFS= read -r name; do
   case $name in CLEAN_START | PATH | PWD | SHLVL | _) ;; *) clean=0 ;; esac
 done < <(compgen -e)

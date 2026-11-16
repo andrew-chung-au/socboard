@@ -377,7 +377,7 @@ class Box:
         (self.opt / "current").symlink_to(folder)
         return folder
 
-    def run(self, *args, digest=DIGEST, env=None, use_default_arg=True):
+    def run(self, *args, digest=DIGEST, env=None, use_default_arg=True, shell=None):
         argv = list(args) if args else ([digest] if use_default_arg else [])
         # The script starts itself again under an empty environment, so nothing but the test's PATH reaches the
         # stubs from the outer environment. The stubs' own settings (STUB_*) travel in a file they read first.
@@ -392,7 +392,7 @@ class Box:
         for name, value in (env or {}).items():
             (knobs if name.startswith("STUB_") else environment)[name] = value
         self.knobs.write_text("".join(f"export {n}={shlex.quote(v)}\n" for n, v in knobs.items()), encoding="utf-8")
-        proc = subprocess.run([real("bash"), str(self.script), *argv], env=environment, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run([shell or real("bash"), str(self.script), *argv], env=environment, capture_output=True, text=True, timeout=60)
         return Result(self, proc)
 
     def files_left(self):
@@ -1244,6 +1244,11 @@ CLEAN_BLOCK_START = "CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'"
 CLEAN_BLOCK_END = "case $- in *x*) exit 1 ;; esac"
 
 
+HANDOVER = 'exec /usr/bin/env -i PATH="$CLEAN_PATH" CLEAN_START=1 /bin/bash --norc --noprofile "$0" "$@" || exit 1'
+POSIX_GUARD = '[ -n "${BASH_VERSION-}" ] && [ "${CLEAN_START-}" = 1 ] && [ "$PATH" = "$CLEAN_PATH" ] || ' + HANDOVER
+BASH_ONLY = re.compile(r"\w+=\(|\[\[|compgen|<\(|\blocal\b|\bdeclare\b|\$'|\bfunction\b|\(\(")
+
+
 def clean_block():
     lines = SCRIPT_TEXT.splitlines()
     return lines[lines.index(CLEAN_BLOCK_START) : lines.index(CLEAN_BLOCK_END) + 1]
@@ -1252,7 +1257,10 @@ def clean_block():
 def test_the_clean_start_is_the_first_command_and_the_region_is_explicit():
     code = [line for line in SCRIPT_TEXT.splitlines() if line.strip() and not line.startswith("#")]
     assert code[0] == "CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'" and code[1] == "set +x"
-    assert SCRIPT_TEXT.count("exec /usr/bin/env -i ") == 1 and SCRIPT_TEXT.count('"$0" "$@"') == 1
+    # Two hand-over lines since fix round 1b: the POSIX one (for any shell that is not the clean bash run) and the
+    # bash part's strict one (replaces the single line of 41bbe67); both are the same exec.
+    assert SCRIPT_TEXT.count("exec /usr/bin/env -i ") == 2 and SCRIPT_TEXT.count('"$0" "$@"') == 2
+    assert [line for line in code if "exec /usr/bin/env -i " in line] == [POSIX_GUARD, '[ "$clean" = 1 ] || ' + HANDOVER]
     assert SCRIPT_TEXT.index(CLEAN_BLOCK_END) < SCRIPT_TEXT.index("DIGEST_PARAM='{{ digest }}'") < SCRIPT_TEXT.index("set -u")
     assert 'region_name="us-east-1"' in SCRIPT_TEXT
 
@@ -1343,3 +1351,43 @@ def test_the_real_block_alone_restarts_under_an_empty_environment(tmp_path):
     assert "ARGS:sha256:abc" in lines and not [line for line in lines if line.startswith("FLAGS:") and "x" in line]
     names = set(lines[lines.index([line for line in lines if line.startswith("FLAGS:")][0]) + 1 :])
     assert names <= {"CLEAN_START", "PATH", "PWD", "SHLVL", "_"}, names
+
+
+# --- the start-up block is POSIX sh (#281, fix round 1b): Systems Manager starts the script with `sh` -------
+
+
+def test_the_lines_before_the_hand_over_are_posix_sh_and_the_hand_over_comes_before_any_bash_only_line():
+    code = [line for line in SCRIPT_TEXT.splitlines() if line.strip() and not line.startswith("#")]
+    first = next(i for i, line in enumerate(code) if "exec /usr/bin/env -i " in line)
+    # The shell reads these lines one simple command at a time: no compound command may be open before the exec.
+    assert code[: first + 1] == ["CLEAN_PATH='/usr/sbin:/usr/bin:/sbin:/bin'", "set +x", POSIX_GUARD]
+    assert not [line for line in code[: first + 1] if BASH_ONLY.search(line)]
+    bash_only = [i for i, line in enumerate(code) if BASH_ONLY.search(line)]
+    assert bash_only and min(bash_only) > first, "a bash-only line must come after the hand-over"
+
+
+def test_the_posix_checks_themselves_flag_each_bash_only_form():
+    for bad in ("a=(1 2)", "[[ x ]]", "compgen -e", "cat <(x)", "local x", "declare -A S", "x=$'a'", "function f", "((x))"):
+        assert BASH_ONLY.search(bad), bad
+    for good in ('[ -n "${BASH_VERSION-}" ] && [ "$PATH" = "$P" ] || exec /usr/bin/env -i "$0" "$@"', "case $- in *x*) exit 1 ;; esac"):
+        assert not BASH_ONLY.search(good), good
+
+
+SH_SHELLS = [shutil.which("sh"), *([shutil.which("dash")] if shutil.which("dash") else [])]
+
+
+@pytest.mark.parametrize("shell", SH_SHELLS)
+def test_the_script_copy_started_with_sh_hands_over_to_bash_and_gives_the_same_results(box, shell):
+    """Systems Manager runs the script with `sh`, which is dash on Ubuntu. Here `sh` may be bash, which accepts
+    every bash-only line, so only CI's dash makes this test meaningful; it never skips. When `dash` is on the
+    machine it also runs explicitly."""
+    print(f"shell under test: {shell} -> {os.path.realpath(shell)}; dash {'found' if shutil.which('dash') else 'not found, so only sh runs'}")
+    assert shell, "the machine has no sh"
+    r = box.run(shell=shell)
+    assert_only(r, 0, DEPLOYED)
+    assert r.kinds().count("secret-read") == 1
+    assert_safe(r)
+    r = Box(box.base / "refused").run("sha256:xyz", shell=shell)
+    assert_only(r, 2, FIXED[2])
+    assert set(r.kinds()) <= {"flock"}, r.kinds()
+    assert_safe(r)
