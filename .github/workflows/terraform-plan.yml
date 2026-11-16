@@ -1,0 +1,99 @@
+# Terraform plan (#209, D18b): a read-only plan of terraform/server/ on a pull request from this repository,
+# with the plan role (terraform/ci-access/plan.tf). Decision record: _docs/decisions/2026-11-15T1722Z-terraform-plan-ci.md.
+#
+# - Only counts reach the public log and job summary: the plan goes to a file under $RUNNER_TEMP, every
+#   terraform command's output is discarded (show -json goes only into scripts/check_plan_actions.py), a failure
+#   prints one fixed message, and the plan file is deleted at the end. Diagnose a failure locally.
+# - scripts/check_plan_actions.py fails the job on any destroy or replace; those go through the human's apply.
+# - The role ARN comes from a secret (masked); never pass it through a variable, a step output or the summary.
+#   The ARN is never printed, so the account number stays out of the log (mask-aws-account-id stays on as well).
+# - The credentials action prints "Authenticated as assumedRoleId AROA..." and mask-aws-account-id does not hide it.
+#   The step before it masks the plan role's unique ID, read from secrets.AWS_PLAN_ROLE_ID (the only place that
+#   secret is used), and fails with a fixed message, no value, if the secret is empty.
+# - Masking is best-effort (the secret must hold the current role's unique ID). Checking the plan job's log for an
+#   AROA... ID is follow-up #307, not in this workflow.
+# - The plan role cannot read a secret value, but the reviewer must refuse a change to terraform/server/outputs.tf
+#   that outputs a secret value, or an output not marked sensitive that could hold one (Deploy record, section F).
+# - Instance user data must never hold a secret: the plan role reads it (ec2:Describe*) in every same-repository run.
+# - tests/test_terraform_plan_workflow.py checks this file; pull_request_target is forbidden in every workflow.
+name: terraform plan
+
+permissions: {}
+
+on:
+  pull_request:
+    paths:
+      - "terraform/server/**"
+      - "terraform/.terraform-version"
+      - ".github/workflows/terraform-plan.yml"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    # Forks get no OIDC token under pull_request; this skips their job before any step runs as well.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Read the Terraform version
+        id: tf
+        run: |
+          v=$(tr -d '[:space:]' < terraform/.terraform-version 2>/dev/null || true)
+          if [ -z "$v" ]; then
+            echo "::error::terraform/.terraform-version is missing or empty"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tf.outputs.version }}
+          terraform_wrapper: false
+
+      - name: The committed backend file is present
+        run: |
+          if [ ! -f terraform/server/backend.tf ]; then
+            echo "::error::terraform/server/backend.tf is missing; the human commits it in D19a (#207)"
+            exit 1
+          fi
+
+      - name: Mask the plan role's unique ID
+        env:
+          ROLE_ID: ${{ secrets.AWS_PLAN_ROLE_ID }}
+        run: |
+          if [ -z "$ROLE_ID" ]; then
+            echo "::error::the plan role unique ID secret is missing or empty"
+            exit 1
+          fi
+          echo "::add-mask::$ROLE_ID"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: us-east-1
+          mask-aws-account-id: true
+
+      # -lock=false: the plan role cannot write the native lock file (terraform/ci-access/plan.tf, #156).
+      - name: Plan and check its actions (counts only)
+        run: |
+          fail() { echo "terraform plan failed; reproduce it locally with the server plan step in terraform/README.md"; exit 1; }
+          terraform -chdir=terraform/server init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" > /dev/null 2>&1 || fail
+          terraform -chdir=terraform/server plan -input=false -lock=false -no-color -out="$RUNNER_TEMP/server.tfplan" > /dev/null 2>&1 || fail
+          set +e
+          terraform -chdir=terraform/server show -json "$RUNNER_TEMP/server.tfplan" 2> /dev/null | python3 -I scripts/check_plan_actions.py
+          codes=("${PIPESTATUS[@]}")
+          set -e
+          if [ "${codes[0]}" -ne 0 ]; then fail; fi
+          exit "${codes[1]}"
+
+      - name: Delete the plan file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/server.tfplan"

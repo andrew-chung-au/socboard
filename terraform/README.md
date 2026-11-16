@@ -74,6 +74,8 @@ No outputs, no secrets, no KMS key. The bucket name is a variable so that no AWS
 
 `plan_role_arn`, `apply_role_arn` and `deploy_role_arn`. The workflows (D18b, D22a, D22b) take them as repository secrets (`AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`), because each ARN contains the account number and Actions logs mask secrets but not variables.
 
+The plan workflow also needs the repository secret `AWS_PLAN_ROLE_ID`: the plan role's unique ID (it starts `AROA`; the deploy role's is `AWS_DEPLOY_ROLE_ID`, under Prod access). It is not an output of this part. The credentials action prints the role's unique ID in the log, and GitHub masks only values registered as secrets, so a step before the credentials step masks this one (#209); the plan job fails with a fixed message if the secret is empty. Set it without printing it: `aws iam get-role --profile socboard --role-name socboard-ci-plan --query Role.RoleId --output text | gh secret set AWS_PLAN_ROLE_ID --repo andrew-chung-au/socboard`. A recreated role gets a new unique ID, so set the secret again after any recreate.
+
 ### Steps for the human (not yet run)
 
 Run each step in `terraform/ci-access/` with AWS credentials for your own account in your shell (never in a file in this repository). The state bucket from `state/` must already exist.
