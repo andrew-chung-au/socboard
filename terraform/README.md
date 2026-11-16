@@ -255,7 +255,7 @@ Destroy this part first, then `iam-and-budgets/`, `ci-access/` and `state/` last
 
 ### Steps for the human in D19b
 
-These are the steps to replace the instance of a server whose bootstrap has already run, which is what any change to `bootstrap.sh.tftpl` or `acme_ca` needs (#266 is the next one). The maintainer ran them once, on 2026-11-16 (#256's hardened bootstrap over #233's); the results are in `_human-tasks/2026-11-16T0033Z-human-task-236-engineer-first-apply-part-b.md`. The order and the commands of the sign-in, the plan and its checks, the apply, the wait, the host checks, the re-run, the reboot, the second plan and the clean-up are the ones that run used. Four things here are new and were not part of it, and each says so: the readings before the replacement (that run took none, and the root disk with its logs is gone), the certificate comparison, the `ssm_run` helper (its shape is written for this README, `VERIFY:` that it runs as written), and the update of `DEPLOY_INSTANCE_ID`. On a first apply with the bootstrap, follow the server section's steps instead.
+These are the steps to replace the instance of a server whose bootstrap has already run, which is what any change to `bootstrap.sh.tftpl` or `acme_ca` needs (#266 is the next one). The maintainer ran them once, on 2026-11-16 (#256's hardened bootstrap over #233's); the results are in `_human-tasks/2026-11-16T0033Z-human-task-236-engineer-first-apply-part-b.md`. The order and the commands of the sign-in, the plan and its checks, the apply, the wait, the host checks, the re-run, the reboot, the second plan and the clean-up are the ones that run used. Three things here are new and were not part of it, and each says so: the readings before the replacement (that run took none, and the root disk with its logs is gone), the certificate comparison, and the update of `DEPLOY_INSTANCE_ID`. On a first apply with the bootstrap, follow the server section's steps instead.
 
 Run every step in your own shell, in `terraform/server/` (same backend as the server section, region `us-east-1`). Never write the AWS account number, an ARN that contains it, a token or a secret value into a file in this repository.
 
@@ -275,11 +275,17 @@ Expected: a URL and a code to enter in your browser, then "Successfully logged i
 If different: any other message means no sign-in; stop and do not run a later step, because the CLI can fall back to another profile (the 2026-11-15 incident, evidence timeline).
 
 ```
-[ "$(aws sts get-caller-identity --query Account --output text)" = "$(aws configure get sso_account_id --profile socboard)" ] && echo "account matches the socboard profile" || echo "ACCOUNT DIFFERS"
+whereami() { if [ "$(aws sts get-caller-identity --query Account --output text)" = "$(aws sts get-caller-identity --profile socboard --query Account --output text)" ]; then echo "SUB-ACCOUNT ($AWS_PROFILE)"; else echo "MAIN ACCOUNT ($AWS_PROFILE)"; fi; }
 ```
 
-Expected: `account matches the socboard profile`. The command prints neither account number. It is a suggested form of the check you ran (`VERIFY:` the profile has `sso_account_id`); any check that compares the two without printing them will do.
-If different: `ACCOUNT DIFFERS` means the shell is signed in to another account; stop and sign in again.
+Expected: no output. The function compares the current account with the `socboard` profile's and prints neither number.
+
+```
+whereami
+```
+
+Expected: `SUB-ACCOUNT (socboard)`.
+If different: `MAIN ACCOUNT` means the shell is signed in to another account; stop and sign in again.
 Risk: none, it only reads.
 
 ```
@@ -290,13 +296,19 @@ Expected: `## main...origin/main` and no other line: an up-to-date clean clone.
 
 #### Step 2: record what the replacement changes (new)
 
-This step reads the old instance before it is deleted. Define the helper once; it sends one shell command to the current instance through Systems Manager and prints its output:
+This step reads the old instance before it is deleted. Set the instance id and define the helper once. `onserver` sends one shell command to the instance through Systems Manager and prints its output (the maintainer's helper, verified on 2026-11-16):
 
 ```
-ssm_run() { id=$(aws ssm send-command --region us-east-1 --document-name AWS-RunShellScript --instance-ids "$(terraform output -raw instance_id)" --parameters "commands=[\"$1\"]" --query Command.CommandId --output text) && aws ssm wait command-executed --region us-east-1 --command-id "$id" --instance-id "$(terraform output -raw instance_id)" && aws ssm get-command-invocation --region us-east-1 --command-id "$id" --instance-id "$(terraform output -raw instance_id)" --query StandardOutputContent --output text; }
+IID=$(terraform output -raw instance_id)
 ```
 
-Expected: no output. The text given to `ssm_run` must hold no double quote, because it goes into a JSON list. If a command given to `ssm_run` fails on the instance, it prints an error naming the command's status; the same check can be run in a Session Manager session instead.
+Expected: no output. `IID` holds the current instance id; set it again in step 5, after the apply.
+
+```
+onserver() { CID=$(aws ssm send-command --region us-east-1 --instance-ids "$IID" --document-name AWS-RunShellScript --parameters "{\"commands\":[\"$1\"]}" --query Command.CommandId --output text); aws ssm wait command-executed --region us-east-1 --command-id "$CID" --instance-id "$IID" 2>/dev/null; aws ssm get-command-invocation --region us-east-1 --command-id "$CID" --instance-id "$IID" --query StandardOutputContent --output text; }
+```
+
+Expected: no output. The text given to `onserver` must hold no double quote, because it goes into a JSON list. The wait gives up after about 100 seconds; if a command such as `cloud-init status --wait` runs longer, the output is empty or partial: run `aws ssm get-command-invocation --region us-east-1 --command-id "$CID" --instance-id "$IID" --query StandardOutputContent --output text` again until it prints the result.
 
 ```
 terraform output
@@ -312,25 +324,25 @@ echo | openssl s_client -connect "$(terraform output -raw hostname):443" -server
 Expected: `serial=`, an issuer that names Let's Encrypt, and two dates. Keep the serial: step 8 compares it. No output means no certificate is served yet: write "none".
 
 ```
-ssm_run 'tail -n 5 /var/log/cloud-init-output.log'
+onserver 'tail -n 5 /var/log/cloud-init-output.log'
 ```
 
 Expected: the last line is `socboard-bootstrap: done`.
 
 ```
-ssm_run 'dpkg-query -W docker.io docker-compose-v2 caddy'
+onserver 'dpkg-query -W docker.io docker-compose-v2 caddy'
 ```
 
 Expected: three package names with versions. Keep them.
 
 ```
-ssm_run 'stat -c %U:%u:%a:%n /srv/socboard-data /srv/socboard-data/postgres /srv/socboard-data/caddy'
+onserver 'stat -c %U:%u:%a:%n /srv/socboard-data /srv/socboard-data/postgres /srv/socboard-data/caddy'
 ```
 
 Expected: `owner:uid:mode:path` for each folder. A host bootstrapped by #256 or later shows `root:0:755` for the mount root, uid 999 and `700` for `postgres/`, and the `caddy` user and `700` for `caddy/`. A host bootstrapped by #233 alone shows the mount root owned by 999 and no `postgres/`; the new bootstrap fixes that.
 
 ```
-ssm_run 'findmnt -no UUID /srv/socboard-data; id -u caddy'
+onserver 'findmnt -no UUID /srv/socboard-data; id -u caddy'
 ```
 
 Expected: the volume's file-system UUID, then the `caddy` user's uid. Keep both: step 7 compares the UUID, and the new instance may give `caddy` another uid (the bootstrap re-owns `caddy/`).
@@ -369,7 +381,7 @@ terraform apply d19b.plan
 ```
 
 Expected: "Apply complete!" with the counts the plan showed (2026-11-16: 4 added, 0 changed, 3 destroyed) and the four outputs. A saved plan applies without a prompt: step 3's checks are the confirmation.
-If different: if the apply stops with an error, do not retry another way; send the error text. If no certificate is issued within 15 minutes (step 8 shows no valid certificate, and `ssm_run 'journalctl -u caddy --no-pager | tail -n 30'` shows ACME errors; the first attempts can fail while the Elastic IP's association is still moving), apply once more with the staging directory to find the cause without using up production attempts, then stop and ask for a new issue:
+If different: if the apply stops with an error, do not retry another way; send the error text. If no certificate is issued within 15 minutes (step 8 shows no valid certificate, and Caddy's journal, read with `onserver 'journalctl -u caddy --no-pager | tail -n 30'`, shows ACME errors; the first attempts can fail while the Elastic IP's association is still moving), apply once more with the staging directory to find the cause without using up production attempts, then stop and ask for a new issue:
 
 ```
 terraform apply -var acme_ca=https://acme-staging-v02.api.letsencrypt.org/directory
@@ -386,10 +398,16 @@ terraform output
 Expected: `elastic_ip`, `hostname` and `data_volume_id` equal step 2's; `instance_id` is new (2026-11-16: `i-0a09e0f4996d70859`).
 If different: a changed `elastic_ip` or `hostname` means the address was replaced; stop, because the hostname and the certificate no longer match.
 
+```
+IID=$(terraform output -raw instance_id)
+```
+
+Expected: no output. `onserver` and the later steps now use the new instance.
+
 #### Step 6: wait for the instance to come online
 
 ```
-for i in $(seq 60); do s=$(aws ssm describe-instance-information --region us-east-1 --filters "Key=InstanceIds,Values=$(terraform output -raw instance_id)" --query 'InstanceInformationList[].PingStatus' --output text); echo "$s"; [ "$s" = Online ] && break; sleep 10; done
+for i in $(seq 60); do s=$(aws ssm describe-instance-information --region us-east-1 --filters "Key=InstanceIds,Values=$IID" --query 'InstanceInformationList[].PingStatus' --output text); echo "$s"; [ "$s" = Online ] && break; sleep 10; done
 ```
 
 Expected: `Online` as the last line, on the first poll or within about ten minutes (2026-11-16: the first poll). Empty lines before it are normal while the agent starts.
@@ -399,44 +417,44 @@ Risk: none, it only reads.
 #### Step 7: check the host
 
 ```
-ssm_run 'cloud-init status --wait; tail -n 1 /var/log/cloud-init-output.log'
+onserver 'cloud-init status --wait; tail -n 1 /var/log/cloud-init-output.log'
 ```
 
 Expected: `status: done`, then `socboard-bootstrap: done`.
 
 ```
-ssm_run 'grep -c formatting /var/log/cloud-init-output.log; true'
+onserver 'grep -c formatting /var/log/cloud-init-output.log; true'
 ```
 
 Expected: `0`. A replacement never formats the volume, which already holds a file system.
 If different: `1` means the volume was seen as blank and formatted; stop, send the log, and start no stack.
 
 ```
-ssm_run 'findmnt /srv/socboard-data; findmnt -no UUID /srv/socboard-data'
+onserver 'findmnt /srv/socboard-data; findmnt -no UUID /srv/socboard-data'
 ```
 
 Expected: the volume's NVMe device (2026-11-16: `/dev/nvme1n1`), and the same UUID as step 2's. The fstab line is by UUID.
 
 ```
-ssm_run 'stat -c %U:%a:%n /srv/socboard-data /srv/socboard-data/postgres /srv/socboard-data/caddy'
+onserver 'stat -c %U:%a:%n /srv/socboard-data /srv/socboard-data/postgres /srv/socboard-data/caddy'
 ```
 
 Expected: `root:755` for `/srv/socboard-data`; `700` for `postgres/` owned by uid 999 (the host names it `dnsmasq`; nothing on the host runs as that uid); `caddy` and `700` for `caddy/`.
 
 ```
-ssm_run 'systemctl is-active docker caddy'
+onserver 'systemctl is-active docker caddy'
 ```
 
 Expected: `active` twice.
 
 ```
-ssm_run 'docker compose version --short'
+onserver 'docker compose version --short'
 ```
 
 Expected: a version (2026-11-16: 2.40.3).
 
 ```
-ssm_run 'caddy version'
+onserver 'caddy version'
 ```
 
 Expected: a version (2026-11-16: v2.11.9).
@@ -459,11 +477,11 @@ Expected (new): the same `serial=` as step 2: Caddy found its certificate and ac
 #### Step 9: run the bootstrap a second time
 
 ```
-ssm_run 'bash /var/lib/cloud/instance/scripts/part-001 > /tmp/socboard-rerun.log 2>&1; grep -c -w wrote /tmp/socboard-rerun.log; tail -n 1 /tmp/socboard-rerun.log'
+onserver 'bash /var/lib/cloud/instance/scripts/part-001 > /tmp/socboard-rerun.log 2>&1; grep -c -w wrote /tmp/socboard-rerun.log; tail -n 1 /tmp/socboard-rerun.log'
 ```
 
 Expected: `0` (no line with the word `wrote`), then `socboard-bootstrap: done` (2026-11-16: it wrote nothing and ended `done`).
-If different: a count above 0 means a step is not idempotent; stop and send `ssm_run 'cat /tmp/socboard-rerun.log'`.
+If different: a count above 0 means a step is not idempotent; stop and send `onserver 'cat /tmp/socboard-rerun.log'`.
 Risk: none when it behaves; a step that is not idempotent rewrites a file and restarts a service. Undo: none; the next replacement starts from the template again.
 
 #### Step 10: update the instance id that CI deploys to (new)
@@ -488,18 +506,18 @@ Risk: a wrong value fails the next deploy job before any AWS call, naming the va
 #### Step 11: reboot
 
 ```
-aws ec2 reboot-instances --region us-east-1 --instance-ids "$(terraform output -raw instance_id)"
+aws ec2 reboot-instances --region us-east-1 --instance-ids "$IID"
 ```
 
 Expected: no output. Wait a minute, then repeat step 6's command until the last line is `Online`.
 Risk: both stacks are down for about two minutes. Undo: none needed. Once a stack is deployed, its containers come back only with `restart: unless-stopped` in the Compose file.
 
 ```
-ssm_run 'findmnt /srv/socboard-data; systemctl is-active docker caddy'
+onserver 'findmnt /srv/socboard-data; systemctl is-active docker caddy'
 ```
 
 Expected: the volume mounted, then `active` twice (2026-11-16: as reported).
-If different: if the volume is not mounted, Docker and Caddy stay stopped on purpose (`RequiresMountsFor`) while Systems Manager still reaches the host; stop and send `ssm_run 'systemctl status docker --no-pager'`.
+If different: if the volume is not mounted, Docker and Caddy stay stopped on purpose (`RequiresMountsFor`) while Systems Manager still reaches the host; stop and send `onserver 'systemctl status docker --no-pager'`.
 
 #### Step 12: a second plan, and clean-up
 
@@ -524,7 +542,7 @@ Expected: no output; `backend.tf` and `.terraform.lock.hcl` are unchanged.
 
 #### Step 13: record the result once
 
-Write the results (date, what was checked, result, link) into a dated file in `_human-tasks/` named for the issue that asked for the replacement, with a row for each step above, and put one line in `_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md` that links it. Include the old and new instance ids, the plan counts, the old and new certificate serials and the readings from step 2. The record holds no account number, no ARN with it, no e-mail address and no secret.
+Write the results (date, what was checked, result, link) into a dated file in `_human-tasks/` named for the issue that asked for the replacement (suggested name: `_human-tasks/` followed by the output of `date -u +%Y-%m-%dT%H%MZ`, then `-human-task-<issue number>-engineer-<slug>.md`), with a row for each step above, and put one line in `_docs/records/2026-11-16T0000Z-measure-planning-deploy-evidence-timeline.md` that links it. Include the old and new instance ids, the plan counts, the old and new certificate serials and the readings from step 2. The record holds no account number, no ARN with it, no e-mail address and no secret.
 Expected: each row is PASS, FAIL or NOT CHECKED. A FAIL says what you saw, and the fix goes through a new issue, never an edit during the apply. A fix to the bootstrap replaces the instance again, so these steps run again from step 2, and the record says why.
 
 ### Teardown

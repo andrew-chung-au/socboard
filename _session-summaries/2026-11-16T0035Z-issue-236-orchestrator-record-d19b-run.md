@@ -32,7 +32,7 @@ none
 - The maintainer reassigned #236 to this session (2026-11-16) and said the run was already done, so the checklist is a record and the human is asked to run nothing.
 - Scope addition, approved by the maintainer on 2026-11-16 (a change to #236's "no other README section changes" constraint): update the bootstrap section's "Status: not yet run" and the `VERIFY: at D19b` notes that the run settled, and no others. Settled and removed: the package names on noble, the by-id link name, the re-run path (and its idempotency), plus the status text (packages installed, the volume found and mounted, `caddy/` on the volume, reboot recovery). Left open: the Cloudsmith key, unattended upgrades, the hostname format, Let's Encrypt without a contact address, a missing volume not blocking the boot, certificate re-use on a replacement, and the forwarded address.
 - Results: rows 12 to 14 stay NOT CHECKED (no reading was taken before the replacement); the reboot and second-plan rows read PASS (as reported); everything else not reported reads "Not reported".
-- The maintainer gave the commands of the run; the README steps were rewritten to follow them (sign in, plan with checks, apply of the saved plan, `send-command` checks, re-run, reboot, second plan, `rm -f d19b.plan`). New and marked as such: the readings before the replacement, the certificate comparison, the `ssm_run` helper and the `DEPLOY_INSTANCE_ID` update. The account check is my wording of "compare without printing" (`VERIFY:` `sso_account_id`).
+- The maintainer gave the commands of the run; the README steps were rewritten to follow them (sign in, plan with checks, apply of the saved plan, `send-command` checks, re-run, reboot, second plan, `rm -f d19b.plan`). New and marked as such: the readings before the replacement, the certificate comparison and the `DEPLOY_INSTANCE_ID` update. The account check (`whereami`) and the helper (`onserver`) are the maintainer's own, verified on 2026-11-16 and used as given. QA's first run (FAIL at 0663961) listed two Mediums that came from QA not having the maintainer's full message: the uid 999 check and the reboot sub-results were reported, so they stay; the other points were applied.
 
 ## Mismatches with the spec or design docs
 
@@ -56,7 +56,7 @@ none
 
 ## Unrelated problems noticed but not fixed
 
-- F-236-1: the bootstrap section's "Status: not yet run" text and "VERIFY: at D19b" notes were out of date after the run. Fixed in this pull request on the maintainer's approval (the findings file is not edited, per its rule).
+- F-236-1: the bootstrap section's "Status: not yet run" text and "VERIFY: at D19b" notes were out of date after the run. Fixed in this pull request on the maintainer's approval, and marked fixed in the findings file at the maintainer's request.
 - F-236-2: no readings were taken before the replacement, so three comparison rows cannot be filled.
 - F-236-3: the outside checks and the listener's peer address were not run against the new instance.
 
