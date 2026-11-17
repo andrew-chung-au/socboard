@@ -1,0 +1,11 @@
+{
+  "run_id": "44123146917",
+  "run_url": "https://github.com/andrew-chung-au/socboard/actions/runs/44123146917",
+  "commit": "d665893d67a73978e15feb07b22e001f4764dbd9",
+  "files": [
+    {
+      "name": "README.md",
+      "shows": "The drill record: the run, the agent's pull request #381, what each job checked and the result"
+    }
+  ]
+}
