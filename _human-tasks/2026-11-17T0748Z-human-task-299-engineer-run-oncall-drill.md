@@ -108,16 +108,17 @@ Risk: the token acts as your Claude account, and drill runs count against its us
 
 ### Step 3: land the workflow and the two workflow changes
 
-Make a branch, copy the proposed workflow, apply the diff for the other workflows, and check what changed.
+The drill's scripts, tests and the proposed workflow are on the branch `claude/299-oncall-workflow`, not yet on `main`. Start a new branch from it, copy the proposed workflow, apply the diff for the other workflows, and check what changed. Use a branch name that does not exist yet (`git branch --list 'land-*'` shows the ones that do).
 
 ```
-git switch -c land-oncall-drill-299
+git fetch origin
+git switch -c land-299-workflow origin/claude/299-oncall-workflow
 cp observability/drill/proposed/oncall-drill.yml .github/workflows/oncall-drill.yml
 git apply observability/drill/proposed/workflow-changes.patch
 git status --short
 ```
 
-Expected: `A`/`??` for `.github/workflows/oncall-drill.yml` and ` M` for `.github/workflows/compose.yml`, `.github/workflows/observability.yml` and `.github/workflows/verify.yml`.
+Expected: `fatal` is absent from the output of the commands above; then `??` for `.github/workflows/oncall-drill.yml` and ` M` for `.github/workflows/compose.yml`, `.github/workflows/observability.yml` and `.github/workflows/verify.yml`.
 If different: stop and tell the orchestrator what was printed.
 
 The patch adds `ready_for_review` to the pull request types of `verify.yml` and `compose.yml` (so marking the agent's draft ready starts the normal CI), and raises the observability job's timeout from 20 to 30 minutes (the drift check runs the Python suite, about 6 minutes).
@@ -134,10 +135,10 @@ Commit, push and open the pull request, then merge it in the browser after CI is
 ```
 git add .github/workflows
 git commit -m "Land the on-call drill workflow and its two workflow changes (#299)"
-git push -u origin land-oncall-drill-299
+git push -u origin land-299-workflow
 ```
 
-Expected: the branch is pushed. Open the pull request in the browser (browser), wait for green checks, merge.
+Expected: the branch is pushed. Open the pull request into `main` in the browser (browser); it carries the whole drill (scripts, tests, the workflow). Wait for green checks, merge.
 If different: if the `socboard observability` run is red, open it: a failing drift check means the planted defect no longer applies or the suite catches it; stop and tell the orchestrator.
 
 ### Step 4: run the drill once
