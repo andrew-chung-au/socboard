@@ -43,11 +43,26 @@ def test_the_grafana_address_follows_the_port_variable(capsys):
     assert "http://127.0.0.1:13000/" in capsys.readouterr().out
 
 
-def test_down_removes_the_containers_and_keeps_the_volumes():
+def secrets_folder(tmp_path):
+    for name in ("compose.secrets", "observability.secrets"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+    return tmp_path
+
+
+def test_down_removes_the_containers_and_keeps_the_volumes(tmp_path):
     runner = Runner()
-    assert up.main(["down"], which=lambda name: "x", run=runner) == 0
+    assert up.main(["down"], which=lambda name: "x", run=runner, root=secrets_folder(tmp_path)) == 0
     assert runner.commands == [["docker", "compose", "--env-file", "compose.secrets", "--env-file", "observability.secrets", "-f", "compose.yaml", "-f", "compose.observability.yaml", "down"]]
     assert "--volumes" not in runner.commands[0] and "-v" not in runner.commands[0]
+
+
+@pytest.mark.parametrize("missing", ["compose.secrets", "observability.secrets"])
+def test_down_without_a_secrets_file_names_it_and_runs_nothing(missing, tmp_path, capsys):
+    folder = secrets_folder(tmp_path)
+    (folder / missing).unlink()
+    runner = Runner()
+    assert up.main(["down"], which=lambda name: "x", run=runner, root=folder) == 2
+    assert runner.commands == [] and f"{missing} is missing" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("action", ["up", "down"])

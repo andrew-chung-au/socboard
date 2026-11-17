@@ -44,6 +44,11 @@ def main(
     if which("docker") is None:
         print(f"observability-{action}: Docker is not installed or not on the PATH; nothing was started", file=sys.stderr)
         return 2
+    if action == "down":
+        for name in ("compose.secrets", "observability.secrets"):
+            if not (root / name).is_file():
+                print(f"observability-down: {name} is missing, so Compose cannot read the stack's configuration; start the stack first with make observability-up, or stop it with docker compose directly", file=sys.stderr)
+                return 2
     if action == "up":
         for script in SECRET_SCRIPTS:
             if not (root / script).is_file():

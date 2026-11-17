@@ -383,7 +383,7 @@ def test_the_dashboard_provider_reads_the_committed_folder_the_overlay_mounts():
 
 def test_the_dashboard_has_the_panels_the_issue_asks_for():
     doc = dashboard()
-    assert doc["title"] == "SOCBoard: alert to queue" and doc["uid"] == "socboard-alert-to-queue"
+    assert doc["title"] == "SOCBoard: alert to queue" and doc["uid"] == "socboard-queue-latency"
     titles = [panel["title"] for panel in doc["panels"]]
     assert len(titles) == len(set(titles)) == 5
     exprs = {title: [t["expr"] for t in targets] for title, targets in ((panel["title"], panel["targets"]) for panel in doc["panels"])}
@@ -424,3 +424,21 @@ def test_the_collector_makes_the_resource_attributes_series_labels_for_those_fil
 def test_the_secrets_file_is_ignored_by_git_and_the_image_build():
     assert "/observability.secrets" in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "observability.secrets" in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+
+
+def test_the_dashboards_uid_is_the_one_the_alert_rules_dashboard_url_names():
+    """The page of QueueLatencyOverSLO says to open dashboard_url first: it must open this dashboard (QA, #293)."""
+    rules = yaml.safe_load((ROOT / "observability" / "alerts" / "queue_latency.yml").read_text(encoding="utf-8"))
+    urls = {rule["annotations"]["dashboard_url"] for group in rules["groups"] for rule in group["rules"] if "dashboard_url" in rule.get("annotations", {})}
+    assert len(urls) == 1
+    (url,) = urls
+    assert url.startswith("http://localhost:3000/d/") and url.rstrip("/").split("/")[-1] == dashboard()["uid"]
+    query = importlib.util.spec_from_file_location("observability_query_for_uid", ROOT / "observability" / "ci" / "query.py")
+    module = importlib.util.module_from_spec(query)
+    query.loader.exec_module(module)
+    assert module.GRAFANA_DASHBOARD == dashboard()["uid"]  # the run checks the dashboard the page opens
+
+
+def test_the_dashboard_variables_use_the_query_editors_shape():
+    for variable in dashboard()["templating"]["list"]:
+        assert variable["query"]["qryType"] == 1 and variable["query"]["query"].startswith("label_values(")

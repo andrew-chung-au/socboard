@@ -20,7 +20,19 @@ import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..", "..");
-const { chromium } = await import(path.join(root, "e2e", "node_modules", "playwright-core", "index.mjs"));
+// e2e/package.json declares @playwright/test; the install hoists playwright-core beside it. Either has `chromium`.
+async function playwright() {
+  for (const name of ["playwright-core/index.mjs", "@playwright/test/index.mjs"]) {
+    try {
+      const library = await import(path.join(root, "e2e", "node_modules", name));
+      if (library.chromium) return library;
+    } catch {
+      // try the next one
+    }
+  }
+  refuse("Playwright is not installed: run `make e2e-install` first");
+}
+const { chromium } = await playwright();
 
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$/i;
 const TRACE_ID = /^[0-9a-f]{32}$/;
@@ -65,12 +77,14 @@ function redact(text) {
 
 await mkdir(out, { recursive: true });
 const browser = await chromium.launch();
-const context = await browser.newContext({
-  viewport: VIEWPORT,
-  colorScheme: "dark",
-  deviceScaleFactor: 1,
-  httpCredentials: { username: "admin", password },
-});
+const context = await browser.newContext({ viewport: VIEWPORT, colorScheme: "dark", deviceScaleFactor: 1 });
+
+// Sign in once: Grafana sends a page request to its login form, not a Basic-auth challenge, so the browser's
+// own credentials would never be used. The session cookie is shared by the page and by context.request.
+const login = await context.request.post(`${grafana}/login`, { data: { user: "admin", password } });
+if (!login.ok()) refuse(`the sign-in answered HTTP ${login.status()}`);
+const whoami = await context.request.get(`${grafana}/api/user`);
+if (!whoami.ok()) refuse(`the session was not accepted (HTTP ${whoami.status()})`);
 const page = await context.newPage();
 
 async function panelsLoaded(minimum) {
@@ -86,6 +100,8 @@ async function panelsLoaded(minimum) {
     { timeout: PANEL_TIMEOUT_MS },
   );
   await page.waitForLoadState("networkidle");
+  // The loading-bar selectors can match nothing and pass at once; a short settle lets the last panel draw.
+  await page.waitForTimeout(3_000);
 }
 
 async function shoot(name, url, ready) {
@@ -109,7 +125,7 @@ const pane = (datasource, query) =>
 
 await shoot(
   "dashboard.png",
-  `${grafana}/d/socboard-alert-to-queue/socboard-alert-to-queue?orgId=1&${range}&refresh=&theme=dark&kiosk`,
+  `${grafana}/d/socboard-queue-latency/socboard-alert-to-queue?orgId=1&${range}&refresh=&theme=dark&kiosk`,
   () => panelsLoaded(5),
 );
 await shoot(

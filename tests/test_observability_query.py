@@ -347,7 +347,7 @@ def test_a_provisioned_grafana_passes_and_signs_in_with_basic_auth():
     assert code == 0 and clock.sleeps == []
     assert lines == ["grafana: the three datasources answer, the dashboard is provisioned with its five panels, and anonymous access is refused"]
     assert all(h == {"Authorization": f"Basic {TOKEN}"} for u, h in stores.requests if "datasources" in u)
-    assert stores.requests[-1] == ("http://graf/api/dashboards/uid/socboard-alert-to-queue", {})  # the last request is the anonymous one
+    assert stores.requests[-1] == ("http://graf/api/dashboards/uid/socboard-queue-latency", {})  # the last request is the anonymous one
 
 
 @pytest.mark.parametrize(
@@ -357,9 +357,9 @@ def test_a_provisioned_grafana_passes_and_signs_in_with_basic_auth():
         (GrafanaStores(datasources=[{"uid": "prometheus", "type": "prometheus"}, {"uid": "tempo", "type": "jaeger"}, {"uid": "loki", "type": "loki"}]), "grafana: datasource tempo: missing or not of type tempo"),
         (GrafanaStores(health={"loki": (200, b'{"status": "ERROR", "message": "no"}')}), "grafana: datasource loki: its health check does not say OK"),
         (GrafanaStores(health={"loki": (500, b"")}), "grafana: datasource loki: its health check does not say OK (HTTP 500)"),
-        (GrafanaStores(dashboard=(404, b"")), "grafana: dashboard socboard-alert-to-queue: not found (HTTP 404)"),
-        (GrafanaStores(dashboard=(200, json.dumps({"dashboard": {"panels": [{}] * 4}, "meta": {"provisioned": True}}).encode())), "grafana: dashboard socboard-alert-to-queue: 4 panels, not 5"),
-        (GrafanaStores(dashboard=(200, json.dumps({"dashboard": {"panels": [{}] * 5}, "meta": {"provisioned": False}}).encode())), "grafana: dashboard socboard-alert-to-queue: not provisioned from a file"),
+        (GrafanaStores(dashboard=(404, b"")), "grafana: dashboard socboard-queue-latency: not found (HTTP 404)"),
+        (GrafanaStores(dashboard=(200, json.dumps({"dashboard": {"panels": [{}] * 4}, "meta": {"provisioned": True}}).encode())), "grafana: dashboard socboard-queue-latency: 4 panels, not 5"),
+        (GrafanaStores(dashboard=(200, json.dumps({"dashboard": {"panels": [{}] * 5}, "meta": {"provisioned": False}}).encode())), "grafana: dashboard socboard-queue-latency: not provisioned from a file"),
         (GrafanaStores(anonymous=200), "grafana: anonymous access: the dashboard answered HTTP 200 without a login, not 401"),
     ],
 )

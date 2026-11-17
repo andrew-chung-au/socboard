@@ -241,16 +241,24 @@ Step 2: sign in to Grafana at `http://127.0.0.1:3000/` as `admin`, with the pass
 
 Expected: the home page is the dashboard "SOCBoard: alert to queue", with the environment and version filters at the top. It is empty until the app has been used.
 
-Step 3: send some alerts the way the probe does (the probe reads `SOCBOARD_INGEST_API_KEY` and `SOCBOARD_SEED_PASSWORD_LEAD`, which are in `compose.secrets`, and exports its measure to the collector when `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318` and `OTEL_METRIC_EXPORT_INTERVAL=5000` are set in your shell).
+Step 3: load the stack's secrets into your shell, which the probe needs (it reads `SOCBOARD_INGEST_API_KEY` and `SOCBOARD_SEED_PASSWORD_LEAD`; nothing is printed).
 
 ```
-uv run python scripts/observability_probe.py http://127.0.0.1:8000 --count 8
+set -a; . ./compose.secrets; set +a
+```
+
+Expected: no output. Close the terminal afterwards, or run `unset SOCBOARD_INGEST_API_KEY SOCBOARD_SEED_PASSWORD_LEAD`, so the secrets do not stay in that shell.
+
+Step 4: send some alerts the way the probe does, exporting its measure to the collector.
+
+```
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 OTEL_METRIC_EXPORT_INTERVAL=5000 uv run python scripts/observability_probe.py http://127.0.0.1:8000 --count 8
 ```
 
 Expected: eight lines, `trace=`, `case=` and `delay=`, taking about 40 seconds. Within a minute the dashboard shows the probe's p50, p95 and p99 against the 5-second line, the delay buckets with trace links (click an exemplar to open its trace in Tempo), the ingest outcomes per minute and the `alert.ingested` log lines, whose `trace_id` opens the same trace.
-If different: empty panels mean the probe's export did not reach the collector (check the two variables above in the shell that ran it) or the filters at the top exclude the data. The app's own panels fill when the app receives alerts; `make observability-up` already points the app at the collector.
+If different: `refused` with a variable name means step 3 did not run in this shell. Empty panels mean the probe's export did not reach the collector (`OTEL_EXPORTER_OTLP_ENDPOINT` on that command) or the filters at the top exclude the data. The app's own panels fill when the app receives alerts; `make observability-up` already points the app at the collector.
 
-Step 4: stop it.
+Step 5: stop it.
 
 ```
 make observability-down

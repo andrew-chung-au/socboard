@@ -1,5 +1,5 @@
 {
-  "uid": "socboard-alert-to-queue",
+  "uid": "socboard-queue-latency",
   "title": "SOCBoard: alert to queue",
   "description": "The 5-second promise: the time from an ingested alert until its case is in the queue. The probe's measurement (left) is the alert's source; the app's own diagnostic is on the right.",
   "tags": [
@@ -27,8 +27,9 @@
           "uid": "prometheus"
         },
         "query": {
+          "qryType": 1,
           "query": "label_values(socboard_probe_time_to_queue_seconds_count, deployment_environment_name)",
-          "refId": "env"
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
         "includeAll": true,
@@ -48,8 +49,9 @@
           "uid": "prometheus"
         },
         "query": {
+          "qryType": 1,
           "query": "label_values(socboard_probe_time_to_queue_seconds_count, service_version)",
-          "refId": "ver"
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
         "includeAll": true,

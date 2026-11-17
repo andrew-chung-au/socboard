@@ -73,7 +73,7 @@ if [ -n "${SCREENSHOT_DIR:-}" ]; then
     OTEL_METRIC_EXPORT_INTERVAL=5000 \
       uv run --locked python scripts/observability_probe.py http://127.0.0.1:8000 --count 8 --interval 5
   ) | tee "$PROBE_LOG" || echo "the probe exited non-zero (a cycle was slow or failed); its lines are above, and the screenshots go on"
-  PROBE_TRACE="$(grep -o 'trace=[0-9a-f]\{32\}' "$PROBE_LOG" | tail -n 1 | cut -d= -f2)"
+  PROBE_TRACE="$(grep 'case=' "$PROBE_LOG" | grep -o 'trace=[0-9a-f]\{32\}' | tail -n 1 | cut -d= -f2)"
   test -n "$PROBE_TRACE" || { echo "no probe cycle printed a trace id"; exit 1; }
   echo "--- the probe's last trace id: $PROBE_TRACE (a few seconds for the export to land)"
   sleep 15

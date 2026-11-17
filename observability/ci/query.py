@@ -75,7 +75,7 @@ READY_PATHS = {
     "collector": "/",
 }
 GRAFANA_DATASOURCES = {"prometheus": "prometheus", "tempo": "tempo", "loki": "loki"}  # uid: type
-GRAFANA_DASHBOARD = "socboard-alert-to-queue"
+GRAFANA_DASHBOARD = "socboard-queue-latency"  # the uid the alert rule's dashboard_url names (observability/alerts/queue_latency.yml)
 GRAFANA_PANELS = 5
 CANARY = re.compile(r"CANARY-[A-Za-z0-9-]{1,60}")
 

@@ -110,7 +110,7 @@ services:
 
   # Grafana (#293): the dashboard and the three datasources are provisioned from files, so a start from
   # nothing needs no clicks. Its login is the admin user with the generated password; anonymous access and
-  # sign-up are off. Reporting and update checks are off (it makes no call out). Port 3000 on 127.0.0.1 only.
+  # sign-up are off. Reporting, update checks and plugin downloads are off. Port 3000 on 127.0.0.1 only.
   grafana:
     image: grafana/grafana:13.3.1@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf
     user: "472:472"
