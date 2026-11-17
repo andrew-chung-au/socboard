@@ -422,7 +422,10 @@ jobs:
           fetch=0
           for id in $(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate --jq '.jobs[] | select(.name != "report") | .id'); do
             # A log that cannot be fetched, or comes back empty, is a failed scan, not a clean one.
-            gh api "repos/$REPO/actions/jobs/$id/logs" > "$RUNNER_TEMP/logs/$id.txt" && test -s "$RUNNER_TEMP/logs/$id.txt" || { echo "could not fetch the log of job $id"; fetch=1; }
+            # Job logs hold colour codes, and gh refuses to print a response with terminal escape sequences
+            # unless told to (run 44091359362: every log came back empty). The output goes to a file, never a
+            # terminal, and logscan.py reads it as text.
+            gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$id/logs" >"$RUNNER_TEMP/logs/$id.txt" && test -s "$RUNNER_TEMP/logs/$id.txt" || { echo "could not fetch the log of job $id"; fetch=1; }
           done
           ls "$RUNNER_TEMP"/logs/*.txt > /dev/null 2>&1 || fetch=1
           python3 observability/drill/logscan.py "$RUNNER_TEMP"/logs/*.txt
