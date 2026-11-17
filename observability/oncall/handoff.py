@@ -49,7 +49,7 @@ EXPECTED_LABELS = ("alertname", "severity", "service")  # CONTRACT.md section 6
 EXPECTED_ANNOTATIONS = ("summary", "environment", "version", "owner", "dashboard_url")
 FIELD_VALUE = re.compile(r"[A-Za-z0-9._+-]{1,64}")  # #312's rule for environment and version
 URL_TEXT = re.compile(r"[\x21-\x7e]{1,512}")
-RFC3339 = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})")
+RFC3339 = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})")
 
 
 class Refused(ValueError):
@@ -95,9 +95,11 @@ def _time(value) -> str | None:
         return None
     try:
         moment = datetime.fromisoformat(match[1] + ("+00:00" if match[2] == "Z" else match[2]))
-    except ValueError:
+        moment = moment.astimezone(UTC)  # OverflowError when the UTC time is before year 1 or after 9999
+    except (ValueError, OverflowError):
         return None
-    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # The year is padded by hand: strftime("%Y") writes "1" for year 1 on some platforms.
+    return f"{moment.year:04d}" + moment.strftime("-%m-%dT%H:%M:%SZ")
 
 
 def _is_active(alert: dict) -> bool:
@@ -182,7 +184,7 @@ def fetch(host: str, port: int):
         if response.status != 200 or len(body) > MAX_BODY:
             raise Unreachable
         return json.loads(body)
-    except (OSError, http.client.HTTPException, ValueError):
+    except (OSError, http.client.HTTPException, ValueError, RecursionError):  # RecursionError: a body nested too deep
         raise Unreachable from None
     finally:
         connection.close()

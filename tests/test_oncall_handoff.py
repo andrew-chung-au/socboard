@@ -352,6 +352,19 @@ def test_starts_at_is_written_in_one_fixed_form(given, written):
     assert parse_alerts([api_alert(startsAt=given)], GRAFANA)["startsAt"] == written
 
 
+def test_starts_at_year_is_zero_padded():
+    assert parse_alerts([api_alert(startsAt="0001-01-01T00:00:00Z")], GRAFANA)["startsAt"] == "0001-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("value", ["0001-01-01T00:00:00+05:00", "9999-12-31T23:59:59-05:00"])
+def test_starts_at_that_cannot_be_converted_is_refused_not_a_crash(value):
+    check_refused(api_alert(startsAt=value), "startsAt")
+
+
+def test_starts_at_with_a_non_ascii_digit_is_refused():
+    check_refused(api_alert(startsAt="2026-11-16T04:00:0\u0665Z"), "startsAt")  # ARABIC-INDIC DIGIT FIVE
+
+
 def test_extra_label_or_annotation_is_refused_by_a_fixed_word_not_its_name():
     alert = api_alert()
     alert["labels"]["CANARY-TITLE-7f3a91c2"] = "x"
@@ -571,6 +584,16 @@ def test_bad_answer_exits_2_or_waits_but_never_writes(tmp_path, response):
     assert code == (3 if response[0] == 200 and response[1] == {"alerts": []} else 2)
     assert not out.exists()
     assert len(am.requests) <= 2  # a redirect is not followed
+
+
+def test_a_body_nested_too_deep_exits_2(tmp_path):
+    depth = 100_000
+    body = b"[" * depth + b"]" * depth
+    assert len(body) <= handoff.MAX_BODY
+    out = tmp_path / "incident.json"
+    with fake_alertmanager([(200, body)]) as am:
+        assert run(["--out", str(out)], address=am.url) == 2
+    assert not out.exists()
 
 
 def test_oversized_answer_exits_2(tmp_path):
