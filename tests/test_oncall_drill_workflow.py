@@ -97,12 +97,84 @@ def test_checkouts_keep_no_credentials_except_the_publish_job():
                 assert keep is (name == "publish"), name
 
 
-def test_the_agent_job_checks_the_git_config_before_and_after_the_agent():
+def test_the_agent_job_records_the_start_and_writes_the_patch_with_its_own_git_directory():
     names = [s.get("name", "") for s in steps("agent")]
-    assert names.index("Record the repository's git config") < names.index("The on-call agent") < names.index("Write the patch")
+    assert names.index("Record the starting commit") < names.index("The on-call agent") < names.index("Write the patch")
     patch = next(s for s in steps("agent") if s.get("name") == "Write the patch")
     assert patch["env"]["GIT_CONFIG_NOSYSTEM"] == "1" and patch["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
-    assert "/usr/bin/git" in patch["run"] and "core.hooksPath=/dev/null" in patch["run"] and "core.fsmonitor=false" in patch["run"]
+    run = patch["run"]
+    assert "/usr/bin/git init" in run and '--git-dir="$gitdir"' in run and "objects/info/alternates" in run
+    assert "core.hooksPath=/dev/null" in run and "core.fsmonitor=false" in run and "--no-ext-diff --no-textconv" in run
+    assert ".git/config" not in run  # the checkout's own config is never read or trusted
+
+
+def _git(*args, cwd):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def test_the_patch_step_ignores_a_rewritten_git_config_and_a_planted_filter(tmp_path):
+    # The first live run (44065861050) failed here: the action rewrites .git/config before the agent runs.
+    work = tmp_path / "work"
+    work.mkdir()
+    _git("init", "-q", cwd=work)
+    (work / "app.py").write_text("x = 1\n")
+    (work / ".gitattributes").write_text("*.py filter=evil diff=evil\n")
+    _git("add", "-A", cwd=work)
+    _git("commit", "-q", "-m", "start", cwd=work)
+    start = subprocess.run(["git", "rev-parse", "HEAD"], cwd=work, capture_output=True, text=True, check=True).stdout.strip()
+    # What the action and a hostile agent could do to the checkout's own config.
+    marker = tmp_path / "ran"
+    with open(work / ".git" / "config", "a", encoding="utf-8") as config:
+        config.write(f'[user]\n\tname = claude[bot]\n[filter "evil"]\n\tclean = touch {marker}; cat\n[diff "evil"]\n\tcommand = touch {marker}\n')
+    (work / "app.py").write_text("x = 2\n")
+    (work / "tests").mkdir()
+    (work / "tests" / "test_app.py").write_text("def test_x():\n    assert True\n")
+    (work / ".oncall").mkdir()
+    (work / ".oncall" / "notes.md").write_text("notes\n")
+
+    patch = next(s for s in steps("agent") if s.get("name") == "Write the patch")
+    runner_temp = tmp_path / "runner"
+    runner_temp.mkdir()
+    output = tmp_path / "github_output"
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "RUNNER_TEMP": str(runner_temp), "GITHUB_OUTPUT": str(output),
+           **patch["env"]}
+    env["START_SHA"] = start  # the workflow's expression, replaced by the real value
+    done = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", patch["run"]], cwd=work, env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    text = (runner_temp / "agent-output" / "fix.patch").read_text()
+    assert "-x = 1" in text and "+x = 2" in text
+    assert "b/tests/test_app.py" in text
+    assert ".oncall" not in text
+    assert (runner_temp / "agent-output" / "notes.md").read_text() == "notes\n"
+    assert "change=true" in output.read_text()
+    assert not marker.exists()  # neither the planted filter nor the diff driver ran
+
+
+def test_the_patch_step_reports_no_change_when_the_agent_changed_nothing(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    _git("init", "-q", cwd=work)
+    (work / "app.py").write_text("x = 1\n")
+    _git("add", "-A", cwd=work)
+    _git("commit", "-q", "-m", "start", cwd=work)
+    start = subprocess.run(["git", "rev-parse", "HEAD"], cwd=work, capture_output=True, text=True, check=True).stdout.strip()
+    patch = next(s for s in steps("agent") if s.get("name") == "Write the patch")
+    (tmp_path / "runner").mkdir()
+    output = tmp_path / "out"
+    env = {**patch["env"], "PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "RUNNER_TEMP": str(tmp_path / "runner"),
+           "GITHUB_OUTPUT": str(output), "START_SHA": start}
+    done = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", patch["run"]], cwd=work, env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "change=false" in output.read_text()
+
+
+def test_the_patch_step_refuses_a_missing_start_commit(tmp_path):
+    patch = next(s for s in steps("agent") if s.get("name") == "Write the patch")
+    env = {**patch["env"], "PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "RUNNER_TEMP": str(tmp_path),
+           "GITHUB_OUTPUT": str(tmp_path / "out"), "START_SHA": ""}
+    done = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", patch["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert done.returncode == 1 and "no starting commit" in done.stdout
 
 
 def test_the_publish_job_runs_the_guard_from_main_before_it_applies_or_pushes_anything():

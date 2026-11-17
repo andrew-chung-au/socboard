@@ -150,9 +150,10 @@ jobs:
           name: drill-bundle
           path: .oncall/bundle
 
-      - name: Record the repository's git config
-        id: gitconfig
-        run: echo "hash=$(sha256sum .git/config | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      # The commit the agent starts from (main plus the defect). The patch is the work tree against this commit.
+      - name: Record the starting commit
+        id: start
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: The on-call agent
         uses: anthropics/claude-code-action@cc98b3ae241b0fcfb6a42a2690751afffecb4452
@@ -174,29 +175,40 @@ jobs:
 
       # A fixed step. Code the agent ran can have changed what runs here, so the publish job treats the patch
       # as untrusted and its guard is the boundary (MANDATE.md).
+      # A fixed step. The action itself rewrites .git/config (git user, the token in the remote URL), and code the
+      # agent ran could have added a filter or diff driver there, so the checkout's git directory is not used:
+      # a new one is made here, whose config this step wrote, and it borrows only the objects (data, never run).
+      # A driver named in the work tree's .gitattributes needs a config entry to run, and there is none.
+      # Code the agent ran can still change what later steps run, so the publish job treats the patch as
+      # untrusted and its guard is the boundary (MANDATE.md).
       - name: Write the patch
         id: patch
         shell: bash
         env:
           GIT_CONFIG_NOSYSTEM: "1"
           GIT_CONFIG_GLOBAL: /dev/null
-          WANT_HASH: ${{ steps.gitconfig.outputs.hash }}
+          START_SHA: ${{ steps.start.outputs.sha }}
         run: |
-          have="$(/usr/bin/sha256sum .git/config | cut -d' ' -f1)"
-          if [ "$have" != "$WANT_HASH" ]; then
-            echo "the repository's git config changed while the agent ran; no patch is written"
-            exit 1
-          fi
-          /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null add -N .
-          /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null diff --no-ext-diff --no-textconv > "$RUNNER_TEMP/fix.patch"
+          [[ "$START_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "no starting commit was recorded"; exit 1; }
+          clean="$(mktemp -d)"
+          /usr/bin/git init -q "$clean"
+          gitdir="$clean/.git"
+          echo "$PWD/.git/objects" > "$gitdir/objects/info/alternates"
+          echo ".oncall/" > "$gitdir/info/exclude"
+          g() { /usr/bin/git --git-dir="$gitdir" --work-tree="$PWD" -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+          g read-tree "$START_SHA"
+          g update-index -q --refresh || true
+          g add -N .
           mkdir -p "$RUNNER_TEMP/agent-output"
-          mv "$RUNNER_TEMP/fix.patch" "$RUNNER_TEMP/agent-output/fix.patch"
+          g diff --no-ext-diff --no-textconv > "$RUNNER_TEMP/agent-output/fix.patch"
           if [ -f .oncall/notes.md ]; then cp .oncall/notes.md "$RUNNER_TEMP/agent-output/notes.md"; fi
           if grep -q . "$RUNNER_TEMP/agent-output/fix.patch"; then
             echo "change=true" >> "$GITHUB_OUTPUT"
           else
             echo "change=false" >> "$GITHUB_OUTPUT"
           fi
+          git_files="$(grep -c '^diff --git ' "$RUNNER_TEMP/agent-output/fix.patch" || true)"
+          echo "the patch changes $git_files files"
 
       - name: Keep the patch and the notes
         if: always()
