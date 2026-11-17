@@ -230,7 +230,7 @@ Open the run's page; the job summary holds the digest:
 gh run view "$R" --repo andrew-chung-au/socboard --web
 ```
 
-Expected: your browser opens the run. In the job summary, read the digest: `sha256:` and 64 lower-case hex digits (`README.md`, "Published image", "Name and tag"; `_human-tasks/2026-11-15T1822Z-human-task-237-engineer-first-deploy.md`, Step 4). There is no `latest` tag: deploy by digest only.
+Expected: your browser opens the run. In the job summary, read the digest: `sha256:` and 64 lower-case hex digits (`README.md`, "Published image", "Name and tag"; `_human-tasks/2026-11-15T1822Z-human-task-237-engineer-first-deploy.md`, Step 4). There is no `latest` tag: deploy by digest only. Keep it: you paste it in place of `PASTE-DIGEST-HERE` in the `D` block below.
 If different: no browser on this machine means print the page's address with `gh run view "$R" --repo andrew-chung-au/socboard --json url --jq .url` and open it elsewhere.
 Risk: none, it only reads.
 
@@ -589,7 +589,7 @@ If different: as in Step 4.1.
 sudo docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$(sudo docker inspect --format '{{.Config.Image}}' socboard-app-1)"
 ```
 
-Expected: 40 hex digits: the revision of the image the app is running now.
+Expected: 40 hex digits: the revision of the image the app is running now. Keep it: you paste it in place of `PASTE-NEW-REVISION-HERE` in the `NEWREV` block below.
 If different: an error means the app container is not running or its image is gone; read `sudo docker ps -a --format '{{.Names}}  {{.Status}}'` and stop.
 
 ```
@@ -604,7 +604,7 @@ If Step 4.1 gave you no `OLDREV` (no record), read it on the server instead: in 
 sudo docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' ghcr.io/andrew-chung-au/socboard@PASTE-OLD-DIGEST-HERE
 ```
 
-Expected: 40 hex digits, after you replaced the text `PASTE-OLD-DIGEST-HERE`.
+Expected: 40 hex digits, after you replaced the text `PASTE-OLD-DIGEST-HERE`. Keep it: you paste it in place of `PASTE-OLD-REVISION-HERE` in the `OLDREV` block below.
 If different: an error means the image is not on the host: pull it first with `sudo docker pull ghcr.io/andrew-chung-au/socboard@` followed by the same digest.
 
 Back on your own machine, set the shortcut `NEWREV`. Replace `PASTE-NEW-REVISION-HERE` with the 40 hex digits the server printed for the running image:
@@ -1347,7 +1347,7 @@ Before you stop it, read the image dev runs, because Step 7.2.7 sends it again:
 sudo docker inspect --format '{{.Config.Image}}' socboard-app-1
 ```
 
-Expected: `ghcr.io/andrew-chung-au/socboard@sha256:` followed by 64 hex digits. The part after `@` is the digest for Step 7.2.7: keep it (write it down or leave this window open).
+Expected: `ghcr.io/andrew-chung-au/socboard@sha256:` followed by 64 hex digits. The part after `@` is the digest for Step 7.2.7: keep it (write it down or leave this window open). You paste it there in place of `PASTE-DIGEST-HERE`.
 If different: `no such object` means the app is not running: use the digest of the last good deploy (Step 2.1.2 or 4.1).
 
 ```
@@ -1672,7 +1672,7 @@ Keep: do nothing; they bill until you delete them. Delete (human only), one comm
 aws ec2 describe-snapshots --region us-east-1 --owner-ids self --filters Name=tag:project,Values=socboard --query 'Snapshots[].SnapshotId' --output text
 ```
 
-Expected: the ids of the snapshots that remain, up to seven plus Step 9.0's.
+Expected: the ids of the snapshots that remain, up to seven plus Step 9.0's. Keep this list: you paste each id, one at a time, in place of `PASTE-SNAPSHOT-ID-HERE` below.
 If different: no output means none remain.
 Risk: none, it only reads.
 
