@@ -104,9 +104,11 @@ async function panelsLoaded(minimum) {
   await page.waitForTimeout(3_000);
 }
 
-// Explore shows a "Cancel" button while a query runs (the first run's logs screenshot caught it mid-query).
+// Explore shows a "Cancel" button while a query runs. On the Loki page it can stay for a long time after
+// the log lines and the volume chart are drawn (the first run photographed it, with the content complete),
+// so wait for it a short while and go on; the screenshot is of the drawn content either way.
 async function queriesFinished() {
-  await page.getByRole("button", { name: "Cancel" }).waitFor({ state: "hidden", timeout: PANEL_TIMEOUT_MS });
+  await page.getByRole("button", { name: "Cancel" }).waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
   await page.waitForLoadState("networkidle");
   await page.waitForTimeout(2_000);
 }
