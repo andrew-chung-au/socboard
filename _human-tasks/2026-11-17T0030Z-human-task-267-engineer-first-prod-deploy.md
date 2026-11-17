@@ -10,7 +10,7 @@ Your own machine, with your own AWS credentials for the account (SSO, region `us
 
 If a tool shows a permission prompt, reject one prompt at a time; rejecting ends the agent's turn, so tell it to continue.
 
-Values used below, never copied into this file: `<instance id>`, `<dev hostname>` and `<prod hostname>` are outputs of `terraform/server/`; `<digest>` is the digest dev is running, read in step 5; `<secret file>` is a path outside the repository, made in step 3; `<command id>` is printed by a send.
+Values used below, never copied into this file: `<instance id>`, `<dev hostname>` and `<prod hostname>` are outputs of `terraform/server/`; `<digest>` is the digest dev is running, read in step 3; `<secret file>` is a path outside the repository, made in step 6; `<command id>` is printed by a send.
 
 The destructive steps in this file: none. Step 14 (a reboot) stops both apps for the length of the boot, and it is your choice whether to run it; the file says so there.
 
@@ -41,7 +41,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<dev hostname>/api/health
 ```
 
 Expected: `200`, with no certificate warning.
-If different: stop. Dev is not healthy, so the before and after check in step 7 would prove nothing. Tell the orchestrator what was printed.
+If different: stop. Dev is not healthy, so the before and after check in step 10 would prove nothing. Tell the orchestrator what was printed.
 
 ## Steps
 
@@ -164,7 +164,7 @@ If different: delete the file by hand before going on.
 The digest is the one dev is running (step 3), so no new image reaches prod unseen.
 
 ```
-aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest>,environment=prod --targets Key=tag:project,Values=socboard --query Command.CommandId --output text
+aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest>,environment=prod --instance-ids <instance id> --query Command.CommandId --output text
 ```
 
 Expected: one command id. Use it as `<command id>`.
@@ -234,7 +234,7 @@ If different: record what was printed; stop.
 ### Step 11: send the same digest to prod again
 
 ```
-aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest>,environment=prod --targets Key=tag:project,Values=socboard --query Command.CommandId --output text
+aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest>,environment=prod --instance-ids <instance id> --query Command.CommandId --output text
 ```
 
 Expected: one command id. Read the result as in step 8.
@@ -252,14 +252,14 @@ Refusal test: run these in your own machine's terminal, not in an agent session.
 Risk: if the pattern did not hold, the script's own check refuses the value with exit 2 and the text `socboard-deploy: refused: the environment must be dev or prod. Nothing was changed.`; nothing is changed and no secret is printed either way.
 
 ```
-aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest>,environment=Prod --targets Key=tag:project,Values=socboard
+aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest>,environment=Prod --instance-ids <instance id>
 ```
 
 Expected: an error from AWS that a parameter does not match its allowed pattern, and no command id.
 If different: if a command id is returned, read its result as in step 8: exit 2 with the refusal text is the script's own check. Record both.
 
 ```
-aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest>,environment=staging --targets Key=tag:project,Values=socboard
+aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest>,environment=staging --instance-ids <instance id>
 ```
 
 Expected: the same error, and no command id.
@@ -270,7 +270,7 @@ If different: as above.
 This is a dev run: the document's default is `dev`. Dev is running `<digest>`, so it says already deployed.
 
 ```
-aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest> --targets Key=tag:project,Values=socboard --query Command.CommandId --output text
+aws ssm send-command --region us-east-1 --document-name socboard-deploy --parameters digest=<digest> --instance-ids <instance id> --query Command.CommandId --output text
 ```
 
 Expected: one command id.
