@@ -88,8 +88,16 @@ def hex_trace(span):
 
 
 def test_the_route_is_sync_so_it_runs_in_the_thread_pool(traced):
-    (route,) = [r for r in traced.app.routes if getattr(r, "path", None) == "/api/alerts"]
-    assert not inspect.iscoroutinefunction(route.endpoint)
+    # FastAPI 0.162 keeps an included router as one wrapper entry in `app.routes`, so walk the
+    # routes inside it (as `_every_route` in test_auth_api.py does); the effective path has the prefix.
+    from fastapi.routing import iter_route_contexts
+
+    (context,) = [
+        c for c in iter_route_contexts(traced.app.routes) if c.path == "/api/alerts" and "POST" in (c.methods or ())
+    ]
+    assert not inspect.iscoroutinefunction(context.original_route.endpoint)
+    # The route the middleware reads from the scope names the span with the full path (the accepted-alert test).
+    assert context.original_route.path == "/api/alerts"
 
 
 def test_an_accepted_alert_has_a_span_a_count_and_a_log_with_one_trace_id(traced):
