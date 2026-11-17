@@ -25,7 +25,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from socboard import ratelimit, scoring
+from socboard import ratelimit, scoring, telemetry
 from socboard.audit import append_audit
 from socboard.auth import ConfigError, limit_ingest_rate, require_api_key
 from socboard.domain import ACTION_INGESTED, STATUS_NEW
@@ -81,47 +81,51 @@ def add_ingest_route(api_router: APIRouter) -> None:
     def ingest_alert(
         body: IngestRequest, session: Annotated[Session, Depends(get_session)]
     ) -> CaseSummary:
-        found = criticality_for_asset(session, body.asset)
-        criticality = scoring.DEFAULT_CRITICALITY if found is None else found
-        result = scoring.score(body.type, found)
-        alert = Alert(
-            source=body.source,
-            alert_type=body.type,
-            asset=body.asset,
-            asset_criticality=criticality,
-            title=body.title,
-            description=body.description,
-            alert_timestamp=body.timestamp,
-            ingested_at=datetime.now(UTC),
-            severity=result.severity,
-            severity_rule=result.rule,
-        )
-        session.add(alert)
-        session.flush()
-        case = Case(alert_id=alert.id, status=STATUS_NEW)
-        session.add(case)
-        session.flush()
-        append_audit(
-            session,
-            case_id=case.id,
-            actor_id=None,
-            action=ACTION_INGESTED,
-            detail=f"Alert ingested from {body.source}; severity {result.severity}",
-        )
-        # Built before the commit, which expires the rows; one commit ends the transaction.
-        response = CaseSummary(
-            id=to_public_id(case.id),
-            title=alert.title,
-            alertType=alert.alert_type,
-            source=alert.source,
-            asset=alert.asset,
-            assetCriticality=alert.asset_criticality,
-            severity=alert.severity,
-            status=case.status,
-            owner=None,
-            alertTimestamp=alert.alert_timestamp,
-            ingestedAt=alert.ingested_at,
-            closingReason=None,
-        )
-        session.commit()
-        return response
+        with telemetry.start_span("ingest.alert") as span:
+            found = criticality_for_asset(session, body.asset)
+            criticality = scoring.DEFAULT_CRITICALITY if found is None else found
+            result = scoring.score(body.type, found)
+            alert = Alert(
+                source=body.source,
+                alert_type=body.type,
+                asset=body.asset,
+                asset_criticality=criticality,
+                title=body.title,
+                description=body.description,
+                alert_timestamp=body.timestamp,
+                ingested_at=datetime.now(UTC),
+                severity=result.severity,
+                severity_rule=result.rule,
+            )
+            session.add(alert)
+            session.flush()
+            case = Case(alert_id=alert.id, status=STATUS_NEW)
+            session.add(case)
+            session.flush()
+            append_audit(
+                session,
+                case_id=case.id,
+                actor_id=None,
+                action=ACTION_INGESTED,
+                detail=f"Alert ingested from {body.source}; severity {result.severity}",
+            )
+            # Built before the commit, which expires the rows; one commit ends the transaction.
+            response = CaseSummary(
+                id=to_public_id(case.id),
+                title=alert.title,
+                alertType=alert.alert_type,
+                source=alert.source,
+                asset=alert.asset,
+                assetCriticality=alert.asset_criticality,
+                severity=alert.severity,
+                status=case.status,
+                owner=None,
+                alertTimestamp=alert.alert_timestamp,
+                ingestedAt=alert.ingested_at,
+                closingReason=None,
+            )
+            session.commit()
+            telemetry.annotate(span, {telemetry.SEVERITY_ATTRIBUTE: response.severity, telemetry.CASE_ID_ATTRIBUTE: response.id})
+            telemetry.count_ingest("accepted")
+            telemetry.log_event("alert.ingested")
+            return response

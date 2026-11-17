@@ -96,6 +96,7 @@ def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     app.state.ingest_limiter = ingest_limiter
     app.state.database = database_state
     register_error_handlers(app)
+    app.add_middleware(telemetry.IngestSpanMiddleware)
     app.include_router(create_health_router())
     auth_router = create_api_router()
     add_login_route(auth_router)
