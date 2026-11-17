@@ -48,8 +48,9 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 ENDPOINT_VARIABLE = "OTEL_EXPORTER_OTLP_ENDPOINT"
 RESOURCE_VARIABLE = "OTEL_RESOURCE_ATTRIBUTES"
@@ -71,8 +72,13 @@ SPANS = {
 SEVERITY_ATTRIBUTE = "socboard.alert.severity"
 CASE_ID_ATTRIBUTE = "socboard.case.id"
 SEVERITIES = ("Low", "Medium", "High", "Critical")
-EVENTS = ("alert.ingested", "alert.first_in_queue")
+# "alert.refused" is not in the contract's event table yet (#290 spec note): it is the one fixed event of a refused ingest.
+EVENTS = ("alert.ingested", "alert.first_in_queue", "alert.refused")
 EVENT_LOGGER = "socboard.events"
+INGEST_PATH = "/api/alerts"
+SERVER_SPAN = "POST /api/alerts"
+REFUSED_STATUSES = (401, 422, 429)  # wrong key, invalid body, rate limit
+_TRACE_HEADERS = (b"traceparent", b"tracestate")  # the only request headers telemetry ever reads
 
 _log = logging.getLogger("socboard.telemetry")
 _propagator = TraceContextTextMapPropagator()
@@ -232,6 +238,24 @@ def setup(
     return stop
 
 
+def _checked(attributes: Mapping[str, str] | None) -> dict[str, str]:
+    checked = dict(attributes or {})
+    if not set(checked) <= {SEVERITY_ATTRIBUTE, CASE_ID_ATTRIBUTE}:
+        raise ValueError("span attribute outside the contract")
+    if SEVERITY_ATTRIBUTE in checked and checked[SEVERITY_ATTRIBUTE] not in SEVERITIES:
+        raise ValueError("severity outside the contract")
+    if CASE_ID_ATTRIBUTE in checked and not isinstance(checked[CASE_ID_ATTRIBUTE], str):
+        raise ValueError("case id must be a string")
+    return checked
+
+
+def annotate(span: trace.Span | None, attributes: Mapping[str, str]) -> None:
+    """Add the contract's attributes to a span from `start_span`, known only later; nothing when off."""
+    checked = _checked(attributes)
+    if span is not None:
+        span.set_attributes(checked)
+
+
 @contextlib.contextmanager
 def start_span(
     name: str,
@@ -248,13 +272,7 @@ def start_span(
     or status text is recorded on the span: an exception text could hold request text.
     """
     kind, own_trace = SPANS[name]  # KeyError for a name outside the table
-    checked = dict(attributes or {})
-    if not set(checked) <= {SEVERITY_ATTRIBUTE, CASE_ID_ATTRIBUTE}:
-        raise ValueError("span attribute outside the contract")
-    if SEVERITY_ATTRIBUTE in checked and checked[SEVERITY_ATTRIBUTE] not in SEVERITIES:
-        raise ValueError("severity outside the contract")
-    if CASE_ID_ATTRIBUTE in checked and not isinstance(checked[CASE_ID_ATTRIBUTE], str):
-        raise ValueError("case id must be a string")
+    checked = _checked(attributes)
     runtime = _runtime
     if runtime is None:
         yield None
@@ -292,3 +310,47 @@ def log_event(event: str) -> None:
         raise ValueError("event outside the contract")
     if _runtime is not None:
         logging.getLogger(EVENT_LOGGER).info(event)
+
+
+class IngestSpanMiddleware:
+    """Pure ASGI middleware: the server span of `POST /api/alerts`, and the count of refused ingests (#290).
+
+    Any other request, and every `lifespan` and `websocket` scope, goes straight to the app, as does
+    every request while telemetry is off. For the one route it reads `traceparent` with the SDK's
+    propagator (and no other header), names the span from the route template Starlette leaves in
+    `scope["route"]` once routing has run, reads the status by wrapping `send`, and records an
+    exception's type only before it re-raises. A 401, 422 or 429 counts as `refused` and logs one
+    fixed event; the accepted count and the `ingest.alert` span are in the route.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != INGEST_PATH or _runtime is None:
+            await self.app(scope, receive, send)
+            return
+        carrier = {name.decode("latin-1"): value.decode("latin-1") for name, value in scope["headers"] if name in _TRACE_HEADERS}
+        status = 0
+
+        async def send_with_status(message: Message) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        with start_span(SERVER_SPAN, headers=carrier) as started:
+            span = started or trace.INVALID_SPAN  # None only if telemetry was shut down since the check above
+            try:
+                await self.app(scope, receive, send_with_status)
+            except Exception as error:
+                span.add_event("exception", {"exception.type": type(error).__name__})
+                span.set_status(StatusCode.ERROR)
+                raise
+            finally:
+                route = scope.get("route")
+                if route is not None:
+                    span.update_name(f"POST {route.path}")
+            if status in REFUSED_STATUSES:
+                count_ingest("refused")
+                log_event("alert.refused")
