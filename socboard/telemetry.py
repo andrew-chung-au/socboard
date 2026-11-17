@@ -30,12 +30,16 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
 import warnings
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import IO
+from typing import IO, Protocol
 from urllib.parse import unquote
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.metrics import Counter, Histogram
@@ -55,6 +59,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 ENDPOINT_VARIABLE = "OTEL_EXPORTER_OTLP_ENDPOINT"
 RESOURCE_VARIABLE = "OTEL_RESOURCE_ATTRIBUTES"
 EXPORT_TIMEOUT_SECONDS = 3.0
+PENDING_MAX = 10_000  # entries of the ingest-to-queue map; the oldest is dropped first
+PENDING_MAX_AGE_SECONDS = 600.0
+WATCH_SECONDS = 6.0  # two of the client's 3-second polls (#338)
 
 # The contract's names (observability/CONTRACT.md): fixed here, so nothing a request carries can reach them.
 SERVICE_NAME = "socboard"
@@ -80,6 +87,11 @@ SERVER_SPAN = "POST /api/alerts"
 REFUSED_STATUSES = (401, 422, 429)  # wrong key, invalid body, rate limit
 _TRACE_HEADERS = (b"traceparent", b"tracestate")  # the only request headers telemetry ever reads
 
+class CaseLike(Protocol):
+    id: str
+    severity: str
+
+
 _log = logging.getLogger("socboard.telemetry")
 _propagator = TraceContextTextMapPropagator()
 
@@ -89,10 +101,16 @@ def _nothing() -> None:
 
 
 class _Runtime:
-    def __init__(self, tracer: trace.Tracer, counter: Counter, histogram: Histogram) -> None:
+    def __init__(self, tracer: trace.Tracer, counter: Counter, histogram: Histogram, clock: Callable[[], float]) -> None:
         self.tracer = tracer
         self.counter = counter
         self.histogram = histogram
+        self.clock = clock
+        # The queue-read measure (#291). Assumes one worker (as the app's limiters do) and loses the
+        # entries on a restart, so a case ingested before the start is never recorded.
+        self.pending: OrderedDict[str, tuple[float, trace.SpanContext]] = OrderedDict()  # public id -> (ingest time, ingest span context)
+        self.last_read: float | None = None  # the time of the latest queue read
+        self.lock = threading.Lock()
         self.stop: Callable[[], None] = _nothing
 
 
@@ -155,6 +173,7 @@ def setup(
     metric_exporter=None,
     log_exporter=None,
     stream: IO[str] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> Callable[[], None]:
     """Set up telemetry from `environ` (default: the process environment); return the shutdown function.
 
@@ -201,6 +220,7 @@ def setup(
         tracer_provider.get_tracer(SERVICE_NAME),
         meter.create_counter(INGEST_COUNTER, unit="{alert}", description="Ingest requests by outcome."),
         meter.create_histogram(TIME_TO_QUEUE_HISTOGRAM, unit="s", description="Seconds from an accepted ingest to the queue."),
+        clock,
     )
 
     json_handler = logging.StreamHandler(sys.stdout if stream is None else stream)
@@ -302,6 +322,67 @@ def record_time_to_queue(seconds: float) -> None:
     """Record `socboard.alert.time_to_queue`; inside a sampled span it carries that trace's exemplar."""
     if _runtime is not None:
         _runtime.histogram.record(seconds)
+
+
+def remember_ingest(case_id: str, span: trace.Span | None) -> None:
+    """Keep an accepted case's public id, the time and the `ingest.alert` span context until its first queue read (#291).
+
+    Nothing is kept when off. Holds those three things only, in a map of at most `PENDING_MAX`
+    entries (the oldest dropped first) and none older than `PENDING_MAX_AGE_SECONDS`.
+    """
+    runtime = _runtime
+    if runtime is None or span is None:
+        return
+    with runtime.lock:
+        now = runtime.clock()
+        _drop_old(runtime, now)
+        while len(runtime.pending) >= PENDING_MAX:
+            runtime.pending.popitem(last=False)
+        runtime.pending[case_id] = (now, span.get_span_context())
+
+
+def _drop_old(runtime: _Runtime, now: float) -> None:
+    pending = runtime.pending  # in ingest order, so the old ones are first
+    while pending and now - next(iter(pending.values()))[0] > PENDING_MAX_AGE_SECONDS:
+        pending.popitem(last=False)
+
+
+def queue_read(cases: Iterable[CaseLike]) -> None:
+    """A `GET /api/queue` returned `cases` (each with `.id` and `.severity`): note the first sight of each remembered one (#291).
+
+    For each case still in the map: span `queue.first_seen` linked to the ingest span, the event
+    `alert.first_in_queue` under the ingest trace, and the entry removed. The histogram is recorded,
+    with the ingest context (so its exemplar is the ingest's trace id), only when the queue was
+    watched: the read before this one was at most `WATCH_SECONDS` before the ingest, or after it.
+    A second read finds no entry and records nothing. `cases` is not read when off.
+    """
+    runtime = _runtime
+    if runtime is None:
+        return
+    with runtime.lock:
+        now = runtime.clock()
+        _drop_old(runtime, now)
+        previous, runtime.last_read = runtime.last_read, now
+        found = []
+        for case in cases:
+            entry = runtime.pending.pop(case.id, None)
+            if entry is not None:
+                found.append((case, *entry))
+    for case, ingested, context in found:
+        watched = previous is not None and ingested - previous <= WATCH_SECONDS  # a read after the ingest makes it negative
+        ingest = trace.set_span_in_context(trace.NonRecordingSpan(context))
+        with start_span(
+            "queue.first_seen",
+            links=[context],
+            attributes={SEVERITY_ATTRIBUTE: case.severity, CASE_ID_ATTRIBUTE: case.id},
+        ):
+            if watched:
+                runtime.histogram.record(now - ingested, context=ingest)
+        token = otel_context.attach(ingest)  # the log line carries the ingest's trace id, not the read's
+        try:
+            log_event("alert.first_in_queue")
+        finally:
+            otel_context.detach(token)
 
 
 def log_event(event: str) -> None:
