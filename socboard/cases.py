@@ -26,6 +26,8 @@ Most recently closed first, then case id descending; the close time is read from
 entry comes last.
 """
 
+import time
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
@@ -37,7 +39,7 @@ from sqlalchemy.orm import Session
 
 from socboard import telemetry
 from socboard.audit import append_audit
-from socboard.auth import ROLE_LEAD, CurrentUser, current_user, forbidden, require_lead
+from socboard.auth import ROLE_LEAD, ConfigError, CurrentUser, current_user, forbidden, require_lead
 from socboard.domain import ACTION_CLAIMED, SEVERITIES, STATUS_CLOSED
 from socboard.errors import (
     ALREADY_CLAIMED,
@@ -107,7 +109,22 @@ def _case_query():
     )
 
 
-def create_cases_router(prefix: str) -> APIRouter:
+QUEUE_CACHE_VAR = "SOCBOARD_QUEUE_CACHE_SECONDS"
+
+
+def resolve_queue_cache_seconds(source: Mapping[str, str]) -> int:
+    """How long the queue read may reuse its last answer; 0 or unset means never (no cache)."""
+    text = source.get(QUEUE_CACHE_VAR, "").strip()
+    if not text:
+        return 0
+    if not (text.isascii() and text.isdigit()):
+        raise ConfigError(f"{QUEUE_CACHE_VAR} must be a whole number of 0 or more.")
+    return int(text)
+
+
+def create_cases_router(
+    prefix: str, cache_seconds: int = 0, clock: Callable[[], float] = time.monotonic
+) -> APIRouter:
     """The queue, the case read and the claim. None is on the router that documents a 422, because
     the queue takes no input; the case read and the claim declare it themselves (a path id is input
     to FastAPI, but a string id cannot fail validation, so the 422 is documented and never
@@ -119,16 +136,23 @@ def create_cases_router(prefix: str) -> APIRouter:
         dependencies=[Depends(current_user)],
     )
 
+    queue_cache: dict = {}  # "until" and "cases" of the last build; the queue is the same for every caller
+
     @router.get("/queue", response_model=QueueResponse, operation_id="getQueue")
     def get_queue(session: Annotated[Session, Depends(get_session)]) -> QueueResponse:
-        rows = session.execute(
-            _case_query()
-            .where(Case.status != STATUS_CLOSED)
-            .order_by(
-                sql_case(SEVERITY_RANK, value=Alert.severity), Alert.alert_timestamp, Case.id
-            )
-        ).all()
-        cases = [CaseSummary(**_summary_fields(*row)) for row in rows]
+        if cache_seconds and queue_cache.get("until", 0) > clock():
+            cases = queue_cache["cases"]
+        else:
+            rows = session.execute(
+                _case_query()
+                .where(Case.status != STATUS_CLOSED)
+                .order_by(
+                    sql_case(SEVERITY_RANK, value=Alert.severity), Alert.alert_timestamp, Case.id
+                )
+            ).all()
+            cases = [CaseSummary(**_summary_fields(*row)) for row in rows]
+            if cache_seconds:
+                queue_cache.update(until=clock() + cache_seconds, cases=cases)
         telemetry.queue_read(cases)  # #291: the first read of each new case; does nothing when telemetry is off
         return QueueResponse(cases=cases, servedAt=datetime.now(UTC))
 
