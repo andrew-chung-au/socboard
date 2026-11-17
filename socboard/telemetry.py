@@ -7,7 +7,7 @@ everything down (the lifespan calls it). With `OTEL_EXPORTER_OTLP_ENDPOINT` unse
 created: no provider, exporter, handler or thread, and every helper does nothing. With it set:
 
 - The resource is `service.name=socboard` (fixed in code) plus `deployment.environment.name` and
-  `service.version` read from `OTEL_RESOURCE_ATTRIBUTES`. A missing one is named in one warning.
+  `service.version` read from `OTEL_RESOURCE_ATTRIBUTES`. A missing one, or one that is not 1 to 64 characters of `A-Z a-z 0-9 . - _ +`, is left out and named (never its value) in one warning.
 - The three providers (tracer, meter, logger) are held in this module and used through their own
   objects. None is installed as the process-wide provider, because the SDK allows that once per
   process; so a test can set up and shut down as often as it likes and nothing leaks between tests.
@@ -29,6 +29,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -66,6 +67,7 @@ WATCH_SECONDS = 6.0  # two of the client's 3-second polls (#338)
 # The contract's names (observability/CONTRACT.md): fixed here, so nothing a request carries can reach them.
 SERVICE_NAME = "socboard"
 OPERATOR_ATTRIBUTES = ("deployment.environment.name", "service.version")
+OPERATOR_VALUE = re.compile(r"[A-Za-z0-9._+-]{1,64}")  # used with fullmatch, so a trailing newline is refused
 INGEST_COUNTER = "socboard.ingest.alerts"
 OUTCOMES = ("accepted", "refused")
 TIME_TO_QUEUE_HISTOGRAM = "socboard.alert.time_to_queue"
@@ -157,12 +159,15 @@ class _OtlpLogHandler(LoggingHandler):
 
 
 def _operator_attributes(raw: str) -> dict[str, str]:
-    """The two operator-set resource attributes found in `OTEL_RESOURCE_ATTRIBUTES` (`key=value,...`)."""
+    """The two operator-set resource attributes found in `OTEL_RESOURCE_ATTRIBUTES` (`key=value,...`).
+
+    A value (after percent-decoding) outside `OPERATOR_VALUE` is left out, like a missing one.
+    """
     found: dict[str, str] = {}
     for part in raw.split(","):
         key, separator, value = part.partition("=")
-        if separator and key.strip() in OPERATOR_ATTRIBUTES and value.strip():
-            found[key.strip()] = unquote(value.strip())
+        if separator and key.strip() in OPERATOR_ATTRIBUTES and OPERATOR_VALUE.fullmatch(decoded := unquote(value.strip())):
+            found[key.strip()] = decoded
     return found
 
 
