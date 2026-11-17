@@ -1,7 +1,9 @@
 """The workflow trigger rule and the Terraform plan workflow (#209), checked from their text.
 
 Rule: no workflow triggers on pull_request_target, and a workflow may grant `id-token: write` (workflow or job
-level) only if its triggers are exactly pull_request. A pull_request_target run carries the same
+level) only if its triggers are exactly pull_request, except the two deploy workflows in exactly their shape
+(`DEPLOY_EXCEPTIONS`: one trigger each, no workflow-level grant, every granting job in its named Environment; #238,
+#269). A pull_request_target run carries the same
 `:pull_request` OIDC subject the plan role trusts, runs with the base repository's rights and can be started
 by a fork. Each rule has refused fixtures (text here, not files in .github/) and a replay over the real files.
 The plan workflow also masks the plan role's unique ID before the credentials step; the check of the plan job's
@@ -90,21 +92,28 @@ def rule_problems(name, text):
 
 
 DEPLOY_DEV = "deploy-dev.yml"
+PROMOTE_PROD = "promote-prod.yml"
+
+# The only exceptions to the pull_request-only rule: each deploy workflow, its one trigger and the one Environment every
+# job that grants id-token: write must name (#238, #269).
+# - workflow_run (dev) is started only from the default branch's copy of the file, never from a pull request or a fork.
+# - workflow_dispatch (prod) needs write access to the repository to start, and the `deploy-prod` Environment's branch
+#   rule (`main`) and required reviewer gate the job.
+# In both, the deploy role's token carries the Environment subject (the role trusts `environment:deploy` and
+# `environment:deploy-prod`), never the `:pull_request` subject this rule protects the plan role from.
+DEPLOY_EXCEPTIONS = {DEPLOY_DEV: ("workflow_run", "deploy"), PROMOTE_PROD: ("workflow_dispatch", "deploy-prod")}
 
 
 def deploy_workflow_allowed(name, doc, triggers):
-    """The one exception to the pull_request-only rule (#238): the dev deploy workflow.
-
-    It runs on workflow_run, which GitHub starts only from the default branch's copy of the file, never from a pull
-    request or a fork. Only a job in an Environment may grant id-token: write, so the deploy role's token carries the
-    Environment subject (the role trusts `environment:deploy`), never the `:pull_request` subject this rule protects.
-    """
+    """True only for a deploy workflow in exactly its shape: its one trigger, no workflow-level grant, its Environment."""
+    if name not in DEPLOY_EXCEPTIONS:
+        return False
+    trigger, environment = DEPLOY_EXCEPTIONS[name]
     jobs = doc["jobs"]
     return (
-        name == DEPLOY_DEV
-        and triggers == ["workflow_run"]
+        triggers == [trigger]
         and not grants_id_token(doc.get("permissions"))
-        and all(job.get("environment") for job in jobs.values() if grants_id_token(job.get("permissions")))
+        and all(job.get("environment") == environment for job in jobs.values() if grants_id_token(job.get("permissions")))
     )
 
 
@@ -196,18 +205,67 @@ def test_the_dev_deploy_workflow_is_the_one_exception_and_only_in_this_shape():
         "no Environment": (DEPLOY_DEV, DEPLOY_GOOD.replace("    environment: deploy\n", "")),
         "the grant at workflow level": (DEPLOY_DEV, DEPLOY_GOOD.replace("permissions:\n  contents: read\n", "permissions:\n  id-token: write\n", 1)),
         "pull_request_target": (DEPLOY_DEV, DEPLOY_GOOD.replace("workflow_run:", "pull_request_target:")),
+        "another Environment": (DEPLOY_DEV, DEPLOY_GOOD.replace("environment: deploy\n", "environment: other\n")),
+        "prod's Environment in the dev file": (DEPLOY_DEV, DEPLOY_GOOD.replace("environment: deploy\n", "environment: deploy-prod\n")),
+        "a granting job beside a job that names the Environment": (
+            DEPLOY_DEV,
+            DEPLOY_GOOD.replace("  find:\n    runs-on", "  find:\n    environment: deploy\n    runs-on").replace("    environment: deploy\n    permissions", "    permissions"),
+        ),
+        "write-all on a job without the Environment": (
+            DEPLOY_DEV,
+            DEPLOY_GOOD.replace("  find:\n    runs-on", "  find:\n    permissions: write-all\n    runs-on"),
+        ),
     }
     for label, (name, text) in refused.items():
         assert rule_problems(name, text), label
 
 
-def test_replay_every_workflow_passes_and_only_the_plan_and_dev_deploy_workflows_grant_id_token():
+PROMOTE_GOOD = """
+on:
+  workflow_dispatch:
+    inputs:
+      digest: {required: false, type: string, default: ""}
+permissions:
+  contents: read
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    steps: [{run: "true"}]
+  promote:
+    environment: deploy-prod
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+    steps: [{run: "true"}]
+"""
+
+
+def test_the_prod_promote_workflow_is_an_exception_only_in_its_shape():
+    assert rule_problems(PROMOTE_PROD, PROMOTE_GOOD) == []
+    refused = {
+        "another file name": ("promote.yml", PROMOTE_GOOD),
+        "the dev file name": (DEPLOY_DEV, PROMOTE_GOOD),
+        "a push trigger added": (PROMOTE_PROD, PROMOTE_GOOD.replace("on:\n", "on:\n  push:\n")),
+        "a pull_request trigger added": (PROMOTE_PROD, PROMOTE_GOOD.replace("on:\n", "on:\n  pull_request:\n")),
+        "workflow_run instead": (PROMOTE_PROD, PROMOTE_GOOD.replace("workflow_dispatch:", "workflow_run:")),
+        "pull_request_target": (PROMOTE_PROD, PROMOTE_GOOD.replace("workflow_dispatch:", "pull_request_target:")),
+        "no Environment": (PROMOTE_PROD, PROMOTE_GOOD.replace("    environment: deploy-prod\n", "")),
+        "dev's Environment": (PROMOTE_PROD, PROMOTE_GOOD.replace("environment: deploy-prod\n", "environment: deploy\n")),
+        "the grant at workflow level": (PROMOTE_PROD, PROMOTE_GOOD.replace("permissions:\n  contents: read\n", "permissions:\n  id-token: write\n", 1)),
+        "write-all on the resolve job": (PROMOTE_PROD, PROMOTE_GOOD.replace("  resolve:\n    runs-on", "  resolve:\n    permissions: write-all\n    runs-on")),
+    }
+    for label, (name, text) in refused.items():
+        assert rule_problems(name, text), label
+
+
+def test_replay_every_workflow_passes_and_only_the_plan_and_deploy_workflows_grant_id_token():
     files = workflow_files()
     assert files, "no workflow file found"
     problems = [p for f in files for p in rule_problems(f.name, f.read_text(encoding="utf-8"))]
     assert problems == []
     granting = {f.name for f in files if grants_any_id_token(f.read_text(encoding="utf-8"))}
-    assert granting == {PLAN, DEPLOY_DEV}
+    assert granting == {PLAN, DEPLOY_DEV, PROMOTE_PROD}
 
 
 # The plan workflow's own rules.
