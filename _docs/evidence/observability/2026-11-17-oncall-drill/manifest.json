@@ -9,11 +9,11 @@
     },
     {
       "name": "alert.png",
-      "shows": "The firing-alert screenshot the drill job took (drill-evidence artifact, evidence/alert.png)"
+      "shows": "Alertmanager with QueueLatencyOverSLO firing since 2026-11-17T16:20:01Z, labels service=socboard and severity=page (drill-evidence artifact, evidence/alert.png)"
     },
     {
       "name": "dashboard.png",
-      "shows": "The dashboard screenshot the drill job took while the alert fired (drill-evidence artifact, evidence/dashboard.png)"
+      "shows": "Grafana's dashboard 'SOCBoard: alert to queue' from 16:00 to 16:21 UTC: with the defect the probe's p50 is about 9 s and its p95 and p99 about 10 s against the 5-second line, every delay in the 8 to 10 s buckets (drill-evidence artifact, evidence/dashboard.png)"
     },
     {
       "name": "incident.json",
