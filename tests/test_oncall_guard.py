@@ -339,7 +339,7 @@ def test_the_mandate_pins_the_action_to_a_full_commit_sha():
 
 def test_the_mandate_names_the_tool_options_of_the_pinned_action():
     text = MANDATE.read_text(encoding="utf-8")
-    for option in ("claude_args", "--allowedTools", "--disallowedTools", "--permission-mode default"):
+    for option in ("claude_args", "--allowedTools", "--disallowedTools", "--permission-mode default", "--setting-sources user"):
         assert option in text
     for exact in ("Bash(make test)", "Bash(git diff)"):
         assert exact in text

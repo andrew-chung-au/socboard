@@ -47,17 +47,21 @@ Source of each option name, read at that commit:
 - `docs/usage.md` (Inputs table, Deprecated Inputs table): `claude_args`, "Additional arguments to pass directly to Claude CLI". The old inputs `allowed_tools`, `disallowed_tools` and `mcp_config` are listed as deprecated, so the workflow does not use them. It states the migration `claude_args: "--allowedTools Edit,Read,Write"` and `claude_args: "--disallowedTools WebSearch"`.
 - `docs/configuration.md` (Custom Tools): "The base GitHub tools are always included. Use `--allowedTools` to add additional tools (including specific Bash commands), and `--disallowedTools` to prevent specific tools from being used." So the allow list adds to the tools the action starts with and does not replace them; every other tool is closed with the disallow option below.
 - `docs/usage.md` (Permission Mode) and `docs/security.md` (Auto mode is a review, not a boundary): the action runs in auto mode by default, where a safety review can run a call that no allow rule covers; "For a strict list of what Claude may run, use `--permission-mode acceptEdits` or `default`." With a `prompt`, `--permission-mode default` denies what no rule covers.
+- `base-action/src/parse-sdk-options.ts` lines 357-363 (read from a git checkout of the pinned commit): with no `--setting-sources` in `claude_args` the action loads `["user", "project", "local"]`; the comment there reads "This ensures users can override the default behavior (e.g., --setting-sources user to avoid in-repo configs)". `parseClaudeArgsToExtraArgs` in the same file turns `--setting-sources user` into `settingSources: ["user"]`. `--strict-mcp-config` appears nowhere in that checkout, so the workflow does not use it.
 
 The values for this allow list:
 
 ```yaml
 claude_args: |
   --permission-mode default
+  --setting-sources user
   --allowedTools "Read,Edit,Write,Glob,Grep,Bash(make test),Bash(make test-one FILE=tests/*),Bash(git diff)"
   --disallowedTools "WebFetch,WebSearch,mcp__github,mcp__github_comment,mcp__github_file_ops,mcp__github_inline_comment,mcp__github_ci"
 ```
 
 The workflow sets no `use_commit_signing`, no `--mcp-config` and no `mcp_config`, and uses no deprecated input.
+
+With `--setting-sources user`, the checkout's project and local settings (`.claude/settings.json`, `.claude/settings.local.json`, their hooks) and its `.mcp.json` are not loaded, so nothing in the drill branch adds a tool, hook or MCP server to the lists above. #299 confirms this in its run log.
 
 Findings the docs at that commit leave open, for #299's pull request to settle and quote (no name below is invented; each is marked by where it comes from):
 
