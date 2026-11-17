@@ -65,6 +65,9 @@ class FailingLogExporter(LogRecordExporter):
     def shutdown(self):
         pass
 
+    def force_flush(self, timeout_millis=30_000):
+        return True
+
 
 def start(environ, **exporters):
     stream = io.StringIO()
