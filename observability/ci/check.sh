@@ -50,3 +50,11 @@ uv run --locked python observability/emitter.py --trace-id "$TRACE_ID" --canary 
 
 echo "--- looking for the trace id, and for the canary that must not be there"
 uv run --locked python observability/ci/query.py absent "$TRACE_ID" "$CANARY"
+
+echo "--- the proof: one trace id in the trace, the logs and the exemplars, and no canary stored (#295)"
+mkdir -p .scratch/observability
+proof=0
+uv run --locked python scripts/observability_check.py run --report .scratch/observability/check.json || proof=$?
+compose logs --no-color otel-collector > .scratch/observability/collector.log 2>&1 || true
+uv run --locked python scripts/observability_check.py collector-log .scratch/observability/collector.log --report .scratch/observability/check.json || proof=$?
+exit "$proof"
