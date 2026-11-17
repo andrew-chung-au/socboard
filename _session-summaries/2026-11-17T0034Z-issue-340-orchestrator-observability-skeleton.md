@@ -12,7 +12,7 @@
 - `observability/ci/skeleton/`: a Compose file and four configs for the collector, Tempo 3.1.1, Loki 3.7.10 and Prometheus v3.16.0, images pinned by index digest read from the registry on 2026-11-16, all ports on the loopback.
 - `observability/ci/check.sh`: starts the stack, waits, emits with a random trace id, queries, always stops the stack.
 - `observability/ci/proposed/observability.yml`: the workflow, as a file for the CI lane or the maintainer to land (protected path). Its static test also shows how its triggers read in `tests/workflow_triggers.py` and `scripts/publish_gate.py`.
-- Tests: query (22, fake stores), emitter (17, a fake OTLP collector, including a collector that refuses a signal: exit 1), workflow (16). Decision record `_docs/decisions/2026-11-17T0034Z-observability-ci-entry-point.md` and its index row.
+- Tests: query (22, fake stores), emitter (17, a fake OTLP collector, including a collector that refuses a signal: exit 1), workflow (17): 56 in three files. Decision record `_docs/decisions/2026-11-17T0034Z-observability-ci-entry-point.md` and its index row.
 
 QA's first run (PASS, Lows only) found four small things, fixed before the second QA: the path check used a proper-subset test, one workflow test failed once publish.yml was edited, the emitter exited 0 when the collector refused a signal, and this summary said a scratch install was deleted when it was not yet.
 
@@ -42,7 +42,7 @@ none
 
 ## Commands to validate
 
-**Verify:** `make verify` (CI). In the sandbox: `pytest` on the four observability test files and the publish tests with `--noconftest` and the SDK installed under `.scratch/`: all passed on Python 3.11. The stack itself needs Docker and the workflow, so it has not run.
+**Verify:** `make verify` (CI). In the sandbox: `pytest` on the three new observability test files, the probe's and the publish tests with `--noconftest` and the SDK installed under `.scratch/`: all passed on Python 3.11. The stack itself needs Docker and the workflow, so it has not run.
 
 ## Proposed AGENTS.md changes
 
