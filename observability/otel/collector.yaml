@@ -1,3 +1,5 @@
+# NEGATIVE CONTROL for #292 (not to be merged): the allow-list is removed from every pipeline, so the canary
+# check in observability/ci/check.sh must fail and name the stores the canary reached.
 # The collector of the observability overlay (#292; from the walking skeleton of #340, whose first run
 # settled each exporter and path: `socboard observability` run 44003479301, 2026-11-17).
 # OTLP over HTTP in; traces to Tempo, logs to Loki's native OTLP endpoint, metrics to Prometheus by remote
@@ -82,13 +84,13 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [transform/allowlist]
+      processors: []
       exporters: [otlphttp/tempo]
     logs:
       receivers: [otlp]
-      processors: [transform/allowlist]
+      processors: []
       exporters: [otlphttp/loki]
     metrics:
       receivers: [otlp]
-      processors: [transform/allowlist]
+      processors: []
       exporters: [prometheusremotewrite]
