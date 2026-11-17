@@ -1,0 +1,21 @@
+# Prometheus for the observability overlay (#292). It scrapes nothing: the collector writes to it by
+# remote write (the receiver and exemplar storage are switched on by the flags in
+# compose.observability.yaml, which also set the 24-hour and size limits of the data).
+# Rules are evaluated every 15 seconds, so the alert of #296 can fire soon after the drill's defect.
+# Every file under observability/alerts/ ending in .yml is loaded (mounted at /etc/prometheus/alerts);
+# observability/alerts/tests/ holds promtool's own test files and is not loaded.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+storage:
+  exemplars:
+    max_exemplars: 10000

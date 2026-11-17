@@ -21,7 +21,7 @@ spec.loader.exec_module(query)
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 OTHER_ID = "00f067aa0ba902b700f067aa0ba902b7"
-URLS = {"tempo": "http://tempo", "loki": "http://loki", "prometheus": "http://prom", "collector": "http://coll"}
+URLS = {"tempo": "http://tempo", "loki": "http://loki", "prometheus": "http://prom", "alertmanager": "http://am", "collector": "http://coll"}
 
 
 def tempo_trace(names=("ingest.alert",)):
@@ -179,10 +179,10 @@ def test_the_loki_query_asks_for_the_trace_id_and_the_label_split():
 def test_ready_waits_for_each_store_and_names_the_late_ones():
     clock, lines = Clock(), []
     assert query.ready(URLS, 120.0, lines.append, Stores(), clock.sleep, clock.monotonic) == 0
-    assert lines == ["tempo: ready", "loki: ready", "prometheus: ready", "collector: ready"]
+    assert lines == ["tempo: ready", "loki: ready", "prometheus: ready", "alertmanager: ready", "collector: ready"]
     clock, lines = Clock(), []
     assert query.ready(URLS, 10.0, lines.append, Stores(ready=503), clock.sleep, clock.monotonic) == 1
-    assert lines[-1] == "not ready in time: tempo, loki, prometheus, collector" and "tempo: not ready (HTTP 503)" in lines
+    assert lines[-1] == "not ready in time: tempo, loki, prometheus, alertmanager, collector" and "tempo: not ready (HTTP 503)" in lines
 
 
 def test_the_real_fetch_sends_the_urls_and_headers_and_reads_the_answer():
@@ -227,3 +227,79 @@ def Stores_for_defaults():
         return stores(url.replace("http://127.0.0.1:3200", "http://tempo").replace("http://127.0.0.1:3100", "http://loki").replace("http://127.0.0.1:9090", "http://prom"), headers)
 
     return get
+
+
+# --- absent: the trace is in all three stores and the canary is in none (#292) --------------------------
+
+CANARY = "CANARY-7f3a91c2d04e5b68"
+class LeakStores(Stores):
+    """Stores that also answer the leak checks; `leak` names the store whose answers hold the canary."""
+
+    def __init__(self, leak=None, **answers):
+        super().__init__(**answers)
+        self.leak = leak
+
+    def __call__(self, url, headers):
+        status, body = super().__call__(url, headers)
+        if url.startswith("http://tempo/api/traces/") and self.leak == "tempo":
+            leaked = {"batches": [{"scopeSpans": [{"spans": [{"name": "ingest.alert", "attributes": [{"key": "socboard.canary", "value": {"stringValue": CANARY}}]}]}]}]}
+            return 200, json.dumps(leaked).encode()
+        if url.startswith("http://loki/") and self.leak == "loki" and "trace_id" not in url:  # the leak checks, not the find
+            if "query_range" in url:
+                return 200, json.dumps({"data": {"result": [{"stream": {"service_name": "socboard"}, "values": [["1", "x", {"structuredMetadata": {"socboard_canary": CANARY}}]]}]}}).encode()
+            return 200, b'{"data": ["service_name", "socboard_canary"]}'
+        if url.startswith("http://prom/api/v1/series") and self.leak == "prometheus":
+            return 200, json.dumps({"data": [{"__name__": "m", "socboard_canary": CANARY}]}).encode()
+        if url.startswith("http://prom/api/v1/labels"):
+            return 200, b'{"data": ["__name__", "job"]}'
+        if url.startswith("http://loki/loki/api/v1/labels"):
+            return 200, b'{"data": ["service_name"]}'
+        if url.startswith("http://prom/api/v1/series"):
+            return 200, b'{"data": [{"__name__": "socboard_alert_time_to_queue_seconds_bucket", "job": "socboard"}]}'
+        return status, body
+
+
+def run_absent(stores, canary=CANARY, trace_id=TRACE_ID):
+    clock, lines = Clock(), []
+    code = query.absent(trace_id, canary, URLS, 60.0, lines.append, stores, clock.sleep, clock.monotonic, lambda: 1700000000.0)
+    return code, lines
+
+
+def test_no_canary_in_any_store_passes_after_the_trace_is_found():
+    code, lines = run_absent(LeakStores())
+    assert code == 0
+    assert lines == [f"tempo: found {TRACE_ID}", f"loki: found {TRACE_ID}", f"prometheus: found {TRACE_ID}", "tempo: no canary", "loki: no canary", "prometheus: no canary"]
+
+
+@pytest.mark.parametrize("store", ["tempo", "loki", "prometheus"])
+def test_a_canary_in_one_store_fails_and_names_that_store(store):
+    code, lines = run_absent(LeakStores(leak=store))
+    assert code == 1
+    assert lines[-1] == f"the canary reached: {store}"
+    assert any(line.startswith(f"{store}: canary found") for line in lines)
+    assert sum("no canary" in line for line in lines) == 2  # the other two stores are clean
+
+
+def test_a_store_that_does_not_hold_the_trace_cannot_pass_the_canary_check():
+    code, lines = run_absent(LeakStores(tempo=(404, b"")))
+    assert code == 1 and "tempo: not found (HTTP 404)" in lines
+    assert lines[-1] == "the canary check needs the trace in every store first"
+    assert not any("no canary" in line for line in lines)  # a store with nothing to leak is not "clean"
+
+
+def test_a_store_that_does_not_answer_the_leak_check_is_not_clean():
+    stores = LeakStores()
+    first = stores.__call__
+
+    def fail_series(url, headers):
+        return (500, b"") if url.startswith("http://prom/api/v1/series") else first(url, headers)
+
+    code, lines = run_absent(fail_series)
+    assert code == 1 and "prometheus: canary found (cannot tell (HTTP 500))" in lines
+
+
+@pytest.mark.parametrize("canary", ["", "plain", "CANARY-", "CANARY-" + "x" * 61, "CANARY-a b", "CANARY-a'b", "canary-abc"])
+def test_a_bad_canary_exits_2_before_any_request(canary, capsys):
+    stores = LeakStores()
+    assert query.main(["absent", TRACE_ID, canary], urls=URLS, get=stores) == 2
+    assert stores.requests == [] and "refused" in capsys.readouterr().err

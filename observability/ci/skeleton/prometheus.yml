@@ -1,8 +1,0 @@
-# Prometheus for the walking skeleton (#340): it scrapes nothing; the collector writes to it by remote
-# write (the receiver and exemplar storage are switched on by the command-line flags in compose.yaml).
-global:
-  scrape_interval: 15s
-
-storage:
-  exemplars:
-    max_exemplars: 10000

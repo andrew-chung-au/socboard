@@ -1,6 +1,7 @@
 """The walking skeleton's emitter (#340): one span, one log record and one histogram value, under one trace id.
 
     python observability/emitter.py --trace-id <32 lower-case hex> [--endpoint http://127.0.0.1:4318]
+                                    [--canary CANARY-<letters, digits, hyphens>]
 
 It stands in for the app, so the stack's checks do not wait for the app's telemetry (#289 to #291). It
 sends, over OTLP/HTTP to a collector on the loopback, exactly what `observability/CONTRACT.md` names and
@@ -10,6 +11,10 @@ nothing else:
 - one log record with the attribute `event` = `alert.ingested`, carrying the span's trace and span ids,
 - one value of the histogram `socboard.alert.time_to_queue` (unit `s`, the contract's bucket bounds),
   recorded inside the span so the SDK keeps an exemplar with the trace id.
+
+With `--canary`, one extra attribute `socboard.canary` holding that value is put on the resource, the
+span, the log record and the metric data point. It is the privacy check of the collector's allow-list
+(#292): nothing outside the contract may reach a store, so the check fails if the value is found there.
 
 The resource is `service.name=socboard` and whatever `OTEL_RESOURCE_ATTRIBUTES` adds (the two
 operator-set attributes). Every value is synthetic. The endpoint must be plain `http` on the loopback:
@@ -45,6 +50,8 @@ SYNTHETIC_CASE_ID = "1"  # decimal digits only
 SYNTHETIC_DELAY = 1.5  # seconds, in the (1, 2] bucket
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 TRACE_ID = re.compile(r"[0-9a-f]{32}")
+CANARY_ATTRIBUTE = "socboard.canary"  # not in the contract, on purpose: the allow-list must drop it
+CANARY = re.compile(r"CANARY-[A-Za-z0-9-]{1,60}")
 
 
 class Refused(Exception):
@@ -54,6 +61,12 @@ class Refused(Exception):
 def check_trace_id(text: str) -> str:
     if not TRACE_ID.fullmatch(text) or set(text) == {"0"}:
         raise Refused("the trace id must be 32 lower-case hex characters and not all zeros")
+    return text
+
+
+def check_canary(text: str) -> str:
+    if not CANARY.fullmatch(text):
+        raise Refused("the canary must be CANARY- and up to 60 letters, digits or hyphens")
     return text
 
 
@@ -83,7 +96,7 @@ class ProblemCounter(logging.Handler):
         self.count += 1
 
 
-def emit(trace_id: str, endpoint: str, *, metric_reader=None, span_exporter=None, log_exporter=None) -> None:
+def emit(trace_id: str, endpoint: str, canary: str | None = None, *, metric_reader=None, span_exporter=None, log_exporter=None) -> None:
     """Send the three signals and flush them. The keyword arguments let a test replace an exporter."""
     from opentelemetry import trace
     from opentelemetry._logs import SeverityNumber
@@ -101,7 +114,8 @@ def emit(trace_id: str, endpoint: str, *, metric_reader=None, span_exporter=None
     from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
     # service.name is passed in code, so it wins over OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES.
-    resource = Resource.create({"service.name": SERVICE_NAME})
+    extra = {CANARY_ATTRIBUTE: canary} if canary else {}
+    resource = Resource.create({"service.name": SERVICE_NAME, **extra})
     tracer_provider = TracerProvider(resource=resource)
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter or OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")))
     logger_provider = LoggerProvider(resource=resource)
@@ -126,16 +140,16 @@ def emit(trace_id: str, endpoint: str, *, metric_reader=None, span_exporter=None
         with tracer.start_as_current_span(
             SPAN_NAME,
             context=parent_context,
-            attributes={SEVERITY_ATTRIBUTE: SYNTHETIC_SEVERITY, CASE_ID_ATTRIBUTE: SYNTHETIC_CASE_ID},
+            attributes={SEVERITY_ATTRIBUTE: SYNTHETIC_SEVERITY, CASE_ID_ATTRIBUTE: SYNTHETIC_CASE_ID, **extra},
         ):
             logger.emit(
                 timestamp=time.time_ns(),
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
                 body=EVENT,
-                attributes={EVENT_ATTRIBUTE: EVENT},
+                attributes={EVENT_ATTRIBUTE: EVENT, **extra},
             )
-            histogram.record(SYNTHETIC_DELAY)
+            histogram.record(SYNTHETIC_DELAY, attributes=extra)
     finally:
         # Each shutdown flushes: the span and the log record go out as they end, the metric at the end.
         meter_provider.shutdown()
@@ -146,11 +160,13 @@ def emit(trace_id: str, endpoint: str, *, metric_reader=None, span_exporter=None
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Send one synthetic span, log record and histogram value.")
     parser.add_argument("--trace-id", required=True, help="32 lower-case hex characters")
+    parser.add_argument("--canary", default=None, help="an extra attribute value the collector must drop (CANARY-...)")
     parser.add_argument("--endpoint", default=None, help=f"the collector's OTLP/HTTP base URL (default {DEFAULT_ENDPOINT})")
     args = parser.parse_args(argv)  # a bad argument exits 2
     try:
         trace_id = check_trace_id(args.trace_id)
         endpoint = check_endpoint(args.endpoint or DEFAULT_ENDPOINT)
+        canary = check_canary(args.canary) if args.canary is not None else None
     except Refused as refusal:
         print(f"observability emitter: refused: {refusal}", file=sys.stderr)
         return 2
@@ -158,7 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sdk_log = logging.getLogger("opentelemetry")
     sdk_log.addHandler(problems)
     try:
-        emit(trace_id, endpoint)
+        emit(trace_id, endpoint, canary)
     finally:
         sdk_log.removeHandler(problems)
     if problems.count:

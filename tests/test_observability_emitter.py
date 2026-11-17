@@ -121,3 +121,37 @@ def test_a_collector_that_refuses_a_signal_makes_the_emitter_exit_1_and_not_say_
     assert emitter.main(["--trace-id", TRACE_ID, "--endpoint", endpoint]) == 1
     captured = capsys.readouterr()
     assert "sent trace" not in captured.out and "export problem" in captured.err
+
+
+def test_the_canary_option_puts_one_extra_attribute_on_every_signal(collector):
+    from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
+    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+    endpoint, received = collector
+    assert emitter.main(["--trace-id", TRACE_ID, "--endpoint", endpoint, "--canary", "CANARY-7f3a91c2d04e5b68"]) == 0
+    body = dict(received)
+    spans = ExportTraceServiceRequest.FromString(body["/v1/traces"]).resource_spans[0]
+    span = spans.scope_spans[0].spans[0]
+    assert attributes(span.attributes) == {"socboard.alert.severity": "High", "socboard.case.id": "1", "socboard.canary": "CANARY-7f3a91c2d04e5b68"}
+    assert attributes(spans.resource.attributes)["socboard.canary"] == "CANARY-7f3a91c2d04e5b68"
+    record = ExportLogsServiceRequest.FromString(body["/v1/logs"]).resource_logs[0].scope_logs[0].log_records[0]
+    assert attributes(record.attributes) == {"event": "alert.ingested", "socboard.canary": "CANARY-7f3a91c2d04e5b68"}
+    point = ExportMetricsServiceRequest.FromString(body["/v1/metrics"]).resource_metrics[0].scope_metrics[0].metrics[0].histogram.data_points[0]
+    assert attributes(point.attributes) == {"socboard.canary": "CANARY-7f3a91c2d04e5b68"}
+
+
+def test_without_the_canary_option_nothing_extra_is_sent(collector):
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+    endpoint, received = collector
+    assert emitter.main(["--trace-id", TRACE_ID, "--endpoint", endpoint]) == 0
+    spans = ExportTraceServiceRequest.FromString(dict(received)["/v1/traces"]).resource_spans[0]
+    assert "socboard.canary" not in attributes(spans.resource.attributes) and "socboard.canary" not in attributes(spans.scope_spans[0].spans[0].attributes)
+
+
+@pytest.mark.parametrize("canary", ["", "plain", "CANARY-", "CANARY-" + "x" * 61, "CANARY-a b", "canary-abc"])
+def test_a_bad_canary_exits_2_before_anything_is_sent(collector, canary, capsys):
+    endpoint, received = collector
+    assert emitter.main(["--trace-id", TRACE_ID, "--endpoint", endpoint, "--canary", canary]) == 2
+    assert received == [] and "refused" in capsys.readouterr().err

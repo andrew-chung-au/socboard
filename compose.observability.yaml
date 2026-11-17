@@ -1,0 +1,133 @@
+# The observability overlay (#292), layered on compose.yaml:
+#
+#     docker compose -f compose.yaml -f compose.observability.yaml up
+#
+# It adds the five services that receive, store and route the app's signals (traces, logs and metrics),
+# points the app's exporter at the collector, and publishes each service's port on 127.0.0.1 only, so the
+# runner or the developer can query them and nothing outside the host can. compose.yaml and compose/ do
+# not change: with this file left out of the command, the stack is what it was. Grafana is added by #293;
+# the alert rule is observability/alerts/ (#296); Alertmanager's route to the on-call agent is #297.
+#
+# Variables (all optional; the first five are ports on 127.0.0.1, the defaults are the services' own):
+#   STACK_OTLP_PORT (4318), STACK_OTEL_HEALTH_PORT (13133), STACK_TEMPO_PORT (3200),
+#   STACK_LOKI_PORT (3100), STACK_PROMETHEUS_PORT (9090), STACK_ALERTMANAGER_PORT (9093).
+# A second stack on the same host needs its own values, as it does for STACK_APP_PORT (#271).
+#
+# Limits: each store keeps 24 hours of data at most, in a named volume whose size is capped (the volumes
+# below are in-memory file systems of fixed size, so a full store stops writing instead of filling the
+# host's disk; the data does not survive a host restart, which is right for a stack that runs in CI and
+# on a developer's machine). Each service has a memory limit; the five add up to 1344 MiB, and Grafana
+# (#293) has 160 MiB reserved, so the six stay within 1.5 GiB (1536 MiB).
+#
+# Images are pinned by tag and index digest, as compose.yaml does. VERIFY: each digest was read from the
+# registry on 2026-11-16 (Alertmanager's on 2026-11-17); the collector, Tempo, Loki and Prometheus ran in
+# `socboard observability` run 44003479301 (2026-11-17).
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.142.0@sha256:38c349c3b7a2fd7ea46700cde8fa13d35b699ef2ce245bdf34dae2a413512f76
+    command: ["--config=/etc/otelcol/config.yaml"]
+    user: "10001:10001"
+    mem_limit: 256m
+    volumes:
+      - ./observability/otel/collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - 127.0.0.1:${STACK_OTLP_PORT:-4318}:4318 # OTLP over HTTP, where the probe and the emitter send
+      - 127.0.0.1:${STACK_OTEL_HEALTH_PORT:-13133}:13133 # the health_check extension, polled by observability/ci/query.py
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+    networks: [stack]
+
+  tempo:
+    image: grafana/tempo:3.1.1@sha256:64e2fbd56d9c2b3412a4b430a58ea59e91a670b1e75f920a0c702213ad145044
+    command: ["-target=all", "-config.file=/etc/tempo.yaml"]
+    user: "10001:10001"
+    mem_limit: 384m
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - 127.0.0.1:${STACK_TEMPO_PORT:-3200}:3200
+    networks: [stack]
+
+  loki:
+    image: grafana/loki:3.7.10@sha256:b43c257ccfc925d4a50b8717cac61a3b51df8c48d01847936057e5c4075a24a7
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    user: "10001:10001"
+    mem_limit: 384m
+    volumes:
+      - ./observability/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    ports:
+      - 127.0.0.1:${STACK_LOKI_PORT:-3100}:3100
+    networks: [stack]
+
+  prometheus:
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=24h
+      - --storage.tsdb.retention.size=128MB
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    user: "65534:65534"
+    mem_limit: 256m
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts:/etc/prometheus/alerts:ro
+      - prometheus-data:/prometheus
+    ports:
+      - 127.0.0.1:${STACK_PROMETHEUS_PORT:-9090}:9090
+    depends_on:
+      - alertmanager
+    networks: [stack]
+
+  alertmanager:
+    image: prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    user: "65534:65534"
+    mem_limit: 64m
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - 127.0.0.1:${STACK_ALERTMANAGER_PORT:-9093}:9093
+    networks: [stack]
+
+  # The app's exporter: the collector's address on the stack network. The SDK's metric export interval
+  # is 60 seconds; 5 keeps the drill (#299) near three minutes from the defect to the firing alert.
+  # The two operator-set resource attributes are the ones the contract names (section 1).
+  app:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=local,service.version=${GIT_COMMIT:-unknown}
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+volumes:
+  # In-memory file systems of fixed size, owned by the user each image runs as, so the first start has
+  # no permission error and a store cannot outgrow its limit. VERIFY: tmpfs volumes accept uid and gid.
+  tempo-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=256m,uid=10001,gid=10001
+  loki-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=256m,uid=10001,gid=10001
+  prometheus-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=192m,uid=65534,gid=65534

@@ -2,9 +2,11 @@
 
     python observability/ci/query.py ready [--deadline 120]
     python observability/ci/query.py find <trace id> [--deadline 60]
+    python observability/ci/query.py absent <trace id> <canary>
 
-`ready` polls the readiness endpoint of each store and of the collector from the runner (the collector
-image has no shell for a container health check) and exits 1 naming each one that was not ready in time.
+`ready` polls the readiness endpoint of each store, of Alertmanager and of the collector from the runner
+(the collector image has no shell for a container health check) and exits 1 naming each one that was
+not ready in time.
 
 `find` asks, polling each store until its own deadline (60 seconds by default):
 
@@ -18,7 +20,13 @@ image has no shell for a container health check) and exits 1 naming each one tha
   must carry this trace id.
 
 It prints one line per store, `found` or `not found (reason)`, and exits 1 naming each store that lacked
-the id. Standard library only. The trace id is 32 lower-case hex characters (a refused one exits 2
+the id.
+
+`absent` is the privacy check of the collector's allow-list (#292): the emitter is run with one extra
+attribute holding a canary value (observability/emitter.py --canary), and `absent` first finds the trace
+in the three stores (as `find` does, so a store that holds nothing cannot pass) and then fails, naming the
+store, if the canary appears anywhere the store answers for that trace: Tempo's trace, Loki's lines and
+structured metadata, and Prometheus's series, label names and exemplars. Standard library only. The trace id is 32 lower-case hex characters (a refused one exits 2
 before any request), so it cannot change a URL or a query. Nothing it sends or prints is secret.
 """
 
@@ -40,14 +48,17 @@ POLL_EVERY = 2.0  # seconds
 REQUEST_TIMEOUT = 10  # seconds
 WINDOW = 15 * 60  # seconds either side of now that a log line or exemplar may be found in
 
-# Where the skeleton publishes each service, on the loopback (observability/ci/skeleton/compose.yaml).
+# Where the overlay publishes each service, on the loopback (compose.observability.yaml; the defaults of
+# its STACK_*_PORT variables).
 DEFAULTS = {
     "tempo": "http://127.0.0.1:3200",
     "loki": "http://127.0.0.1:3100",
     "prometheus": "http://127.0.0.1:9090",
+    "alertmanager": "http://127.0.0.1:9093",
     "collector": "http://127.0.0.1:13133",
 }
-READY_PATHS = {"tempo": "/ready", "loki": "/ready", "prometheus": "/-/ready", "collector": "/"}
+READY_PATHS = {"tempo": "/ready", "loki": "/ready", "prometheus": "/-/ready", "alertmanager": "/-/ready", "collector": "/"}
+CANARY = re.compile(r"CANARY-[A-Za-z0-9-]{1,60}")
 
 Fetch = Callable[[str, Mapping[str, str]], tuple[int, bytes]]  # (url, headers) -> (status, body); status 0 = no answer
 
@@ -169,6 +180,56 @@ def check_prometheus(get: Fetch, base: str, trace_id: str, now: float) -> str | 
 CHECKS = {"tempo": check_tempo, "loki": check_loki, "prometheus": check_prometheus}
 
 
+# Each leak check returns None when the canary is nowhere in what the store answers, else why it cannot
+# be said to be absent. The needle is the word `canary` (case-insensitive): the canary value starts with
+# CANARY- and the emitter's attribute is socboard.canary, so a leak of the value or of the name shows.
+
+
+def _says_canary(body: bytes) -> bool:
+    return b"canary" in body.lower()
+
+
+def leak_tempo(get: Fetch, base: str, trace_id: str, now: float) -> str | None:
+    status, body = get(f"{base}/api/traces/{trace_id}", {"Accept": "application/json"})
+    if status != 200:
+        return f"cannot tell (HTTP {status})" if status else "cannot tell (no answer)"
+    return "the trace holds the canary" if _says_canary(body) else None
+
+
+def leak_loki(get: Fetch, base: str, trace_id: str, now: float) -> str | None:
+    window = {"start": str(int((now - WINDOW) * 1e9)), "end": str(int((now + WINDOW) * 1e9)), "limit": "100", "direction": "backward"}
+    headers = {"X-Loki-Response-Encoding-Flags": "categorize-labels"}
+    for what, path in (
+        ("the log lines", f"/loki/api/v1/query_range?{urllib.parse.urlencode({**window, 'query': LOKI_STREAM})}"),
+        ("the label names", f"/loki/api/v1/labels?{urllib.parse.urlencode({'start': window['start'], 'end': window['end']})}"),
+    ):
+        status, body = get(f"{base}{path}", headers)
+        if status != 200:
+            return f"cannot tell (HTTP {status})" if status else "cannot tell (no answer)"
+        if _says_canary(body):
+            return f"{what} hold the canary"
+    return None
+
+
+def leak_prometheus(get: Fetch, base: str, trace_id: str, now: float) -> str | None:
+    window = {"start": f"{now - WINDOW:.3f}", "end": f"{now + WINDOW:.3f}"}
+    series_match = '{__name__=~"socboard.*"}'
+    for what, path in (
+        ("the exemplars", f"/api/v1/query_exemplars?{urllib.parse.urlencode({**window, 'query': EXEMPLAR_METRIC})}"),
+        ("the series", f"/api/v1/series?{urllib.parse.urlencode({**window, 'match[]': series_match})}"),
+        ("the label names", f"/api/v1/labels?{urllib.parse.urlencode(window)}"),
+    ):
+        status, body = get(f"{base}{path}", {})
+        if status != 200:
+            return f"cannot tell (HTTP {status})" if status else "cannot tell (no answer)"
+        if _says_canary(body):
+            return f"{what} hold the canary"
+    return None
+
+
+LEAKS = {"tempo": leak_tempo, "loki": leak_loki, "prometheus": leak_prometheus}
+
+
 def poll(attempt: Callable[[], str | None], deadline: float, sleep: Callable[[float], None], clock: Callable[[], float]) -> str | None:
     """None as soon as `attempt` finds the id, else the last reason once the deadline has passed."""
     end = clock() + deadline
@@ -201,6 +262,35 @@ def find(
             missing.append(store)
     if missing:
         say("missing the trace id: " + ", ".join(missing))
+        return 1
+    return 0
+
+
+def absent(
+    trace_id: str,
+    canary: str,
+    urls: Mapping[str, str],
+    deadline: float,
+    say: Callable[[str], None],
+    get: Fetch = fetch,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    wall: Callable[[], float] = time.time,
+) -> int:
+    """The trace is in all three stores, and the canary is in none of them (the collector's allow-list)."""
+    if find(trace_id, urls, deadline, say, get, sleep, clock, wall) != 0:
+        say("the canary check needs the trace in every store first")
+        return 1
+    leaking = []
+    for store, check in LEAKS.items():
+        reason = check(get, urls[store], trace_id, wall())
+        if reason is None:
+            say(f"{store}: no canary")
+        else:
+            say(f"{store}: canary found ({reason})")
+            leaking.append(store)
+    if leaking:
+        say("the canary reached: " + ", ".join(leaking))
         return 1
     return 0
 
@@ -244,6 +334,10 @@ def main(argv: Sequence[str] | None = None, **options) -> int:
     look = commands.add_parser("find", help="look for the trace id in the three stores")
     look.add_argument("trace_id", help="32 lower-case hex characters")
     look.add_argument("--deadline", type=positive, default=60.0, help="seconds to wait for each store (default 60)")
+    none = commands.add_parser("absent", help="find the trace in the three stores, then check that the canary is in none")
+    none.add_argument("trace_id", help="32 lower-case hex characters")
+    none.add_argument("canary", help="the value the emitter was given (CANARY- and letters, digits or hyphens)")
+    none.add_argument("--deadline", type=positive, default=60.0, help="seconds to wait for each store (default 60)")
     args = parser.parse_args(argv)  # a bad argument exits 2
     say = lambda line: print(line, flush=True)  # noqa: E731
     urls = options.pop("urls", DEFAULTS)
@@ -252,6 +346,11 @@ def main(argv: Sequence[str] | None = None, **options) -> int:
     if not TRACE_ID.fullmatch(args.trace_id) or set(args.trace_id) == {"0"}:
         print("observability query: refused: the trace id must be 32 lower-case hex characters and not all zeros", file=sys.stderr)
         return 2
+    if args.command == "absent":
+        if not CANARY.fullmatch(args.canary):
+            print("observability query: refused: the canary must be CANARY- and up to 60 letters, digits or hyphens", file=sys.stderr)
+            return 2
+        return absent(args.trace_id, args.canary, urls, args.deadline, say, **options)
     return find(args.trace_id, urls, args.deadline, say, **options)
 
 
