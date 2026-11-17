@@ -205,6 +205,38 @@ def test_an_ingested_alert_is_in_the_next_queue_with_ingested_at_before_served_a
     assert datetime.fromisoformat(entry["ingestedAt"]) < datetime.fromisoformat(result["servedAt"])
 
 
+def test_a_new_alert_is_in_the_very_next_queue_read_even_with_a_cache_setting(
+    app_database, monkeypatch
+):
+    # QueueLatencyOverSLO: a queue cache that ingest did not invalidate hid a new alert for its whole
+    # lifetime (8 s in compose.yaml, over the 5 s SLO). The queue must never serve an older answer.
+    from socboard.app import create_app
+
+    key = "test-only-ingest-key-0123456789"
+    monkeypatch.setenv("SOCBOARD_INGEST_API_KEY", key)
+    monkeypatch.setenv("SOCBOARD_QUEUE_CACHE_SECONDS", "8")
+    client = TestClient(create_app())
+    assert queue_ids(client) == []
+    body = {
+        "source": "siem-1",
+        "type": "malware_detection",
+        "asset": "host-x",
+        "timestamp": "2026-11-12T09:00:00Z",
+        "title": "Found",
+        "description": "d",
+    }
+    created = client.post("/api/alerts", json=body, headers={"X-API-Key": key})
+    assert created.status_code == 201
+    assert queue_ids(client) == [created.json()["id"]]
+
+
+def test_compose_sets_no_queue_cache():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text(encoding="utf-8")
+    assert "SOCBOARD_QUEUE_CACHE_SECONDS" not in text
+
+
 def test_a_case_closed_directly_in_the_database_leaves_the_queue(real_client, app_database):
     add_case(app_database, 1)
     add_case(app_database, 2)

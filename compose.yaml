@@ -99,7 +99,6 @@ services:
       SOCBOARD_DATABASE_URL: postgresql+psycopg://socboard_app:${STACK_PG_APP_PASSWORD:?STACK_PG_APP_PASSWORD is required}@db:5432/socboard
       # The proxy's fixed address below. FORWARDED_ALLOW_IPS stays at uvicorn's default (README, "Login attempt limits").
       SOCBOARD_TRUSTED_PROXIES: ${STACK_TRUSTED_PROXIES:-${STACK_NET:-10.231.77}.10}
-      SOCBOARD_QUEUE_CACHE_SECONDS: "8"
     ports:
       - 127.0.0.1:${STACK_APP_PORT:-8000}:8000
     healthcheck:
