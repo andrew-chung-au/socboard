@@ -23,10 +23,11 @@
 # below are in-memory file systems of fixed size, so a full store cannot fill the host's disk; the data
 # does not survive a host restart, which is right for a stack that runs in CI and on a developer's
 # machine. Those pages are charged to the container that writes them, so each cap is below its service's
-# mem_limit (192 MiB against 256, 256 against 384, 64 against 160), and a store that outgrew its cap would
-# fail its writes before it was killed; no run is long enough to show which comes first (checked by
-# tests/test_observability_compose.py). Each service has a memory limit; the six add up to 1504 MiB, within
-# 1.5 GiB (1536 MiB).
+# mem_limit (192 MiB against 256, 64 against 384), and a store that outgrew its cap would fail its writes
+# before it was killed; no run is long enough to show which comes first (checked by
+# tests/test_observability_compose.py). Each service has a memory limit; the six add up to 1344 MiB, within
+# 1.5 GiB (1536 MiB). The limits are about ten times what the first runs used (a few tens of MiB each), except
+# Grafana's: at 160 MiB it was killed (exit 137) while starting, so it has 384.
 #
 # Images are pinned by tag and index digest, as compose.yaml does. Each digest was read from the registry
 # on 2026-11-16 (Alertmanager's on 2026-11-17) and pulled and run by `socboard observability` run
@@ -37,7 +38,7 @@ services:
     image: otel/opentelemetry-collector-contrib:0.142.0@sha256:38c349c3b7a2fd7ea46700cde8fa13d35b699ef2ce245bdf34dae2a413512f76
     command: ["--config=/etc/otelcol/config.yaml"]
     user: "10001:10001"
-    mem_limit: 256m
+    mem_limit: 128m
     volumes:
       - ./observability/otel/collector.yaml:/etc/otelcol/config.yaml:ro
     ports:
@@ -53,7 +54,7 @@ services:
     image: grafana/tempo:3.1.1@sha256:64e2fbd56d9c2b3412a4b430a58ea59e91a670b1e75f920a0c702213ad145044
     command: ["-target=all", "-config.file=/etc/tempo.yaml"]
     user: "10001:10001"
-    mem_limit: 384m
+    mem_limit: 256m
     volumes:
       - ./observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
       - tempo-data:/var/tempo
@@ -65,7 +66,7 @@ services:
     image: grafana/loki:3.7.10@sha256:b43c257ccfc925d4a50b8717cac61a3b51df8c48d01847936057e5c4075a24a7
     command: ["-config.file=/etc/loki/loki.yaml"]
     user: "10001:10001"
-    mem_limit: 384m
+    mem_limit: 256m
     volumes:
       - ./observability/loki/loki.yaml:/etc/loki/loki.yaml:ro
       - loki-data:/loki
@@ -113,7 +114,7 @@ services:
   grafana:
     image: grafana/grafana:13.3.1@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf
     user: "472:472"
-    mem_limit: 160m
+    mem_limit: 384m
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_AUTH_DISABLE_LOGIN_FORM: "false"
@@ -163,13 +164,13 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: size=256m,uid=10001,gid=10001
+      o: size=192m,uid=10001,gid=10001
   loki-data:
     driver: local
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: size=256m,uid=10001,gid=10001
+      o: size=192m,uid=10001,gid=10001
   prometheus-data:
     driver: local
     driver_opts:

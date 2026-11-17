@@ -163,7 +163,7 @@ def test_each_refused_case_fails(change, expected):
 def test_the_six_services_fit_the_memory_budget():
     doc = load()
     total = sum(mebibytes(doc["services"][name]["mem_limit"]) for name in SERVICES)
-    assert total == 1504 and total <= 1536
+    assert total == 1344 and total <= 1536
 
 
 def test_each_volume_cap_is_below_its_services_memory_limit():
