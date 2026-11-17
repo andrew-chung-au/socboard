@@ -6,9 +6,9 @@ Stage (b) of #240: prove the runbook `_docs/runbooks/deploy-and-teardown.md` on 
 
 ## What changed in these steps (2026-11-17)
 
-The steps were rewritten for copy and paste after the #267 run (`_human-tasks/2026-11-17T0030Z-human-task-267-engineer-first-prod-deploy.md`, "What changed after the first run"), with no change to what they do. The old text named values as `<instance id>`, `<hostname>`, `<data volume id>`, `<digest>` and `<secret file>`; those were typed literally in the #267 run and the shell read `<` as a redirect. They are now shortcuts set once in "Before you start", item 2, each echoed, and one fixed secret path. No step in this file is marked done: the table has no result yet.
+The steps were rewritten for copy and paste after the #267 run (`_human-tasks/2026-11-17T0030Z-human-task-267-engineer-first-prod-deploy.md`, "What changed after the first run"), with no change to what they do. The old text named values as `<instance id>`, `<hostname>`, `<data volume id>`, `<digest>` and `<secret file>`; those were typed literally in the #267 run and the shell read `<` as a redirect. They are now shortcuts that the runbook sets, each echoed, and one fixed secret path, `/tmp/socboard-dev-secret.json`. No step in this file is marked done: the table has no result yet.
 
-The runbook's own command blocks still contain angle-bracket placeholders (for example `--instance-ids <instance id>`). This file does not change the runbook. In "Before you start", item 3, a table says which shortcut replaces which placeholder, and what to do for a value the runbook only prints while you work.
+The runbook's command blocks were rewritten the same day (see its "What changed in these steps (2026-11-17)"): no block has an angle-bracket placeholder any more. The runbook has its own "Before any command" section that sets the shortcuts `I`, `H`, `PH` and `V`, and each runbook step that prints a value says where to paste it (a CAPITALS placeholder such as `PASTE-DIGEST-HERE`, announced before its block). So this file no longer needs a table that maps placeholders to shortcuts, and "Before you start" points to the runbook instead.
 
 ## Where to run it
 
@@ -17,7 +17,7 @@ The runbook's own command blocks still contain angle-bracket placeholders (for e
 - Steps on the server run in a Session Manager session, as the runbook says. Session Manager needs the plugin on your machine (`session-manager-plugin` prints "installed successfully"). Without it, use the AWS Console: EC2, the instance, Connect, Session Manager.
 - Not here: the agent's sandbox, which has no AWS access. The agent never runs these steps. Every destructive step (deleting the scratch volume) is the human's only.
 
-**How to read the commands.** Copy each block exactly. Shortcuts (`I`, `H`, `V`, `D`, and the others in item 3) exist only in the terminal where you set them: in a new terminal, run the shortcut blocks again. A send with an empty shortcut fails with `InvalidParameters`. A shortcut set on your machine does not exist inside a Session Manager session on the server; there, type the value itself, which you read with `echo "$I"` on your machine.
+**How to read the commands.** Copy each block exactly. Every command is in the runbook, which sets the shortcuts it uses (`I`, `H`, `PH`, `V` in its "Before any command" section, and the others in the step that needs them). Shortcuts exist only in the terminal where you set them: in a new terminal, run the runbook's "Before any command" section again. A send with an empty shortcut fails with `InvalidParameters`.
 
 If a tool shows a permission prompt, reject one prompt at a time; rejecting ends the agent's turn, so tell it to continue.
 
@@ -34,79 +34,7 @@ date -u +%Y-%m-%dT%H:%M:%SZ
 Expected: the current UTC time. Write it in the table below as the start; write the time again at the end of the rehearsal, so the table holds how long it took.
 If different: none.
 
-2. Set the shortcuts. Each value comes from a command that reads the real value; each is followed by an echo.
-
-```
-I=$(terraform -chdir=terraform/server output -raw instance_id)
-```
-
-```
-echo "I=[$I]"
-```
-
-Expected: `I=[i-` followed by hex digits `]`.
-If different: empty brackets mean you are not at the repository root, or Terraform has no state here. Stop.
-
-```
-H=$(terraform -chdir=terraform/server output -raw hostname)
-```
-
-```
-echo "H=[$H]"
-```
-
-Expected: `H=[` four numbers with dashes, then `.sslip.io]`.
-If different: empty brackets: as for `I`.
-
-```
-V=$(terraform -chdir=terraform/server output -raw data_volume_id)
-```
-
-```
-echo "V=[$V]"
-```
-
-Expected: `V=[vol-` followed by hex digits `]`.
-If different: empty brackets: as for `I`.
-
-The digest comes from the runbook's Step 2.2.1 (the newest `socboard publish` run's job summary), not from a command here. Replace PASTE-DIGEST-HERE with `sha256:` and the 64 hex digits, then echo it:
-
-```
-D=PASTE-DIGEST-HERE
-```
-
-```
-echo "D=[$D]"
-```
-
-Expected: `D=[sha256:` and 64 hex digits `]`.
-If different: the text `PASTE-DIGEST-HERE` is still there, or the digits are fewer than 64: copy the digest again from the job summary.
-
-3. Which shortcut replaces which placeholder in the runbook's blocks. Type the shortcut where the runbook shows the placeholder, for example `--instance-ids "$I"` in place of `--instance-ids <instance id>`. Remove the angle brackets with the words inside them.
-
-| The runbook says | Use | Where the value comes from |
-|---|---|---|
-| `<instance id>` | `"$I"` | set above |
-| `<hostname>` | `"$H"` | set above |
-| `<data volume id>` | `"$V"` | set above |
-| `<digest>` | `"$D"` | set above |
-| `<secret file>` | `/tmp/socboard-dev-secret.json` (in `file://` form: `file:///tmp/socboard-dev-secret.json`, three slashes in a row) | a fixed path outside the repository, used for the whole rotation |
-| `<snapshot id>`, `<zone>`, `<scratch volume id>`, `<command id>`, `<run id>` | a shortcut you set when the runbook prints the value | the runbook step that prints it ("Use it as ...") |
-
-For a value the runbook prints, set the shortcut right after that step, with the printed value in place of the capitals, then echo it. For the scratch volume (Step 7.1.3):
-
-```
-S=PASTE-SCRATCH-VOLUME-ID-HERE
-```
-
-```
-echo "S=[$S]"
-```
-
-Expected: `S=[vol-` followed by hex digits `]`.
-If different: `PASTE-SCRATCH-VOLUME-ID-HERE` still showing means the value was not pasted; copy it from the runbook step's output.
-
-Do the same for `<snapshot id>` (name it `SNAP`), `<zone>` (name it `Z`) and `<command id>` (name it `C`). A shortcut set from a runbook step's output is the only value in this file that you copy by eye: check it with the echo before you use it.
+2. Set the shortcuts: open `_docs/runbooks/deploy-and-teardown.md`, section "Before any command", and run its blocks once in the terminal you will use, from the repository root (`cd ~/projects/socboard`). It sets `I`, `H`, `PH` and `V`, each read by a command and echoed with its `Expected:` line. This file sets no shortcut of its own: the runbook's own steps set the others when they need them (`D` in Step 2.2.1, `SNAP` in Step 7.1.1, `Z` in Step 7.1.2, `S` in Step 7.1.3, `C` in Step 2.2.2, `K` in Step 6.0.2). Where a value must be copied by eye, the runbook says so before the block (a CAPITALS placeholder such as `PASTE-DIGEST-HERE`) and echoes it afterwards. The secret file for the rotation is the fixed path `/tmp/socboard-dev-secret.json` (written `file:///tmp/socboard-dev-secret.json` in the `put-secret-value` command, three slashes in a row).
 
 ## Steps
 
