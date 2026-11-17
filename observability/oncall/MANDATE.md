@@ -28,7 +28,40 @@ Your prompt is not the limit; these are. You cannot change them, and a patch tha
 
 - **Job contract.** You run in the agent job: `permissions: contents: read` only, the only job that holds `ANTHROPIC_API_KEY` (from the `oncall` Environment), a checkout of the drill branch with `persist-credentials: false`, the incident bundle downloaded as an artifact. After you end, a fixed step writes `fix.patch` with `git diff` and uploads it with `notes.md`. You have no token that can write.
 - **Publish job.** A second job with no model key takes `observability/oncall/guard.py` from `main`, applies `fix.patch` to a fresh checkout, runs the guard, and only then pushes `oncall/<run id>` and opens a draft pull request against the drill branch. The guard refuses a patch that touches a path above, changes more than 200 lines or more than 5 files, adds lines to no test file, has a mode other than 100644 (executable, symlink), is binary, or targets any ref but `oncall/<run id>`. After the pull request opens, the guard closes it and fails the job unless it is a draft with auto-merge off.
-- **Tools (the allow list, no other tool is available to you).** `VERIFY:` the option names and the pattern syntax against the README of `anthropics/claude-code-action` at the commit the drill workflow (#299) pins; #299 is not built yet, so these are the recommended names, not checked ones, and the pull request that adds the workflow must quote the option names it uses.
+- **Tools (the allow list, no other tool is available to you).**
   - File tools: `Read`, `Edit`, `Write`, `Glob`, `Grep`.
   - Bash, limited to exactly `make test`, `make test-one FILE=<path>` (a path under `tests/`) and `git diff`.
   - Not available: web fetch, web search, `gh`, any MCP server, any other command.
+
+### Pinned action and tool options
+
+The drill workflow (#299) runs `anthropics/claude-code-action` pinned to this commit, the one the tag `v1.0.278` (the newest release; an annotated tag) points to:
+
+Pinned action commit: cc98b3ae241b0fcfb6a42a2690751afffecb4452
+
+#299's workflow must pin the same commit (`uses: anthropics/claude-code-action@cc98b3ae241b0fcfb6a42a2690751afffecb4452`), not a tag or branch; a test keeps this line a 40-character hex string. Change the pin only together with a re-read of the files below at the new commit.
+
+Source of each option name, read at that commit:
+
+- `README.md` names the inputs `prompt` and `claude_args` and links to the docs. It documents no tool flag itself.
+- `docs/usage.md` (Inputs table, Deprecated Inputs table): `claude_args`, "Additional arguments to pass directly to Claude CLI". The old inputs `allowed_tools`, `disallowed_tools` and `mcp_config` are listed as deprecated, so the workflow does not use them. It states the migration `claude_args: "--allowedTools Edit,Read,Write"` and `claude_args: "--disallowedTools WebSearch"`.
+- `docs/configuration.md` (Custom Tools): "The base GitHub tools are always included. Use `--allowedTools` to add additional tools (including specific Bash commands), and `--disallowedTools` to prevent specific tools from being used." So the allow list adds to the tools the action starts with and does not replace them; every other tool is closed with the disallow option below.
+- `docs/usage.md` (Permission Mode) and `docs/security.md` (Auto mode is a review, not a boundary): the action runs in auto mode by default, where a safety review can run a call that no allow rule covers; "For a strict list of what Claude may run, use `--permission-mode acceptEdits` or `default`." With a `prompt`, `--permission-mode default` denies what no rule covers.
+
+The values for this allow list:
+
+```yaml
+claude_args: |
+  --permission-mode default
+  --allowedTools "Read,Edit,Write,Glob,Grep,Bash(make test),Bash(make test-one FILE=tests/*),Bash(git diff)"
+  --disallowedTools "WebFetch,WebSearch,mcp__github,mcp__github_comment,mcp__github_file_ops,mcp__github_inline_comment,mcp__github_ci"
+```
+
+The workflow sets no `use_commit_signing`, no `--mcp-config` and no `mcp_config`, and uses no deprecated input.
+
+Findings the docs at that commit leave open, for #299's pull request to settle and quote (no name below is invented; each is marked by where it comes from):
+
+- The tool names `Read`, `Edit`, `Write`, `Glob`, `Grep`, `WebFetch` and `WebSearch` are Claude Code's own; the action's docs use `Edit`, `Read`, `Write` and `WebSearch` in examples but give no full list. `Glob`, `Grep` and `WebFetch` appear in none of `README.md`, `docs/usage.md`, `docs/configuration.md` and `docs/security.md` (the four files read).
+- The Bash pattern syntax is Claude Code's, not the action's. The action's docs show only exact patterns such as `Bash(npm install)`. Whether `*` in `Bash(make test-one FILE=tests/*)` matches only a path under `tests/` (it also matches `tests/../x`) is not documented there; `Bash(make test)` and `Bash(git diff)` are exact. #299 checks the behaviour in its run log.
+- The five `mcp__` names in the disallow list come from `src/mcp/install-mcp-server.ts` at that commit (the server names `github`, `github_comment`, `github_file_ops`, `github_inline_comment`, `github_ci`), not from the README or docs; the docs name only `mcp__github_ci__download_job_log`, `mcp__github_ci__get_workflow_run_details` and `mcp__github_ci__get_ci_status`. In that source, a run with a `prompt` starts none of these servers unless an allowed tool names it or `use_commit_signing` is on, so the disallow entries are a second lock.
+- `docs/security.md` says an allow rule for `Write` "lets Claude write outside the workspace". The allow list above gives `Write`; the guard still refuses a patch outside the repository, but a file written elsewhere on the runner is outside what the patch shows. #299 decides whether to narrow `Write`.

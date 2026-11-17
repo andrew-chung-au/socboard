@@ -1,6 +1,6 @@
 """The on-call agent's guard (#298). Standard library only; the publish job runs the copy on `main`.
 
-    python guard.py check-patch fix.patch --ref oncall/<run id> [--run-id <run id>]
+    python guard.py check-patch fix.patch --ref oncall/<run id> --run-id <run id>
     python guard.py check-pr --repo OWNER/REPO --number N
 
 `check-patch` reads `fix.patch` as a unified git diff and exits 1, before any push, when:
@@ -10,7 +10,7 @@
   - no test file gains a line (TEST_FILES below);
   - a mode is not 100644 (executable 100755, symlink 120000, anything else);
   - the patch is binary, or cannot be parsed, so its lines cannot be counted;
-  - the ref is anything but `oncall/<digits>` (and, with --run-id, anything but that run's).
+  - the ref is anything but `oncall/<run id>` (--run-id is required, so the run's own id is always checked).
 Exit codes: 0 allowed, 1 refused (one fixed line per reason on stderr), 2 a usage or setup error.
 
 `check-pr` fetches the opened pull request and exits 1, after closing it, when it is not a draft or
@@ -46,6 +46,7 @@ REF = re.compile(r"oncall/[0-9]{1,20}")
 RUN_ID = re.compile(r"[0-9]{1,20}")
 PATH_TEXT = re.compile(r"[\x21-\x7e]+")  # no space, control or non-ASCII character
 MODE = re.compile(r"[0-7]{6}")
+# Text after the closing `@@` is git's function context; it is never counted, so any text is accepted.
 HUNK = re.compile(r"@@ -[0-9]+(?:,([0-9]+))? \+[0-9]+(?:,([0-9]+))? @@")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
@@ -160,7 +161,7 @@ def parse(text: str) -> list[dict]:
 
 def _hunk(lines: list[str], i: int, rec: dict) -> int:
     """Consume one hunk by its line counts (so a content line `--- x` is not a header); return the next index."""
-    match = HUNK.fullmatch(lines[i])
+    match = HUNK.match(lines[i])
     if not match:
         raise Unparsable("a hunk header is malformed")
     old, new = (1 if n is None else int(n) for n in match.groups())
@@ -169,6 +170,9 @@ def _hunk(lines: list[str], i: int, rec: dict) -> int:
         if i >= len(lines):
             raise Unparsable("a hunk is shorter than its header says")
         sign = lines[i][:1]
+        if sign == "\\":  # "\ No newline at end of file": not a line of either side
+            i += 1
+            continue
         if sign == "-" and old > 0:
             old -= 1
             rec["deleted"] += 1
@@ -247,7 +251,7 @@ def main(argv=None) -> int:
     one = sub.add_parser("check-patch")
     one.add_argument("patch")
     one.add_argument("--ref", required=True)
-    one.add_argument("--run-id")
+    one.add_argument("--run-id", required=True)
     two = sub.add_parser("check-pr")
     two.add_argument("--repo", required=True)
     two.add_argument("--number", required=True)
