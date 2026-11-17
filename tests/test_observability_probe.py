@@ -277,3 +277,145 @@ def test_no_secret_is_printed(app, capsys):
         run_probe(fake.url, "--count", "2")
     out = capsys.readouterr()
     assert out.out and not any(secret in out.out + out.err for secret in SECRETS)
+
+
+# --- the OTLP histogram (#294, with #288 and #338): the SDK's in-memory reader, no network ---
+
+CONTRACT_BOUNDS = (0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30)  # observability/CONTRACT.md, section 2
+
+
+def measured(reader):
+    """(resource, the one histogram data point) of the probe's metric, from an in-memory reader."""
+    data = reader.get_metrics_data()
+    resource_metrics = data.resource_metrics
+    assert len(resource_metrics) == 1
+    metrics = [metric for scope in resource_metrics[0].scope_metrics for metric in scope.metrics]
+    assert [metric.name for metric in metrics] == ["socboard.probe.time_to_queue"]
+    assert metrics[0].unit == "s"
+    return resource_metrics[0].resource, metrics[0].data.data_points
+
+
+@pytest.fixture
+def sdk():
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    return InMemoryMetricReader()
+
+
+def run_with_histogram(url, reader, *args, environ=ENVIRON):
+    clock = Clock()
+    record, shutdown = probe.build_recorder(environ, reader=reader)
+    code = probe.main([url, *args], environ, record, clock.sleep, clock.monotonic)
+    return code, shutdown
+
+
+def test_the_delay_is_in_the_histogram_with_the_cycle_trace_id_as_exemplar(app, sdk):
+    fake = app(queue_after=3)
+    code, _ = run_with_histogram(fake.url, sdk)
+    trace_id = trace_of(next(call for call in fake.calls if call[1] == "/api/alerts"))
+    _, points = measured(sdk)
+    assert code == 0 and len(points) == 1
+    point = points[0]
+    assert point.count == 1 and 2 <= point.sum <= 3
+    assert tuple(point.explicit_bounds) == CONTRACT_BOUNDS
+    assert sum(point.bucket_counts) == 1
+    assert [format(exemplar.trace_id, "032x") for exemplar in point.exemplars] == [trace_id]
+    assert point.exemplars[0].value == point.sum
+    assert dict(point.attributes) == {}  # no label: the exemplar is the only link to a trace
+
+
+def test_the_resource_is_the_probe_whatever_the_environment_says(app, sdk, monkeypatch):
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "socboard")
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "service.name=socboard,deployment.environment.name=ci,service.version=abc123")
+    run_with_histogram(app().url, sdk)
+    resource, _ = measured(sdk)
+    assert resource.attributes["service.name"] == "socboard-probe"
+    assert resource.attributes["deployment.environment.name"] == "ci"  # operator-set, as the contract says
+    assert resource.attributes["service.version"] == "abc123"
+
+
+def test_a_case_that_never_appears_is_recorded_at_the_top_bucket_bound(app, sdk):
+    code, _ = run_with_histogram(app(queue_after=None).url, sdk)
+    _, points = measured(sdk)
+    assert code == 1
+    assert points[0].count == 1 and points[0].sum == 30.0
+    assert points[0].bucket_counts[-2] == 1  # the (15, 30] bucket; the overflow bucket stays empty
+    assert points[0].bucket_counts[-1] == 0
+
+
+def test_a_429_records_nothing_in_the_histogram(app, sdk):
+    run_with_histogram(app(ingest=(429,)).url, sdk)
+    assert sdk.get_metrics_data() is None or all(
+        not scope.metrics for each in sdk.get_metrics_data().resource_metrics for scope in each.scope_metrics
+    )
+
+
+def test_each_cycle_records_one_point_with_its_own_exemplar(app, sdk):
+    fake = app()
+    run_with_histogram(fake.url, sdk, "--count", "2")
+    ingests = [trace_of(call) for call in fake.calls if call[1] == "/api/alerts"]
+    _, points = measured(sdk)
+    assert points[0].count == 2 and len(set(ingests)) == 2
+    assert {format(exemplar.trace_id, "032x") for exemplar in points[0].exemplars} <= set(ingests)
+
+
+def test_with_no_endpoint_nothing_is_created_and_the_packages_are_not_needed():
+    for environ in ({}, {"OTEL_EXPORTER_OTLP_ENDPOINT": ""}, {"OTEL_EXPORTER_OTLP_ENDPOINT": "   "}):
+        record, shutdown = probe.build_recorder(environ)
+        assert record is None and shutdown() is None
+
+
+def test_the_recorder_is_flushed_when_the_run_ends_even_after_a_failure(app, monkeypatch):
+    flushed = []
+    monkeypatch.setattr(probe, "build_recorder", lambda environ: (lambda delay, trace_id: None, lambda: flushed.append(True)))
+    clock = Clock()
+    code = probe.main([app(queue_after=None).url], ENVIRON, None, clock.sleep, clock.monotonic)
+    assert code == 1 and flushed == [True]
+
+
+def test_no_secret_reaches_the_histogram(app, sdk):
+    run_with_histogram(app().url, sdk)
+    text = repr(sdk.get_metrics_data())
+    assert not any(secret in text for secret in SECRETS)
+
+
+def test_the_histogram_is_exported_over_otlp_http_when_the_run_ends(app, monkeypatch):
+    """A fake collector on the loopback receives the OTLP request: the probe's resource, the metric, the exemplar."""
+    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+
+    received = []
+
+    class Collector(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append((self.path, self.rfile.read(int(self.headers.get("Content-Length") or 0))))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    collector = ThreadingHTTPServer(("127.0.0.1", 0), Collector)
+    collector.daemon_threads = True
+    threading.Thread(target=lambda: collector.serve_forever(poll_interval=0.02), daemon=True).start()
+    endpoint = f"http://127.0.0.1:{collector.server_address[1]}"
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)  # the exporter reads the process environment
+    try:
+        fake = app()
+        clock = Clock()
+        code = probe.main([fake.url], {**ENVIRON, "OTEL_EXPORTER_OTLP_ENDPOINT": endpoint}, None, clock.sleep, clock.monotonic)
+        trace_id = trace_of(next(call for call in fake.calls if call[1] == "/api/alerts"))
+    finally:
+        collector.shutdown()
+        collector.server_close()
+    assert code == 0
+    assert [path for path, _ in received] == ["/v1/metrics"]
+    request = ExportMetricsServiceRequest()
+    request.ParseFromString(received[0][1])
+    resource_metrics = request.resource_metrics[0]
+    assert {a.key: a.value.string_value for a in resource_metrics.resource.attributes}["service.name"] == "socboard-probe"
+    metric = resource_metrics.scope_metrics[0].metrics[0]
+    assert (metric.name, metric.unit) == ("socboard.probe.time_to_queue", "s")
+    point = metric.histogram.data_points[0]
+    assert point.count == 1 and tuple(point.explicit_bounds) == CONTRACT_BOUNDS
+    assert [exemplar.trace_id.hex() for exemplar in point.exemplars] == [trace_id]

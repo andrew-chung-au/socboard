@@ -9,9 +9,13 @@ the case, monotonic clock, at most 30 seconds) goes to the recorder; one line is
 Then the probe claims, starts and closes its own case as the Lead with `false_positive`, so the
 queue does not grow.
 
-The measurement sits behind one seam, `Recorder = (delay_seconds, trace_id) -> None`. The OTLP
-histogram `socboard.probe.time_to_queue` is added with #288 and #338; until then the default records
-nothing, and the tests pass a fake.
+The measurement sits behind one seam, `Recorder = (delay_seconds, trace_id) -> None`. With
+`OTEL_EXPORTER_OTLP_ENDPOINT` set, the recorder is the histogram `socboard.probe.time_to_queue`
+(unit `s`, the bucket bounds of `observability/CONTRACT.md`), recorded with an exemplar that carries
+the cycle's trace id, under the resource `service.name=socboard-probe` (plus whatever
+`OTEL_RESOURCE_ATTRIBUTES` sets), and exported over OTLP at the end of the run. With the variable
+unset or empty nothing is created: the default records nothing, and the OpenTelemetry packages are
+not imported. The tests pass a fake, or the SDK's in-memory reader.
 
 The URL is plain `http` on `localhost`, `127.0.0.1` or `::1`, or on one of the stack's service names
 (`STACK_SERVICE_NAMES`, from `compose.yaml`, for a run inside the stack network), with no path. The
@@ -54,6 +58,52 @@ SYNTHETIC_ALERT = {
 }
 
 Recorder = Callable[[float, str], None]
+
+# The contract's names (observability/CONTRACT.md, sections 1 and 2): fixed here, so nothing a
+# request carries can reach them.
+PROBE_SERVICE_NAME = "socboard-probe"
+HISTOGRAM_NAME = "socboard.probe.time_to_queue"
+BUCKET_BOUNDS = (0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30)  # seconds
+ENDPOINT_VARIABLE = "OTEL_EXPORTER_OTLP_ENDPOINT"
+
+
+def build_recorder(environ: Mapping[str, str], reader=None) -> tuple[Recorder | None, Callable[[], None]]:
+    """(recorder, shutdown): the OTLP histogram when the endpoint variable is set, else (None, no-op).
+
+    `reader` is a metric reader to use in place of the OTLP exporter's (the tests pass the SDK's
+    in-memory reader). The exporter reads its endpoint and headers from the process environment, as
+    the SDK does; the probe prints none of them. `shutdown` flushes what was recorded.
+    """
+    if reader is None and not (environ.get(ENDPOINT_VARIABLE) or "").strip():
+        return None, lambda: None
+    from opentelemetry import trace
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+    if reader is None:
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+        reader = PeriodicExportingMetricReader(OTLPMetricExporter())
+    # service.name is passed in code, so it wins over OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES.
+    provider = MeterProvider(
+        resource=Resource.create({"service.name": PROBE_SERVICE_NAME}),
+        metric_readers=[reader],
+        views=[View(instrument_name=HISTOGRAM_NAME, aggregation=ExplicitBucketHistogramAggregation(BUCKET_BOUNDS))],
+    )
+    histogram = provider.get_meter(PROBE_SERVICE_NAME).create_histogram(
+        HISTOGRAM_NAME, unit="s", description="Seconds from a synthetic ingest until the case is in the queue."
+    )
+
+    def record(delay: float, trace_id: str) -> None:
+        # The SDK's default exemplar filter keeps a measurement taken inside a sampled span context, so
+        # the delay is recorded inside one that carries the cycle's trace id.
+        context = SpanContext(int(trace_id, 16), secrets.randbits(64) or 1, False, TraceFlags(TraceFlags.SAMPLED))
+        histogram.record(delay, context=trace.set_span_in_context(NonRecordingSpan(context)))
+
+    return record, provider.shutdown
 
 
 def parse_url(url: str) -> tuple[str, str, int | None, str]:
@@ -231,9 +281,19 @@ def main(
     except smoke.Refused as refusal:
         print(f"observability probe: refused: {refusal}", file=sys.stderr)
         return 2
+    shutdown = lambda: None  # noqa: E731
+    if record is None:
+        try:
+            record, shutdown = build_recorder(source)
+        except ImportError:
+            print("observability probe: refused: OTEL_EXPORTER_OTLP_ENDPOINT is set but the OpenTelemetry packages are missing", file=sys.stderr)
+            return 2
     client = smoke.Client(scheme, host, port, prefix, deadline=0.0)
     say = lambda line: print(line, flush=True)  # noqa: E731
-    return run(client, password, key, args.count, args.interval, record or (lambda delay, trace_id: None), say, sleep, clock)
+    try:
+        return run(client, password, key, args.count, args.interval, record or (lambda delay, trace_id: None), say, sleep, clock)
+    finally:
+        shutdown()
 
 
 if __name__ == "__main__":
