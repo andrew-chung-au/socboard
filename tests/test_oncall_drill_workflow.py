@@ -108,6 +108,35 @@ def test_the_agent_job_records_the_start_and_writes_the_patch_with_its_own_git_d
     assert ".git/config" not in run  # the checkout's own config is never read or trusted
 
 
+SANDBOX_PLACEHOLDERS = (".gitmodules", ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml", "package.json",
+                        "package-lock.json", "pnpm-lock.yaml", "yarn.lock")
+
+
+def test_the_sandbox_is_installed_before_the_agent():
+    names = [s.get("name", "") for s in steps("agent")]
+    assert names.index("Install the sandbox the agent's commands run in") < names.index("The on-call agent")
+    install = next(s for s in steps("agent") if s.get("name") == "Install the sandbox the agent's commands run in")
+    assert "bubblewrap socat" in install["run"] and "command -v bwrap && command -v socat" in install["run"]
+
+
+def test_a_tracked_file_with_a_placeholder_name_still_shows_in_the_patch(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    _git("init", "-q", cwd=work)
+    (work / "package.json").write_text("{}\n")
+    _git("add", "-A", cwd=work)
+    _git("commit", "-q", "-m", "start", cwd=work)
+    start = subprocess.run(["git", "rev-parse", "HEAD"], cwd=work, capture_output=True, text=True, check=True).stdout.strip()
+    (work / "package.json").write_text('{"scripts": {"test": "evil"}}\n')
+    patch = next(s for s in steps("agent") if s.get("name") == "Write the patch")
+    (tmp_path / "runner").mkdir()
+    env = {**patch["env"], "PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "RUNNER_TEMP": str(tmp_path / "runner"),
+           "GITHUB_OUTPUT": str(tmp_path / "out"), "START_SHA": start}
+    done = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", patch["run"]], cwd=work, env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "b/package.json" in (tmp_path / "runner" / "agent-output" / "fix.patch").read_text()
+
+
 def _git(*args, cwd):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True)
 
@@ -131,6 +160,8 @@ def test_the_patch_step_ignores_a_rewritten_git_config_and_a_planted_filter(tmp_
     (work / "tests" / "test_app.py").write_text("def test_x():\n    assert True\n")
     (work / ".oncall").mkdir()
     (work / ".oncall" / "notes.md").write_text("notes\n")
+    for name in SANDBOX_PLACEHOLDERS:  # what the sandbox left in run 44075337257
+        (work / name).write_text("")
 
     patch = next(s for s in steps("agent") if s.get("name") == "Write the patch")
     runner_temp = tmp_path / "runner"
@@ -146,6 +177,8 @@ def test_the_patch_step_ignores_a_rewritten_git_config_and_a_planted_filter(tmp_
     assert "-x = 1" in text and "+x = 2" in text
     assert "b/tests/test_app.py" in text
     assert ".oncall" not in text
+    for name in SANDBOX_PLACEHOLDERS:
+        assert f"b/{name}" not in text, name
     assert (runner_temp / "agent-output" / "notes.md").read_text() == "notes\n"
     assert "change=true" in output.read_text()
     assert not marker.exists()  # neither the planted filter nor the diff driver ran

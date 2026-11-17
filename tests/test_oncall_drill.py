@@ -57,12 +57,26 @@ def copy_files(folder: Path) -> None:
         target.write_bytes((ROOT / name).read_bytes())
 
 
+# The drill's own branches (drill/<run id>, and the agent's work on it) carry the defect already, and the
+# agent and job 4 run `make test` there. On such a tree the two tests below check that the defect is in
+# place instead, so the suite passes on main and on a drill branch alike. The marker is the function the
+# defect adds; the agent's fix may keep it.
+DEFECT_MARKER = "def resolve_queue_cache_seconds("
+
+
+def drill_tree() -> bool:
+    return DEFECT_MARKER in (ROOT / "socboard" / "cases.py").read_text(encoding="utf-8")
+
+
 def test_defect_patch_applies_to_the_current_files(tmp_path):
-    # The drift check in observability/ci/check.sh (a later change) runs the suite on the patched copy;
-    # until it lands, this shows in `make test` when another change breaks the patch.
+    # The drift check (observability/drill/drift.sh, called by observability/ci/check.sh) runs the suite on a
+    # patched copy; this also shows in `make test` when another change breaks the patch.
     copy_files(tmp_path)
     result = apply_check(tmp_path)
-    assert result.returncode == 0, result.stderr
+    if drill_tree():
+        assert result.returncode != 0  # planted once; it must not apply a second time
+    else:
+        assert result.returncode == 0, result.stderr
 
 
 def test_defect_patch_names_only_the_three_files():
@@ -75,6 +89,11 @@ def test_the_patch_check_fails_when_cases_py_drifts(tmp_path):
     copy_files(tmp_path)
     path = tmp_path / "socboard" / "cases.py"
     text = path.read_text(encoding="utf-8")
+    if drill_tree():
+        # The defect is planted: its function and its setting are there, and main's signature is not.
+        assert DEFECT_MARKER in text and "SOCBOARD_QUEUE_CACHE_SECONDS" in text
+        assert "def create_cases_router(prefix: str) -> APIRouter:" not in text
+        return
     old = "def create_cases_router(prefix: str) -> APIRouter:"
     assert old in text  # otherwise this test would pass without checking anything
     path.write_text(text.replace(old, "def create_cases_router(prefix: str, extra: int = 0) -> APIRouter:"), encoding="utf-8")

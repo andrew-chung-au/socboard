@@ -150,6 +150,22 @@ jobs:
           name: drill-bundle
           path: .oncall/bundle
 
+      # With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set, Claude Code runs the agent's commands in a bubblewrap sandbox,
+      # which needs bubblewrap and socat. The pinned action installs them only for `allowed_non_write_users`, so
+      # without this step every Bash call failed ("socat not installed"; run 44075337257). Same commands as the
+      # action's own step (action.yml, "Install subprocess isolation dependencies").
+      - name: Install the sandbox the agent's commands run in
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap socat && break
+            echo "apt-get attempt $i failed, retrying..."
+            sleep 5
+          done
+          command -v bwrap && command -v socat
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       # The commit the agent starts from (main plus the defect). The patch is the work tree against this commit.
       - name: Record the starting commit
         id: start
@@ -194,7 +210,11 @@ jobs:
           /usr/bin/git init -q "$clean"
           gitdir="$clean/.git"
           echo "$PWD/.git/objects" > "$gitdir/objects/info/alternates"
-          echo ".oncall/" > "$gitdir/info/exclude"
+          # The sandbox leaves an empty file at each config path it protects from writes when none existed
+          # (run 44075337257). They are not the agent's work. An exclude hides only untracked files, so a
+          # change to a tracked file of these names would still show.
+          printf '%s\n' ".oncall/" /.gitmodules /.npmrc /.yarnrc /.yarnrc.yml /bunfig.toml /package.json \
+            /package-lock.json /pnpm-lock.yaml /yarn.lock > "$gitdir/info/exclude"
           g() { /usr/bin/git --git-dir="$gitdir" --work-tree="$PWD" -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
           g read-tree "$START_SHA"
           g update-index -q --refresh || true
