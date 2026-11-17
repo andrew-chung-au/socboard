@@ -365,8 +365,8 @@ run "deploy_document" {
   }
 
   assert {
-    condition     = keys(jsondecode(aws_ssm_document.deploy.content).parameters) == ["digest"] && jsondecode(aws_ssm_document.deploy.content).parameters.digest.type == "String" && jsondecode(aws_ssm_document.deploy.content).parameters.digest.allowedPattern == "^sha256:[0-9a-f]{64}$"
-    error_message = "The document must have exactly one parameter, digest, a String with the pattern ^sha256:[0-9a-f]{64}$."
+    condition     = keys(jsondecode(aws_ssm_document.deploy.content).parameters) == ["digest", "environment"] && jsondecode(aws_ssm_document.deploy.content).parameters.digest.type == "String" && jsondecode(aws_ssm_document.deploy.content).parameters.digest.allowedPattern == "^sha256:[0-9a-f]{64}$"
+    error_message = "The document must have exactly two parameters, digest and environment, and digest must be a String with the pattern ^sha256:[0-9a-f]{64}$."
   }
 
   assert {
@@ -374,20 +374,45 @@ run "deploy_document" {
     error_message = "The digest parameter must set only its type, description and allowedPattern."
   }
 
+  # The environment parameter (issue #267): a String, default dev, matched against exactly ^(dev|prod)$, and nothing else.
+  assert {
+    condition     = jsondecode(aws_ssm_document.deploy.content).parameters.environment.type == "String" && jsondecode(aws_ssm_document.deploy.content).parameters.environment.allowedPattern == "^(dev|prod)$"
+    error_message = "The environment parameter must be a String with exactly the pattern ^(dev|prod)$ (not .*, not an unanchored end, not a third name)."
+  }
+
+  assert {
+    condition     = jsondecode(aws_ssm_document.deploy.content).parameters.environment.default == "dev"
+    error_message = "The environment parameter must default to dev, so a call that sends only a digest is a dev run."
+  }
+
+  assert {
+    condition     = keys(jsondecode(aws_ssm_document.deploy.content).parameters.environment) == ["allowedPattern", "default", "description", "type"] && jsondecode(aws_ssm_document.deploy.content).parameters.environment.description != ""
+    error_message = "The environment parameter must set only its type, description, default and allowedPattern."
+  }
+
   assert {
     condition     = length(jsondecode(aws_ssm_document.deploy.content).mainSteps) == 1 && jsondecode(aws_ssm_document.deploy.content).mainSteps[0].action == "aws:runShellScript"
     error_message = "The document must have one step, aws:runShellScript."
   }
 
-  # The step is the script: a shebang first, the one parameter reference, and no other doubled brace
-  # (Systems Manager would read one as a parameter reference).
+  # The step is the script: a shebang first, the two parameter references (each once), and no other doubled brace
+  # (Systems Manager would read one as a parameter reference and replace every occurrence of it).
   assert {
     condition = (
       jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand[0] == "#!/bin/bash"
       && strcontains(join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand), "DIGEST_PARAM='{{ digest }}'\n")
-      && length(split("{{", join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand))) == 2
+      && strcontains(join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand), "ENV_PARAM='{{ environment }}'\n")
+      && length(split("{{ digest }}", join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand))) == 2
+      && length(split("{{ environment }}", join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand))) == 2
+      && length(split("{{", join("\n", jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand))) == 3
     )
-    error_message = "The step must be the script: first line #!/bin/bash, exactly one parameter reference, {{ digest }}."
+    error_message = "The step must be the script: first line #!/bin/bash, exactly two parameter references, {{ digest }} and {{ environment }}, each once, and no other doubled opening brace."
+  }
+
+  # The document stays under 60,000 bytes (Systems Manager's limit is 64 KB).
+  assert {
+    condition     = length(aws_ssm_document.deploy.content) < 60000
+    error_message = "The document must stay under 60,000 bytes."
   }
 
   # Never held: no account number (twelve digits), no ARN, no secret pattern of the kit's scan.

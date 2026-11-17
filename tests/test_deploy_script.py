@@ -40,6 +40,8 @@ PREVIOUS_IMAGE = f"{REPO}@{PREVIOUS}"
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 APP = "socboard-app-1"
 CAND = "socboard-deploy-candidate"
+PROD_APP = "socboard-prod-app-1"
+PROD_CAND = "socboard-prod-deploy-candidate"
 TOKEN = "imdsTokenCanary0001"
 
 # The four lines of the real script the test copy replaces: the folders and waits (the ambient-inputs
@@ -59,6 +61,8 @@ SECRET_VALUES = {
     "STACK_PG_OWNER_PASSWORD": "canaryOwnerDb0002",
     "STACK_PG_APP_PASSWORD": "canaryAppDb0003",
 }
+# Prod's secret holds other values than dev's (#267): a run that reads the wrong one shows the other's canaries.
+PROD_SECRET_VALUES = {name: value.replace("canary", "canaryProd", 1) for name, value in SECRET_VALUES.items()}
 OTHER_CANARIES = [TOKEN, "BODYCANARY", "DENIEDCANARY"]
 
 FIXED = {
@@ -104,7 +108,7 @@ def compose_tail(line):
 
 def kind(line):
     """A short name for one recorded call, or None for a note line."""
-    if line.startswith(("VARS_MODE", "MODES ", "IMG ", "SMOKE_ENV", "PULL_ENV", "ENV_SET ")):
+    if line.startswith(("VARS_MODE", "MODES ", "IMG ", "SMOKE_ENV", "PULL_ENV", "ENV_SET ", "RENDER ")):
         return None
     words = line.split()
     head = words[0]
@@ -129,9 +133,9 @@ def kind(line):
     if sub == "pull":
         return "pull"
     if sub == "rm":
-        return "rm-cand" if words[-1] == CAND else "rm-other"
+        return "rm-cand" if words[-1] in (CAND, PROD_CAND) else "rm-other"
     if sub == "stop":
-        return "stop-app" if words[-1] == APP else "stop-other"
+        return "stop-app" if words[-1] in (APP, PROD_APP) else "stop-other"
     if sub == "logs":
         return "logs"
     if sub == "network":
@@ -170,10 +174,13 @@ val() { local v; if [ -f "$S/$1" ]; then IFS= read -r v < "$S/$1"; else v=$2; fi
 DOCKER = r"""
 case "$1" in
   pull) [ -n "${STUB_PULL_FAIL:-}" ] && exit 1; exit 0 ;;
-  rm) [ "$3" = socboard-deploy-candidate ] && @RM@ -f "$S/cand_exists"; exit 0 ;;
-  stop) [ "$2" = socboard-app-1 ] && printf false > "$S/app_running"; exit 0 ;;
+  rm) @RM@ -f "$S/cand-$3"; exit 0 ;;
+  stop) case "$2" in socboard-app-1) printf false > "$S/app_running" ;; socboard-prod-app-1) printf false > "$S/prod_app_running" ;; esac; exit 0 ;;
   logs) f="$S/logs-$4"; [ -f "$f" ] || exit 1; @TAIL@ -n "$3" "$f"; exit 0 ;;
-  network) printf '%s ' "${STUB_GATEWAY-10.231.77.1}"; [ -n "${STUB_NETWORK_FAIL:-}" ] && exit 1; exit 0 ;;
+  network)
+    # Each stack's network has its own gateway unless the test sets one (#267): the stub is the table's other side.
+    case "${!#}" in socboard-prod_stack) gw=10.231.78.1 ;; *) gw=10.231.77.1 ;; esac
+    printf '%s ' "${STUB_GATEWAY-$gw}"; [ -n "${STUB_NETWORK_FAIL:-}" ] && exit 1; exit 0 ;;
   image)
     case "$4" in
       *image.source*) printf '%s' "${STUB_SOURCE-https://github.com/andrew-chung-au/socboard}" ;;
@@ -182,16 +189,17 @@ case "$1" in
     exit 0 ;;
   inspect)
     fmt=$3; name=$4
-    if [ "$name" = socboard-app-1 ]; then
-      [ -f "$S/app_image" ] || exit 1
+    case "$name" in socboard-app-1) p="" ;; socboard-prod-app-1) p=prod_ ;; *) p=none ;; esac
+    if [ "$p" != none ]; then
+      [ -f "$S/${p}app_image" ] || exit 1
       case "$fmt" in
-        *Config.Image*) val app_image ;;
-        *Health.Status*) val app_health healthy ;;
-        *) val app_running true ;;
+        *Config.Image*) val ${p}app_image ;;
+        *Health.Status*) val ${p}app_health healthy ;;
+        *) val ${p}app_running true ;;
       esac
       exit 0
     fi
-    [ -f "$S/cand_exists" ] || exit 1
+    [ -f "$S/cand-$name" ] || exit 1
     case "$fmt" in
       *Health.Status*) printf '%s' "${STUB_CAND_HEALTH:-healthy}" ;;
       *) printf '%s' "${STUB_CAND_RUNNING:-true}" ;;
@@ -215,6 +223,8 @@ case "$1" in
     # when the --env-file path does not exist, and when compose.yaml's required variables are unset or empty.
     if [ "$sub" = pull ]; then
       for n in @REQUIRED@; do echo "PULL_ENV $n=${!n-unset}" >> "$STUB_CALLS"; done
+      # What this call would render, with Compose's own defaults for what the environment leaves out (compose.yaml, #271).
+      echo "RENDER project=${STACK_PROJECT:-socboard} net=${STACK_NET:-10.231.77} port=${STACK_APP_PORT:-8000}" >> "$STUB_CALLS"
       [ -n "${STUB_COMPOSE_PULL_FAIL:-}" ] && exit 1
       [ -e "$envf" ] || exit 1
       for n in @REQUIRED@; do [ -n "${!n:-}" ] || exit 1; done
@@ -222,6 +232,16 @@ case "$1" in
     fi
     if [ -f "$envf" ]; then echo "VARS_MODE $(@STAT@ -c %a "$envf")" >> "$STUB_CALLS"; [ -f "$S/vars-snapshot" ] || @CP@ "$envf" "$S/vars-snapshot"; else echo "VARS_MODE missing" >> "$STUB_CALLS"; fi
     echo "IMG ${STACK_IMAGE-unset}" >> "$STUB_CALLS"
+    # What this call would render from the variable file, with Compose's defaults for the lines it lacks; `p` names the
+    # stack's stub state (dev's files have no prefix, prod's start with prod_).
+    proj=socboard; net=10.231.77; port=8000; p=""
+    if [ -f "$envf" ]; then
+      while IFS= read -r l; do
+        case "$l" in STACK_PROJECT=*) proj=${l#STACK_PROJECT=} ;; STACK_NET=*) net=${l#STACK_NET=} ;; STACK_APP_PORT=*) port=${l#STACK_APP_PORT=} ;; esac
+      done < "$envf"
+    fi
+    [ "$proj" = socboard-prod ] && p=prod_
+    echo "RENDER project=$proj net=$net port=$port" >> "$STUB_CALLS"
     # Names only, never values: a variable the script writes into its variable file must not arrive from outside.
     for n in @WRITTEN@; do [ -n "${!n+set}" ] && echo "ENV_SET $n" >> "$STUB_CALLS"; done
     for last; do :; done
@@ -234,12 +254,15 @@ case "$1" in
             [ -n "${STUB_UP_APP_FAIL:-}" ] && { [ "$STUB_UP_APP_FAIL" = all ] || [ -z "${STACK_IMAGE-}" ]; } && exit 1
             img=${STACK_IMAGE-}
             if [ -z "$img" ]; then while IFS= read -r l; do case "$l" in STACK_IMAGE=*) img=${l#STACK_IMAGE=} ;; esac; done < "$envf"; health=${STUB_NEW_HEALTH:-healthy}; else health=${STUB_RESTORE_HEALTH:-healthy}; fi
-            printf '%s' "$img" > "$S/app_image"; printf true > "$S/app_running"; printf '%s' "$health" > "$S/app_health" ;;
+            printf '%s' "$img" > "$S/${p}app_image"; printf true > "$S/${p}app_running"; printf '%s' "$health" > "$S/${p}app_health" ;;
         esac
         exit 0 ;;
       run)
         case " $* " in
-          *" --name "*) [ -n "${STUB_CAND_RUN_FAIL:-}" ] && exit 1; : > "$S/cand_exists" ;;
+          *" --name "*)
+            [ -n "${STUB_CAND_RUN_FAIL:-}" ] && exit 1
+            cname=""; prev=""; for w in "$@"; do [ "$prev" = --name ] && cname=$w; prev=$w; done
+            : > "$S/cand-$cname" ;;
           *)
             # The modes a container would meet now: the folder, compose.yaml and the bind-mounted db_init.py (unquoted on purpose: one line).
             m=$(@STAT@ -c %a "$pd/compose" "$pd/compose.yaml" "$pd/compose/db_init.py")
@@ -291,10 +314,11 @@ FAKE_BOTO3 = '''import os
 
 class _Client:
     def get_secret_value(self, SecretId):
-        assert SecretId == "socboard/app"
+        # Only the two names of the values table exist (#267); any other name fails like a secret that is not there.
+        files = {"socboard/app": os.environ["STUB_SECRET_FILE"], "socboard/app-prod": os.environ["STUB_SECRET_FILE_PROD"]}
         if os.environ.get("STUB_SECRET_RAISE"):
             raise RuntimeError("AccessDenied " + os.environ["STUB_SECRET_RAISE"])
-        with open(os.environ["STUB_SECRET_FILE"], encoding="utf-8") as handle:
+        with open(files[SecretId], encoding="utf-8") as handle:
             return {"SecretString": handle.read()}
 
 
@@ -318,17 +342,19 @@ class Box:
         self.knobs = base / "knobs.sh"
         self.test_path = f"{self.bin}:{self.tools}"
         self.secret_file = base / "secret.json"
+        self.secret_file_prod = base / "secret-prod.json"
         for folder in (self.bin, self.tools, self.state, self.base / "py" / "boto3", self.base / "run", self.base / "opt"):
             folder.mkdir(parents=True)
         (self.base / "py" / "boto3" / "__init__.py").write_text(FAKE_BOTO3, encoding="utf-8")
         # The stubs call their own helpers by absolute path, so the script's PATH stays small.
-        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "KNOBS": str(base / "knobs.sh"), "REQUIRED": " ".join(compose_variables()), "WRITTEN": " ".join([*SECRET_VALUES, "STACK_PGDATA_DIR"])}
+        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "KNOBS": str(base / "knobs.sh"), "REQUIRED": " ".join(compose_variables()), "WRITTEN": " ".join([*SECRET_VALUES, "STACK_PGDATA_DIR", "STACK_PROJECT", "STACK_NET", "STACK_APP_PORT"])}
         for name, body in (("docker", DOCKER), ("curl", CURL), ("systemctl", SYSTEMCTL), ("apt-get", APT), ("python3", PYTHON3), ("flock", FLOCK)):
             self.stub(name, body)
         # The only real programs the script may run (everything else is a builtin or a stub).
         for name in ("mkdir", "rm", "mv", "ln", "readlink", "chmod", "sleep", "env"):
             (self.tools / name).symlink_to(real(name))
         self.write_secret(dict(SECRET_VALUES))
+        self.write_secret(dict(PROD_SECRET_VALUES), prod=True)
         self.script = base / "socboard-deploy-copy.sh"
         self.script.write_text("\n".join(self.copy_lines()) + "\n", encoding="utf-8")
 
@@ -363,24 +389,27 @@ class Box:
         path.write_text(text, encoding="utf-8")
         path.chmod(0o755)
 
-    def write_secret(self, data):
-        self.secret_file.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
+    def write_secret(self, data, prod=False):
+        path = self.secret_file_prod if prod else self.secret_file
+        path.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
 
-    def set_app(self, image, health="healthy", running="true"):
-        (self.state / "app_image").write_text(image, encoding="utf-8")
-        (self.state / "app_health").write_text(health, encoding="utf-8")
-        (self.state / "app_running").write_text(running, encoding="utf-8")
+    def set_app(self, image, health="healthy", running="true", prod=False):
+        prefix = "prod_" if prod else ""
+        (self.state / f"{prefix}app_image").write_text(image, encoding="utf-8")
+        (self.state / f"{prefix}app_health").write_text(health, encoding="utf-8")
+        (self.state / f"{prefix}app_running").write_text(running, encoding="utf-8")
 
     def set_logs(self, container, lines):
         (self.state / f"logs-{container}").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def previous_release(self):
-        """The files and `current` link an earlier deploy leaves."""
-        folder = self.opt / "releases" / "previous"
+    def previous_release(self, prod=False):
+        """The files and `current` link an earlier deploy leaves (prod's under /opt/socboard/prod)."""
+        base = self.opt / "prod" if prod else self.opt
+        folder = base / "releases" / "previous"
         folder.mkdir(parents=True)
         (folder / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
         (folder / "deploy.override.yaml").write_text("services: {}\n", encoding="utf-8")
-        (self.opt / "current").symlink_to(folder)
+        (base / "current").symlink_to(folder)
         return folder
 
     def run(self, *args, digest=DIGEST, env=None, use_default_arg=True, shell=None):
@@ -392,6 +421,7 @@ class Box:
             "STUB_CALLS": str(self.calls),
             "STUB_TOKEN": TOKEN,
             "STUB_SECRET_FILE": str(self.secret_file),
+            "STUB_SECRET_FILE_PROD": str(self.secret_file_prod),
             "STUB_PYPATH": str(self.base / "py"),
         }
         environment = {"PATH": self.test_path}
@@ -458,9 +488,14 @@ def logical_lines(text):
     return text.replace("\\\n", " ").splitlines()
 
 
-def test_the_script_is_a_bash_script_with_one_parameter_reference():
+def test_the_script_is_a_bash_script_with_two_parameter_references_each_written_once():
+    # Replaces the one-reference test (#267): the document has a second parameter, so the script holds two references.
+    # Systems Manager replaces every occurrence of a reference, so each is written once and no other `{{` exists.
     assert SCRIPT_TEXT.startswith("#!/bin/bash\n")
-    assert SCRIPT_TEXT.count("{{") == 1 and "DIGEST_PARAM='{{ digest }}'\n" in SCRIPT_TEXT
+    assert SCRIPT_TEXT.count("{{") == 2
+    assert SCRIPT_TEXT.count("DIGEST_PARAM='{{ digest }}'\n") == 1 and SCRIPT_TEXT.count("{{ digest }}") == 1
+    assert SCRIPT_TEXT.count("ENV_PARAM='{{ environment }}'\n") == 1 and SCRIPT_TEXT.count("{{ environment }}") == 1
+    assert re.findall(r"\{\{[^}]*\}\}", SCRIPT_TEXT) == ["{{ digest }}", "{{ environment }}"]
     assert len(SCRIPT_TEXT.encode()) < 60_000  # the document's limit is 64 KB
 
 
@@ -486,12 +521,15 @@ def test_the_data_folder_is_the_bootstraps_postgres_folder_and_a_direct_child_of
     assert "caddy" not in PurePosixPath(value).parts
 
 
-def test_the_script_unsets_the_ten_names_it_writes_before_the_lock_and_before_any_use():
+def test_the_script_unsets_the_thirteen_names_it_writes_before_the_lock_and_before_any_use():
+    # Replaces the ten-name test (#267): prod's variable file adds STACK_PROJECT, STACK_NET and STACK_APP_PORT.
     lines = SCRIPT_TEXT.splitlines()
-    unset = 'unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR'
+    unset = 'unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR STACK_PROJECT STACK_NET STACK_APP_PORT'
     assert lines.count(unset) == 1
+    assert len([line for line in lines if line.startswith("unset ") and "NAMES" in line]) == 1
     names = re.search(r"^NAMES=\(([^)]*)\)", SCRIPT_TEXT, re.M).group(1).split()
     assert len(names) == 8 and names == list(SECRET_VALUES)
+    assert len([*names, *unset.split()[2:]]) == 13 and len(set([*names, *unset.split()[2:]])) == 13
     # The lock is the first step, and the first use of any of the ten names comes after it (the image, the secret, the variable file).
     for later in ('mkdir -p "$RUN_DIR" || die 8', "flock -n 9 || die 8", 'IMAGE="$IMAGE_REPO@$digest"', "S[${line%%=*}]="):
         assert SCRIPT_TEXT.index(unset) < SCRIPT_TEXT.index(later), later
@@ -613,10 +651,14 @@ def test_the_terraform_files_match_what_the_script_expects():
     document = (ROOT / "terraform" / "server" / "deploy_document.tf").read_text(encoding="utf-8")
     assert 'resource "aws_ssm_document" "deploy"' in document and 'name            = "socboard-deploy"' in document
     assert 'file("${path.module}/socboard-deploy.sh")' in document
+    # Replaces the one-parameter shape (#267): two parameters, digest (unchanged) and environment (dev or prod, default dev).
     assert 'allowedPattern = "^sha256:[0-9a-f]{64}$"' in document
-    assert document.count("type           =") == 1 and "parameters = {" in document
+    assert 'allowedPattern = "^(dev|prod)$"' in document and 'default        = "dev"' in document
+    assert document.count("type           =") == 2 and document.count("allowedPattern =") == 2 and document.count("default        =") == 1
+    assert "parameters = {" in document and "digest = {" in document and "environment = {" in document
     tftest = (ROOT / "terraform" / "server" / "tests" / "server.tftest.hcl").read_text(encoding="utf-8")
     assert 'run "deploy_document"' in tftest
+    assert '== ["digest", "environment"]' in tftest and '"^(dev|prod)$"' in tftest
 
 
 # --- the digest ---------------------------------------------------------------------------------

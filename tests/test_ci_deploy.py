@@ -469,9 +469,13 @@ def test_the_success_lines_are_237s():
     assert ci.ALREADY == "socboard-deploy: already deployed. Nothing was changed."
 
 
+# The one line #267 adds: exit 2 also refuses an environment that is not dev or prod (the second line of exit 2).
+ENVIRONMENT_LINE_267 = "socboard-deploy: refused: the environment must be dev or prod. Nothing was changed."
+
+
 def test_the_failure_lines_are_237s_table_by_exit_code():
     for code, line in TABLE_237.items():
-        assert ci.FAILURE_LINES[code] == (line,), code
+        assert ci.FAILURE_LINES[code] == ((line, ENVIRONMENT_LINE_267) if code == 2 else (line,)), code
     assert set(ci.FAILURE_LINES) == set(range(2, 11))
     assert ci.FAILURE_LINES[7] == (
         "socboard-deploy: the new release failed after the swap; the previous release was restored.",
