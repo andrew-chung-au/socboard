@@ -1,0 +1,47 @@
+# The observability checks (#340): one job, one script. A later check changes observability/ci/check.sh,
+# not this file, so this protected file changes once. No secret, no Environment, no cloud role, and the
+# token can only read the repository.
+#
+# PROPOSED: this copy lives in observability/ci/proposed/ until the CI lane or the maintainer lands it as
+# .github/workflows/observability.yml (workflows are protected files; an agent does not write them).
+# Landing it also needs `socboard observability` added to the trigger list of publish.yml and to
+# TRIGGER_LIST in tests/test_publish_workflow.py: a path-filtered workflow that can run on a push to main
+# must be listed there (tests/workflow_triggers.py, list_problems). It is not added to the gate's
+# REQUIRED list, which holds only the workflows that run on every push; like `terraform check`, it
+# holds the publish back when it runs on a commit and fails.
+name: socboard observability
+
+permissions:
+  contents: read
+
+on:
+  push:
+    paths: &paths
+      - "observability/**"
+      - "compose.observability.yaml"
+      - "socboard/telemetry.py"
+      - "socboard/ingest.py"
+      - "socboard/cases.py"
+      - "scripts/observability_*"
+      - ".github/workflows/observability.yml"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+  schedule:
+    # Nightly, 17:30 UTC (03:30 on the project's clock): the images are pinned, but a pinned image's
+    # registry, the runner's Docker and the paths the filter does not name can still change.
+    - cron: "30 17 * * *"
+
+jobs:
+  observability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+
+      - name: Run the observability checks
+        run: bash observability/ci/check.sh
