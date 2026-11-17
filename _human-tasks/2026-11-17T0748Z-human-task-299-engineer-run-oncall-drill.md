@@ -337,7 +337,30 @@ git push origin --delete "drill/$RUN" "oncall/$RUN"
 Expected: two lines, each starting with ` - [deleted]`.
 If different: `remote ref does not exist` means it was already deleted; carry on. An empty `RUN` names `drill/` and fails: set it again with step 4's commands.
 
-An earlier drill run's branches can go the same way: set `RUN` to that run's number (for example `RUN=44091359362`), run `echo "RUN=[$RUN]"` to see it, then repeat the delete.
+The branches of the earlier drill run, 44091359362 (it failed in its `report` job; the fix is on `main`), can go the same way. This replaces `RUN` in this terminal, so do it last. Set it to that run's number:
+
+```
+RUN=44091359362
+```
+
+Expected: no output.
+If different: an error means the line was mistyped; type it again.
+
+```
+echo "RUN=[$RUN]"
+```
+
+Expected: `RUN=[44091359362]`.
+If different: any other number, or `RUN=[]`, means the line above was not run in this terminal; run it again.
+
+Delete that run's branches:
+
+```
+git push origin --delete "drill/$RUN" "oncall/$RUN"
+```
+
+Expected: two lines, each starting with ` - [deleted]`.
+If different: `remote ref does not exist` means it was already deleted; carry on.
 
 ## Record the result
 
