@@ -104,6 +104,13 @@ async function panelsLoaded(minimum) {
   await page.waitForTimeout(3_000);
 }
 
+// Explore shows a "Cancel" button while a query runs (the first run's logs screenshot caught it mid-query).
+async function queriesFinished() {
+  await page.getByRole("button", { name: "Cancel" }).waitFor({ state: "hidden", timeout: PANEL_TIMEOUT_MS });
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(2_000);
+}
+
 async function shoot(name, url, ready) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await ready();
@@ -133,7 +140,7 @@ await shoot(
   `${grafana}/explore?schemaVersion=1&orgId=1&theme=dark&kiosk&panes=${pane({ type: "tempo", uid: "tempo" }, { queryType: "traceql", query: traceId })}`,
   async () => {
     await page.getByText("ingest.alert").first().waitFor({ timeout: PANEL_TIMEOUT_MS });
-    await page.waitForLoadState("networkidle");
+    await queriesFinished();
   },
 );
 await shoot(
@@ -141,7 +148,7 @@ await shoot(
   `${grafana}/explore?schemaVersion=1&orgId=1&theme=dark&kiosk&panes=${pane({ type: "loki", uid: "loki" }, { queryType: "range", expr: `{service_name="socboard"} | trace_id="${traceId}"` })}`,
   async () => {
     await page.getByText("alert.ingested").first().waitFor({ timeout: PANEL_TIMEOUT_MS });
-    await page.waitForLoadState("networkidle");
+    await queriesFinished();
   },
 );
 

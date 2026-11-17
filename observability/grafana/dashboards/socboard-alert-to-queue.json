@@ -90,7 +90,8 @@
             "showPoints": "never",
             "thresholdsStyle": {
               "mode": "line"
-            }
+            },
+            "axisSoftMax": 6
           },
           "thresholds": {
             "mode": "absolute",
@@ -172,7 +173,8 @@
             "showPoints": "never",
             "thresholdsStyle": {
               "mode": "line"
-            }
+            },
+            "axisSoftMax": 6
           },
           "thresholds": {
             "mode": "absolute",
