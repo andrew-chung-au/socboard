@@ -29,6 +29,11 @@ uv sync --locked
 # Throwaway local secrets for the app's stack (git-ignored, never printed), as `make compose-up` makes them.
 uv run --locked python scripts/compose_secrets.py
 
+echo "--- checking what Compose makes of the overlay (ports on 127.0.0.1 only, the stack network, the app's exporter)"
+compose config --format json | uv run --locked python observability/ci/rendered.py overlay
+# Without the overlay in the command, the stack is what it was.
+docker compose --env-file compose.secrets -f compose.yaml config --format json | uv run --locked python observability/ci/rendered.py base
+
 echo "--- starting the stack"
 compose up --build --detach --wait --wait-timeout 300
 

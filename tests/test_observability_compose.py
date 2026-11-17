@@ -1,18 +1,17 @@
-"""compose.observability.yaml and the configs it mounts (#292), checked from their text, and from the
-rendered configuration where Docker Compose exists.
+"""compose.observability.yaml and the configs it mounts (#292), checked from their text, and the checker
+of Docker Compose's rendered configuration (observability/ci/rendered.py), tried on synthetic renderings.
 
 `problems` returns one refusal per broken rule for a parsed overlay. Each rule has a test on a small copy
-that breaks it, and one test that the real file passes. The rendered-config tests are skipped, with a
-named reason, where Docker is not installed (the Kiro Web sandbox); CI's verify job has it, so they run
-there. Every value here is synthetic.
+that breaks it, and one test that the real file passes. Nothing here needs Docker, so nothing is skipped:
+the real rendering is checked by observability/ci/check.sh, which pipes `docker compose config` into
+rendered.py in the `socboard observability` run. Every value here is synthetic.
 """
 
 import copy
+import importlib.util
+import io
 import json
-import os
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -37,18 +36,6 @@ ALLOWED = {
     ("log_statements", "resource"): RESOURCE,
     ("log_statements", "log"): ["event"],
 }
-REQUIRED_VARIABLES = {  # the required variables of compose.yaml, so `config` renders; synthetic values
-    "SOCBOARD_TOKEN_SECRET": "t" * 40,
-    "SOCBOARD_INGEST_API_KEY": "k" * 32,
-    "SOCBOARD_SEED_PASSWORD_ANALYST_A": "a" * 14,
-    "SOCBOARD_SEED_PASSWORD_ANALYST_B": "b" * 14,
-    "SOCBOARD_SEED_PASSWORD_LEAD": "l" * 14,
-    "STACK_PG_SUPERUSER_PASSWORD": "s" * 20,
-    "STACK_PG_OWNER_PASSWORD": "o" * 20,
-    "STACK_PG_APP_PASSWORD": "p" * 20,
-}
-
-
 def load(path=OVERLAY):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -246,72 +233,82 @@ def test_the_base_stack_file_does_not_mention_the_overlay():
     assert "otel" not in text.lower() and "observability" not in text.lower()
 
 
-# --- the rendered configuration (Docker Compose needed) ----------------------------------------------
+
+# --- the rendered-configuration checker (observability/ci/rendered.py) --------------------------------
+
+spec = importlib.util.spec_from_file_location("observability_rendered", ROOT / "observability" / "ci" / "rendered.py")
+rendered = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rendered)
 
 
-def compose_json(*files):
-    command = ["docker", "compose"]
-    for file in files:
-        command += ["-f", file]
-    result = subprocess.run(
-        [*command, "config", "--format", "json"],
-        cwd=ROOT,
-        env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "/tmp"), **REQUIRED_VARIABLES},
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr[-500:]
-    return json.loads(result.stdout)
+def port(published, host_ip="127.0.0.1", target=1):
+    return {"mode": "ingress", "host_ip": host_ip, "target": target, "published": str(published), "protocol": "tcp"}
 
 
-def has_compose():
-    if shutil.which("docker") is None:
-        return False
-    try:
-        return subprocess.run(["docker", "compose", "version"], capture_output=True, timeout=30, check=False).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+def good_rendering():
+    """The shape `docker compose config --format json` gives for the layered stack, with synthetic values."""
+    published = {"otel-collector": ["4318", "13133"], "tempo": ["3200"], "loki": ["3100"], "prometheus": ["9090"], "alertmanager": ["9093"]}
+    services = {name: {"ports": [port(p) for p in ports], "networks": {"stack": None}} for name, ports in published.items()}
+    services["app"] = {
+        "environment": {
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector:4318",
+            "OTEL_METRIC_EXPORT_INTERVAL": "5000",
+            "OTEL_RESOURCE_ATTRIBUTES": "deployment.environment.name=local,service.version=unknown",
+        }
+    }
+    return {"name": "socboard", "services": services}
 
 
-needs_compose = pytest.mark.skipif(not has_compose(), reason="docker compose is not installed here; CI's verify job renders the configuration")
+def run_checker(mode, config):
+    out = io.StringIO()
+    import contextlib
+
+    with contextlib.redirect_stdout(out):
+        code = rendered.main([mode], stdin=io.StringIO(json.dumps(config)))
+    return code, out.getvalue()
 
 
-@needs_compose
-def test_rendered_every_published_port_of_the_overlay_is_on_127_0_0_1_with_a_host_port():
-    config = compose_json("compose.yaml", "compose.observability.yaml")
-    for name in SERVICES:
-        ports = config["services"][name]["ports"]
-        assert ports, name
-        for port in ports:
-            assert port["host_ip"] == "127.0.0.1" and port["published"], (name, port)
-    assert {port["published"] for name in SERVICES for port in config["services"][name]["ports"]} == {"4318", "13133", "3200", "3100", "9090", "9093"}
+def test_a_good_rendering_passes_the_overlay_check():
+    assert run_checker("overlay", good_rendering()) == (0, "rendered overlay: ok\n")
 
 
-@needs_compose
-def test_rendered_the_app_points_at_the_collector_and_everything_is_on_the_stack_network():
-    config = compose_json("compose.yaml", "compose.observability.yaml")
-    environment = config["services"]["app"]["environment"]
-    assert environment["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://otel-collector:4318"
-    assert environment["OTEL_METRIC_EXPORT_INTERVAL"] == "5000"
-    assert environment["OTEL_RESOURCE_ATTRIBUTES"] == "deployment.environment.name=local,service.version=unknown"
-    for name in SERVICES:
-        assert list(config["services"][name]["networks"]) == ["stack"], name
-    assert config["name"] == "socboard"
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (lambda c: c["services"]["tempo"].update({"ports": [port(3200, host_ip="0.0.0.0")]}), "tempo: a port is not published on 127.0.0.1"),
+        (lambda c: c["services"]["tempo"].update({"ports": [{"mode": "ingress", "target": 3200, "published": "3200", "protocol": "tcp"}]}), "tempo: a port is not published on 127.0.0.1"),
+        (lambda c: c["services"]["tempo"].update({"ports": [port("")]}), "tempo: a port is not published on 127.0.0.1"),
+        (lambda c: c["services"]["tempo"].update({"ports": []}), "tempo: publishes no port"),
+        (lambda c: c["services"]["loki"].update({"networks": {"stack": None, "default": None}}), "loki: not on the stack network only"),
+        (lambda c: c["services"].pop("alertmanager"), "alertmanager: not in the rendered configuration"),
+        (lambda c: c["services"]["app"]["environment"].update({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://example.com"}), "the exporter does not point at the collector"),
+        (lambda c: c["services"]["app"]["environment"].update({"OTEL_METRIC_EXPORT_INTERVAL": "60000"}), "5000 milliseconds"),
+        (lambda c: c["services"]["app"]["environment"].update({"OTEL_RESOURCE_ATTRIBUTES": "service.version=x"}), "OTEL_RESOURCE_ATTRIBUTES"),
+    ],
+)
+def test_each_refused_rendering_fails_the_overlay_check_and_names_the_service(change, expected):
+    config = good_rendering()
+    change(config)
+    code, output = run_checker("overlay", config)
+    assert code == 1 and expected in output, output
 
 
-@needs_compose
-def test_rendered_the_base_file_alone_has_no_observability_service():
-    alone = compose_json("compose.yaml")
-    assert set(alone["services"]) == {"db", "db-init", "migrate", "seed", "app", "proxy"}
-    assert not any(key.startswith("OTEL_") for key in alone["services"]["app"]["environment"])
+def test_the_base_check_passes_the_stack_as_it_was_and_fails_an_observability_service_or_variable():
+    base = {"services": {name: {} for name in rendered.BASE_SERVICES}}
+    base["services"]["app"] = {"environment": {"SOCBOARD_MODE": "deployed"}}
+    assert run_checker("base", base) == (0, "rendered base: ok\n")
+    base["services"]["tempo"] = {}
+    code, output = run_checker("base", base)
+    assert code == 1 and "services are" in output
+    del base["services"]["tempo"]
+    base["services"]["app"]["environment"]["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://x"
+    code, output = run_checker("base", base)
+    assert code == 1 and "OTEL_EXPORTER_OTLP_ENDPOINT" in output
 
 
-@needs_compose
-def test_rendered_a_second_stack_can_move_every_port_by_variable(monkeypatch):
-    monkeypatch.setitem(REQUIRED_VARIABLES, "STACK_OTLP_PORT", "14318")
-    monkeypatch.setitem(REQUIRED_VARIABLES, "STACK_TEMPO_PORT", "13200")
-    config = compose_json("compose.yaml", "compose.observability.yaml")
-    assert {port["published"] for port in config["services"]["otel-collector"]["ports"]} == {"14318", "13133"}
-    assert config["services"]["tempo"]["ports"][0]["published"] == "13200"
+def test_the_checker_refuses_bad_input_with_exit_2(capsys):
+    assert rendered.main(["nonsense"], stdin=io.StringIO("{}")) == 2
+    assert rendered.main(["overlay"], stdin=io.StringIO("not json")) == 2
+    assert rendered.main([], stdin=io.StringIO("{}")) == 2
+    assert rendered.main(["overlay"], stdin=io.StringIO("[]")) == 1  # JSON, but not a configuration: every service is missing
+    assert "refused" in capsys.readouterr().err

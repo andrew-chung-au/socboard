@@ -28,6 +28,20 @@
       "commit": "12d1729",
       "category": "test-gap",
       "summary": "The skeleton directory observability/ci/skeleton/ was removed and its configs moved, so the first-run record of #340 now points at paths that exist only in history; the record carries a note."
+    },
+    {
+      "id": "F-292-5",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/292#issuecomment-6936614862",
+      "commit": "12d1729",
+      "category": "process",
+      "summary": "The body asks for a rendered-config pytest skipped by a marker where Compose is missing, but make verify's weakened-tests check fails on any added skip marker, so the rendered check became a script run by check.sh and its tests always run."
+    },
+    {
+      "id": "F-292-6",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/292#issuecomment-6936614862",
+      "commit": "12d1729",
+      "category": "hardening",
+      "summary": "The collector logs that the transform processor's context-prefixed statements are the older form and should be rewritten to the flat form (keep_keys(span.attributes, ...)); it works, and the rewrite is left for a later small change."
     }
   ]
 }

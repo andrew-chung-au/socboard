@@ -5,6 +5,7 @@ Recorded once, when the runs happened (`.kiro/steering/evidence-and-steps.md`, r
 ## The run on the pull request
 
 - `socboard observability` run 44007243871, on 2026-11-17, pull request 365 (branch `issue-292-obs-stack` at 8d88232). Result: success, about 100 seconds, including building the app image. Link: https://github.com/andrew-chung-au/socboard/actions/runs/44007243871
+- (After this run, `verify` failed on a rule of the repository, not on a test: the added `skipif` marker. The rendered-configuration check moved from a skipped pytest to `observability/ci/rendered.py`, which `check.sh` runs; the run recorded here predates it.)
 - The log shows the layered stack (`compose.yaml` and `compose.observability.yaml`) started with `--wait`, all five stores and the collector ready (`tempo`, `loki`, `prometheus`, `alertmanager`, `collector`), then trace id `e8ebfe38926674ec6d24d922b9d6b6f6` sent with a canary attribute, `tempo: found`, `loki: found`, `prometheus: found`, and then `tempo: no canary`, `loki: no canary`, `prometheus: no canary`.
 - Memory used by each container at that point (`docker stats`, the six services of the budget being the five below and Grafana later): collector 30.6 MiB of 256, Prometheus 32.7 of 256, Alertmanager 12.5 of 64, Loki 36.7 of 384, Tempo 19.3 of 384. The app, proxy and database are outside the budget (app 64.6 MiB, database 38 MiB, proxy 10 MiB).
 
