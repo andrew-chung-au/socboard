@@ -9,6 +9,9 @@ the default `socboard.db`. The `app` fixture's database is a copy of one migrate
 the two test users of `backend_support.py`, built once per run.
 """
 
+import shutil
+import subprocess
+
 import db_target
 import pytest
 import stack_support
@@ -31,10 +34,26 @@ STACK_MARKER_LINE = (
 )
 
 
+DOCKER_MARKER_LINE = (
+    "docker_only(reason): the test runs a container (`docker run`); it is deselected, with the count printed, "
+    "when no Docker daemon answers (#296)"
+)
+
+
+def docker_available() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", MARKER_LINE)
     config.addinivalue_line("markers", POSTGRES_MARKER_LINE)
     config.addinivalue_line("markers", STACK_MARKER_LINE)
+    config.addinivalue_line("markers", DOCKER_MARKER_LINE)
     try:
         selected = db_target.server_url() is not None
     except ValueError as error:
@@ -107,15 +126,27 @@ def pytest_collection_modifyitems(config, items):
         f"stack_only: {len(stack_marked)} marked, {0 if live else len(stack_marked)} deselected "
         f"({'live stack' if live else 'SOCBOARD_BASE_URL is not set'})"
     )
+    docker_marked = _marked(items, "docker_only")
+    docker_up = bool(docker_marked) and docker_available()
+    if docker_marked and not docker_up:
+        docker_ids = {id(item) for item in docker_marked}
+        items[:] = [item for item in items if id(item) not in docker_ids]
+        config.hook.pytest_deselected(items=docker_marked)
+    config._docker_only_line = (
+        f"docker_only: {len(docker_marked)} marked, {0 if docker_up or not docker_marked else len(docker_marked)} "
+        f"deselected ({'Docker answers' if docker_up else 'no Docker daemon' if docker_marked else 'none marked'})"
+    )
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line(config._sqlite_only_line)
         reporter.write_line(config._stack_only_line)
+        reporter.write_line(config._docker_only_line)
 
 
 def pytest_terminal_summary(terminalreporter, config):
     terminalreporter.write_line(getattr(config, "_sqlite_only_line", "sqlite_only: not counted"))
     terminalreporter.write_line(getattr(config, "_stack_only_line", "stack_only: not counted"))
+    terminalreporter.write_line(getattr(config, "_docker_only_line", "docker_only: not counted"))
     if not db_target.is_postgres():
         return
     dropped = db_target.drop_databases(final=True)

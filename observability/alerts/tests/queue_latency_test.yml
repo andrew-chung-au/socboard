@@ -1,0 +1,290 @@
+# promtool cases for ../queue_latency.yml (#296). Run: promtool test rules observability/alerts/tests/queue_latency_test.yml
+# (tests/test_observability_alerts.py runs it in Docker).
+#
+# The probe measures once every 5 seconds, so each series has one sample every 5 seconds (`interval`)
+# and a cumulative histogram: each step adds one measurement to every bucket whose bound holds it.
+# Bucket bounds are the contract's (0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30, +Inf). A "p95 of X seconds"
+# below means every measurement of the phase lands in the bucket just above X's lower bound, so the
+# p95 is inside that bucket: fast = (1, 2], slow = (5, 6], "4 s" = (3, 4], "5 s" = (4, 5].
+# Series notation `a+bxn` is n+1 samples (a, a+b, ..., a+n*b), and a space continues the series, so
+# `0+1x120 120+0x29 121+1x59` is 211 samples: 0..120 rising, 120 held for 30 samples, 121..180 rising.
+# Evaluation is every 15 seconds, so every eval_time is a multiple of 15 seconds.
+#
+# The percentile reads the increase over a 5-minute window of 60 measurements, and it is over 5 seconds
+# as soon as 5 percent of the window (3 measurements) are slow, then stays over for about 5 minutes
+# after the last slow one. So a burst always keeps the condition true for more than the 2 minutes
+# of `for`; only a burst under 5 percent (case b2) never does.
+#
+# The first 120 samples (10 minutes) are fast, so every window is full of fast measurements when a case
+# changes. Timeline of case (b, c, g): slow measurements at samples 121..150 (seconds 605..750), the
+# condition first true at second 615, pending until 735, firing from 735.
+rule_files:
+  - ../queue_latency.yml
+
+evaluation_interval: 15s
+
+tests:
+  # (a) p95 at 4 s for 10 minutes: no alert.
+  - name: a-p95-4s-for-10-minutes
+    interval: 5s
+    input_series:
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="0.5"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="1"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="2"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="3"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="4"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="5"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="6"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="8"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="10"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="15"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="30"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="+Inf"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_count'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 300s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 600s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+
+  # (b), (c) and (g): p95 at 6 s from second 605 to second 750 (2 minutes 30), then back to 2 s.
+  # (b) At 690 s the probe has been slow for 1 minute 30 seconds: the condition is true but `for` has not
+  #     passed, so the alert is pending and not firing. (The issue's wording, 6 s for 1 minute 30 then back
+  #     to 2 s with no alert, cannot hold: the window keeps the p95 over 5 s for about 5 minutes; see the
+  #     comment on issue #296. Case b2 below is the burst that does not page.)
+  # (c) At 750 s it is firing, with the labels and annotations (environment and version come from the
+  #     probe's target_info series). At 900 s it is still firing.
+  # (g) At 1050 s, 5 minutes after the last slow measurement (second 750), it has resolved.
+  - name: bcg-p95-6s-for-2m30-then-2s
+    interval: 5s
+    input_series:
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="0.5"}'
+        values: '0+0x210'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="1"}'
+        values: '0+0x210'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="2"}'
+        values: '0+1x120 120+0x29 121+1x59'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="3"}'
+        values: '0+1x120 120+0x29 121+1x59'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="4"}'
+        values: '0+1x120 120+0x29 121+1x59'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="5"}'
+        values: '0+1x120 120+0x29 121+1x59'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="6"}'
+        values: '0+1x210'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="8"}'
+        values: '0+1x210'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="10"}'
+        values: '0+1x210'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="15"}'
+        values: '0+1x210'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="30"}'
+        values: '0+1x210'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="+Inf"}'
+        values: '0+1x210'
+      - series: 'socboard_probe_time_to_queue_seconds_count'
+        values: '0+1x210'
+      - series: 'target_info{job="socboard-probe", deployment_environment_name="dev", service_version="0.0.0-test"}'
+        values: '1+0x210'
+    promql_expr_test:
+      # The pending state itself: promtool's `exp_alerts: []` ignores pending alerts, so ALERTS shows it.
+      - expr: ALERTS{alertname="QueueLatencyOverSLO", alertstate="pending"}
+        eval_time: 690s
+        exp_samples:
+          - labels: 'ALERTS{alertname="QueueLatencyOverSLO", alertstate="pending", severity="page", service="socboard"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 690s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 750s
+        alertname: QueueLatencyOverSLO
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: socboard
+            exp_annotations:
+              summary: A new alert took more than 5 seconds to show in the SOCBoard queue (95th percentile of the probe over 5 minutes).
+              environment: dev
+              version: 0.0.0-test
+              owner: socboard on-call (the maintainer)
+              dashboard_url: http://localhost:3000/d/socboard-queue-latency
+      - eval_time: 900s
+        alertname: QueueLatencyOverSLO
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: socboard
+            exp_annotations:
+              summary: A new alert took more than 5 seconds to show in the SOCBoard queue (95th percentile of the probe over 5 minutes).
+              environment: dev
+              version: 0.0.0-test
+              owner: socboard on-call (the maintainer)
+              dashboard_url: http://localhost:3000/d/socboard-queue-latency
+      - eval_time: 1050s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+
+  # (b2) Two slow measurements (seconds 605 and 610), then fast: 2 of 59 is under 5 percent, so the p95 stays
+  #      under 5 s and the alert never fires.
+  - name: b2-two-slow-measurements
+    interval: 5s
+    input_series:
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="0.5"}'
+        values: '0+0x200'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="1"}'
+        values: '0+0x200'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="2"}'
+        values: '0+1x120 120+0x1 121+1x77'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="3"}'
+        values: '0+1x120 120+0x1 121+1x77'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="4"}'
+        values: '0+1x120 120+0x1 121+1x77'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="5"}'
+        values: '0+1x120 120+0x1 121+1x77'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="6"}'
+        values: '0+1x200'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="8"}'
+        values: '0+1x200'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="10"}'
+        values: '0+1x200'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="15"}'
+        values: '0+1x200'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="30"}'
+        values: '0+1x200'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="+Inf"}'
+        values: '0+1x200'
+      - series: 'socboard_probe_time_to_queue_seconds_count'
+        values: '0+1x200'
+    alert_rule_test:
+      - eval_time: 615s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 750s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 900s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+
+  # (d) No data at all from the probe (only an unrelated series exists): no alert.
+  - name: d-no-data
+    interval: 5s
+    input_series:
+      - series: 'up{job="socboard-probe"}'
+        values: '1+0x120'
+    alert_rule_test:
+      - eval_time: 600s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+
+  # (e) p95 exactly 5 s: every measurement is 5.0 s, which counts in the le="5" bucket (a bucket holds
+  #     values up to and including its bound), so nothing reaches (5, 6] and the p95 is not above 5.
+  - name: e-p95-exactly-5s
+    interval: 5s
+    input_series:
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="0.5"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="1"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="2"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="3"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="4"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="5"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="6"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="8"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="10"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="15"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="30"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="+Inf"}'
+        values: '0+1x120'
+      - series: 'socboard_probe_time_to_queue_seconds_count'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 300s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 600s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+
+  # (f) One lone measurement of 40 s (above the top bound, so only the +Inf bucket counts it) at second 305,
+  #     nothing else: the percentile is 30 s (over 5), but the window has far fewer than 20 measurements,
+  #     so the volume guard keeps the alert quiet. The first half of the expression is true from second
+  #     315 to second 585 (at 600 the sample has left the window and the rate is 0), so with no guard the
+  #     alert would be pending from 315 and firing from 435 to 585. The checks at 450 s and 585 s fall in
+  #     that firing stretch; 330 s is inside the `for` hold and 600 s is after the window, so only 450 s
+  #     and 585 s fail when the guard is removed.
+  - name: f-one-lone-40s-sample
+    interval: 5s
+    input_series:
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="0.5"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="1"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="2"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="3"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="4"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="5"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="6"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="8"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="10"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="15"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="30"}'
+        values: '0+0x120'
+      - series: 'socboard_probe_time_to_queue_seconds_bucket{le="+Inf"}'
+        values: '0+0x60 1+0x59'
+      - series: 'socboard_probe_time_to_queue_seconds_count'
+        values: '0+0x60 1+0x59'
+    promql_expr_test:
+      # The first half of the expression alone is over 5 (the 30 s top bound), so the guard is what keeps the alert quiet.
+      - expr: histogram_quantile(0.95, sum by (le) (rate(socboard_probe_time_to_queue_seconds_bucket[5m])))
+        eval_time: 330s
+        exp_samples:
+          - labels: '{}'
+            value: 30
+    alert_rule_test:
+      - eval_time: 330s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 450s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 585s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
+      - eval_time: 600s
+        alertname: QueueLatencyOverSLO
+        exp_alerts: []
