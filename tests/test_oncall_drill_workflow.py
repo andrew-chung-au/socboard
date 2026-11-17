@@ -163,7 +163,10 @@ def test_the_drift_check_is_called_by_check_sh_and_uses_the_patch():
 
 def test_the_workflow_diff_applies_to_the_live_workflows_and_does_what_it_says():
     text = PATCH.read_text(encoding="utf-8")
-    assert subprocess.run(["git", "apply", "--check", str(PATCH)], cwd=ROOT).returncode == 0
+    # Before the maintainer lands it the patch applies forward; once landed it applies in reverse.
+    forward = subprocess.run(["git", "apply", "--check", str(PATCH)], cwd=ROOT).returncode == 0
+    landed = subprocess.run(["git", "apply", "--check", "--reverse", str(PATCH)], cwd=ROOT).returncode == 0
+    assert forward or landed
     added = [line[1:].strip() for line in text.splitlines() if line.startswith("+") and not line.startswith("+++")]
     assert added.count("types: [opened, synchronize, reopened, ready_for_review]") == 2
     assert "timeout-minutes: 30" in added

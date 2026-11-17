@@ -387,16 +387,25 @@ jobs:
         run: |
           set +e
           mkdir -p "$RUNNER_TEMP/logs"
-          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate --jq '.jobs[] | select(.name != "report") | .id' | while read -r id; do
-            gh api "repos/$REPO/actions/jobs/$id/logs" > "$RUNNER_TEMP/logs/$id.txt"
+          fetch=0
+          for id in $(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate --jq '.jobs[] | select(.name != "report") | .id'); do
+            # A log that cannot be fetched, or comes back empty, is a failed scan, not a clean one.
+            gh api "repos/$REPO/actions/jobs/$id/logs" > "$RUNNER_TEMP/logs/$id.txt" && test -s "$RUNNER_TEMP/logs/$id.txt" || { echo "could not fetch the log of job $id"; fetch=1; }
           done
+          ls "$RUNNER_TEMP"/logs/*.txt > /dev/null 2>&1 || fetch=1
           python3 observability/drill/logscan.py "$RUNNER_TEMP"/logs/*.txt
-          echo "scan_exit=$?" >> "$GITHUB_OUTPUT"
+          scan=$?
+          if [ "$fetch" -ne 0 ] && [ "$scan" -eq 0 ]; then scan=2; fi
+          echo "scan_exit=$scan" >> "$GITHUB_OUTPUT"
 
       - name: The drill passed and the logs are clean
         env:
           RENDER_EXIT: ${{ steps.summary.outputs.render_exit }}
           SCAN_EXIT: ${{ steps.scan.outputs.scan_exit }}
+          OPEN_PR: ${{ needs.publish.outputs.open_pr }}
+          CHECK_RESULT: ${{ needs.check.result }}
         run: |
-          echo "summary exit $RENDER_EXIT, log scan exit $SCAN_EXIT"
+          echo "summary exit $RENDER_EXIT, log scan exit $SCAN_EXIT, pull request opened: ${OPEN_PR:-no}, check job: $CHECK_RESULT"
+          # The summary reads artifacts; the check job's own result must agree with it.
+          test "$OPEN_PR" != "true" || test "$CHECK_RESULT" = "success"
           test "$RENDER_EXIT" = "0" && test "$SCAN_EXIT" = "0"
