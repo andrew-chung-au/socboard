@@ -108,6 +108,12 @@ jobs:
           DEPLOY_URL: ${{ vars.DEPLOY_URL }}
         run: python3 scripts/ci_deploy.py check
 
+      # The credentials action prints the role's unique ID in clear; GitHub masks only registered values (#268, terraform/README.md).
+      - name: Mask the deploy role's unique ID
+        env:
+          AWS_DEPLOY_ROLE_ID: ${{ secrets.AWS_DEPLOY_ROLE_ID }}
+        run: echo "::add-mask::$AWS_DEPLOY_ROLE_ID"
+
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}

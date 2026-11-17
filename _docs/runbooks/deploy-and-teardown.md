@@ -2,7 +2,7 @@
 
 Issue: #240 (Deploy item D23). This file follows `_docs/agent-kit/templates/runbook.md` for each recurring problem (Symptom, Check, Fix, Undo) and `.kiro/steering/evidence-and-steps.md`, rule 3 (one command per block, what to see, what to do if it differs).
 
-**Status: written before the first dev deploy; nothing here has been run.** Every `Expected:` line is what the author expects, not something seen, as `terraform/README.md` says of its own steps (`terraform/README.md`, "Steps for the human (not yet run)"). A line that was seen says "seen" and the date. `VERIFY:` marks a fact only the first dev deploy settles; it names who settles it. The first dev deploy is stage (b) of #237 (`_human-tasks/2026-11-15T1822Z-human-task-237-engineer-first-deploy.md`); the CI deploy path waits for the human to merge `deploy-dev.yml` (#238, `_human-tasks/2026-11-15T2100Z-human-task-238-engineer-deploy-dev-workflow.md`).
+**Status: written before the first dev deploy; nothing here has been run, except where a line says "seen" (section 3.1, seen at the first dev deploy on 2026-11-16).** Every `Expected:` line is what the author expects, not something seen, as `terraform/README.md` says of its own steps (`terraform/README.md`, "Steps for the human (not yet run)"). A line that was seen says "seen" and the date. `VERIFY:` marks a fact only the first dev deploy settles; it names who settles it. The first dev deploy is stage (b) of #237 (`_human-tasks/2026-11-15T1822Z-human-task-237-engineer-first-deploy.md`); the CI deploy path waits for the human to merge `deploy-dev.yml` (#238, `_human-tasks/2026-11-15T2100Z-human-task-238-engineer-deploy-dev-workflow.md`).
 
 **Prod is not covered.** Prod's deploy, promotion, rollback and secret rotation need #267 (the script's `environment` parameter) and the promote workflow, neither merged (#240, "Out of scope"). Where the prod pieces already in place are torn down: the secret `socboard/app-prod` (section 9, the secrets Decision), the GitHub Environment `deploy-prod` (section 9, the GitHub settings Decision), prod's Caddy site and its data folder `/srv/socboard-data/postgres-prod` (they go with the server and its data volume, `terraform/README.md`, "The prod stack beside dev (issue #266)"). Follow-up: not filed yet (the Planning lane files it; the number goes here).
 
@@ -204,7 +204,7 @@ The script prints only the fixed lines below and, after exits 6, 7 and 9, at mos
 | 2 | `socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.` | Nothing changed. | Send a real digest (Step 2.2.1). |
 | 3 | `socboard-deploy: the application secret could not be read or is not usable. The current release was not changed.` | Current release still serving. | Check the secret `socboard/app`: exactly the eight keys, string values with only the characters the script allows, the three `STACK_PG_` values letters and digits only (`terraform/server/socboard-deploy.sh`, section 6, `PYCODE`); the instance's role may read it (`terraform/README.md`, "What it creates" under "The instance's IAM role, the snapshot schedule and the budgets"). The first run installs `python3-boto3`, which needs the package mirrors (`_docs/decisions/2026-11-15T1822Z-deploy-script.md`, trade-off 5). Then send again. |
 | 4 | `socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.` | Current release still serving. | The pull of the image or of the database image failed, the image's source label is not `https://github.com/andrew-chung-au/socboard`, its revision label is not 40 hex digits, or `compose.yaml` or `compose/db_init.py` could not be fetched from `raw.githubusercontent.com` at that revision (`terraform/server/socboard-deploy.sh`, sections 4 and 5). Check the digest names a published image and the package is public (`README.md`, "Published image", "By hand, once"). Send again. |
-| 5 | `socboard-deploy: db-init, migrate or seed failed. The current release was not changed.` | Current release still serving, **but a migration that failed halfway can leave a partial change** (`_docs/decisions/2026-11-15T1822Z-deploy-script.md`, trade-off 2). The usual cause of a `db-init` failure is a superuser password that no longer matches the data directory (`compose/db_init.py`, `LOGIN_FAILED`). | Read section 6.7 if the secret's superuser value was changed. For a failed migration, do not send again until the migration is read; send the previous digest only if section 4's check passes. |
+| 5 | `socboard-deploy: db-init, migrate or seed failed. The current release was not changed.` | Current release still serving, **but a migration that failed halfway can leave a partial change** (`_docs/decisions/2026-11-15T1822Z-deploy-script.md`, trade-off 2). The usual cause of a `db-init` failure is a superuser password that no longer matches the data directory (`compose/db_init.py`, `LOGIN_FAILED`). | Start with section 3.1: it tells a superuser password mismatch from the other causes and fixes it. For a failed migration, do not send again until the migration is read; send the previous digest only if section 4's check passes. |
 | 6 | `socboard-deploy: the new app container did not become healthy. The current release was not changed.` Then at most 20 log lines of the candidate. | Current release still serving; the candidate container is removed. | Read the log lines; fix the cause in the code and publish a new digest. |
 | 7 | `socboard-deploy: the new release failed after the swap; the previous release was restored.` Then at most 20 log lines. | The previous release is serving again, running against the **new** schema (no migration is undone). | Read the log lines. Do not send the failed digest again. Section 4's check says whether the previous release is safe. |
 | 7 | `socboard-deploy: the new release failed after the swap; there was no previous release to restore.` Then at most 20 log lines. | **Not restored: the app is stopped** (`docker stop` of the app container; the database keeps running). | First action: the app is down, so tell the users and send the last good digest (section 4) or fix and publish a new one. This happens on a first deploy. |
@@ -215,6 +215,82 @@ The script prints only the fixed lines below and, after exits 6, 7 and 9, at mos
 The line the script prints on success is `socboard-deploy: deployed.` (exit 0), and on a repeat `socboard-deploy: already deployed. Nothing was changed.` (exit 0) (`terraform/server/socboard-deploy.sh`, sections 3 and 10). A signal (a timeout, a reboot, a lost agent) ends the run with no fixed line; the next run starts from what Docker shows (`_docs/decisions/2026-11-15T1822Z-deploy-script.md`, trade-off 6).
 
 Fix: the Next step column. Undo: none needed for exits 2 to 6, 8 and 10; for exits 7 and 9 see section 4.
+
+### 3.1 Exit 5: the superuser password does not match the data folder
+
+Seen on 2026-11-16 at the first dev deploy (#237 stage (b)): the first two sends exited 5, and the fix below (case A) made the third print `socboard-deploy: deployed.`
+
+**Why it happens.** Postgres sets the superuser's password once, when it first creates its data folder (`/srv/socboard-data/postgres`). It never reads `STACK_PG_SUPERUSER_PASSWORD` again. If the secret's value changes after that, `db-init` logs in with the new value, Postgres refuses it, and every deploy exits 5. Sending again does not help. Ways it happens: a new value put into `socboard/app` after a deploy already ran (for example Steps 2 and 3 of the first deploy done twice), or a data folder that survived from an earlier instance or attempt. To change the password on purpose, use section 6.7, never a new value in the secret alone.
+
+**Symptom:** exit 5 with `socboard-deploy: db-init, migrate or seed failed. The current release was not changed.`, and nothing else. The script throws away `db-init`'s own message (`compose/db_init.py`, `LOGIN_FAILED`) until PR #327 merges and the document is applied again. On a first deploy, the site answers `502` because no app was started.
+
+Every command below runs in a session on the server. If `aws ssm start-session` says `SessionManagerPlugin is not found`, use the AWS Console instead: EC2, select the instance, **Connect**, **Session Manager**, **Connect**. The server has no `aws` command. Run `aws` commands on your own machine only.
+
+#### Step 3.1.1: read the database's log
+
+```
+sudo docker logs --tail 40 socboard-db-1 2>&1 | cut -c1-200
+```
+
+Expected for this problem: a line `FATAL:  password authentication failed for user "postgres"` a few seconds after `database system is ready to accept connections`. `Skipping initialization` near the top means Postgres found an existing data folder.
+If different: no `FATAL` line for `postgres` means this is not the cause. A `FATAL` for `socboard_owner` or `socboard_app` points at `migrate` or `seed`. Read section 3's exit 5 row.
+Risk: none, it only reads. The log holds no password.
+
+#### Step 3.1.2: check whether the database holds data
+
+```
+sudo docker exec socboard-db-1 psql -U postgres -c '\l'
+```
+
+Expected: a table of databases. It connects over the container's local socket, which needs no password (seen 2026-11-16).
+- Only `postgres`, `template0` and `template1`: no `socboard` database, so there is no data. Go to case A.
+- A `socboard` row: the database may hold cases and the audit trail. Go to case B. Never use case A here.
+If different: `No such container` means the database is not running. List names with `sudo docker ps -a --format '{{.Names}}  {{.Status}}'`.
+Risk: none, it only reads.
+
+#### Case A: no `socboard` database: set the empty data folder aside
+
+```
+sudo docker rm -f socboard-db-1
+```
+
+Expected: `socboard-db-1`.
+Risk: stops and removes the database container. The data folder stays on the volume.
+
+```
+sudo mv /srv/socboard-data/postgres /srv/socboard-data/postgres.old
+```
+
+Expected: no output.
+Risk: none to data; the folder is kept under a new name. Undo: `sudo mv /srv/socboard-data/postgres.old /srv/socboard-data/postgres` (with the database container removed first).
+
+```
+sudo ls -l /srv/socboard-data
+```
+
+Expected: `postgres.old` and no `postgres`. Leave `caddy`, `lost+found` and `postgres-prod` alone.
+If different: a `postgres` entry still there means the move ran somewhere else (check the prompt: your own machine's prompt is not the server's). Run the two commands above again on the server.
+
+Then send the same digest again from your own machine (Step 2.2.2) and read the result (Step 2.2.3). Expected: `socboard-deploy: deployed.` The new folder's first start runs `initdb`; its log says `init process complete` and no `Skipping initialization`.
+Once the deploy has passed, delete the old folder when you no longer want it (human only): `sudo rm -rf /srv/socboard-data/postgres.old`.
+
+#### Case B: a `socboard` database exists: set the password inside the database to the secret's value
+
+Keep the data: change the password inside Postgres to match the secret, as section 6.7 step (3) does, but with the secret's current value instead of a new one. `VERIFY:` case B has not been run; the human settles it the first time it is needed.
+
+1. On your own machine, copy the current value to the clipboard with Step 5.1, using the key `STACK_PG_SUPERUSER_PASSWORD`. On WSL, pipe to `clip.exe` instead of `pbcopy` (seen 2026-11-16).
+2. On the server:
+
+```
+sudo docker exec -it socboard-db-1 psql -U postgres
+```
+
+Expected: a `psql` prompt. Type `\password postgres`, paste the value at both prompts (nothing is shown), then `\q`. `psql` encrypts the password before it is sent, so it is not in any log.
+If different: a refused connection means stop; nothing was changed.
+Risk: changes the superuser's password to the secret's. Nothing else changes.
+
+3. Remove the file of Step 5.1 (Step 5.3) and copy something else to clear the clipboard.
+4. Send the same digest again (Steps 2.2.2 and 2.2.3). Expected: `socboard-deploy: deployed.`
 
 ## 4. Roll back
 
@@ -343,6 +419,8 @@ Fix: the subsection of the value. Undo: put the old secret version back (`aws se
 **What the script requires of every value** (`terraform/server/socboard-deploy.sh`, section 6, `PYCODE`): a string of the characters `A-Za-z0-9._~+/=@%:,-`, and for the three `STACK_PG_` values letters and digits only. The values below are made with `secrets.token_hex(24)`, 48 hex characters, which pass both rules and the app's minimum lengths (`README.md`, "Runtime variables").
 
 ### 6.0 How every rotation starts and ends
+
+**Warning for `STACK_PG_SUPERUSER_PASSWORD`:** never put a new value for this key with these steps alone, and never put a whole new secret (all eight keys) once a deploy has run. Postgres keeps the password it was first created with, so the next deploy exits 5 (section 3.1). Change it only with section 6.7.
 
 #### Step 6.0.1: copy the secret to a file
 
