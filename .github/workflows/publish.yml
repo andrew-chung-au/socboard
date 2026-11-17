@@ -27,6 +27,7 @@ on:
       - socboard image
       - socboard compose
       - terraform check
+      - socboard observability
     types: [completed]
     # No branch filter on purpose: a pull request's runs start this workflow too, and the gate job's `if`
     # skips them, so "a pull request never pushes" is visible in the Actions list.
