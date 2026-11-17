@@ -3,10 +3,17 @@
     python observability/ci/query.py ready [--deadline 120]
     python observability/ci/query.py find <trace id> [--deadline 60]
     python observability/ci/query.py absent <trace id> <canary>
+    python observability/ci/query.py grafana [--secrets observability.secrets] [--deadline 60]
 
-`ready` polls the readiness endpoint of each store, of Alertmanager and of the collector from the runner
-(the collector image has no shell for a container health check) and exits 1 naming each one that was
-not ready in time.
+`ready` polls the readiness endpoint of each store, of Alertmanager, of Grafana and of the collector from
+the runner (the collector image has no shell for a container health check) and exits 1 naming each one
+that was not ready in time.
+
+`grafana` signs in as admin with the password read from `observability.secrets` (never printed) and checks
+what Grafana made of its provisioning (#293): the three datasources exist with their uids, each answers its
+health check, the dashboard "SOCBoard: alert to queue" exists, is provisioned and has its five panels, and
+without a login the same dashboard is refused (anonymous access is off). It polls to a deadline, prints one
+line per check, and exits 1 naming each problem.
 
 `find` asks, polling each store until its own deadline (60 seconds by default):
 
@@ -31,6 +38,7 @@ before any request), so it cannot change a URL or a query. Nothing it sends or p
 """
 
 import argparse
+import base64
 import json
 import re
 import sys
@@ -55,9 +63,20 @@ DEFAULTS = {
     "loki": "http://127.0.0.1:3100",
     "prometheus": "http://127.0.0.1:9090",
     "alertmanager": "http://127.0.0.1:9093",
+    "grafana": "http://127.0.0.1:3000",
     "collector": "http://127.0.0.1:13133",
 }
-READY_PATHS = {"tempo": "/ready", "loki": "/ready", "prometheus": "/-/ready", "alertmanager": "/-/ready", "collector": "/"}
+READY_PATHS = {
+    "tempo": "/ready",
+    "loki": "/ready",
+    "prometheus": "/-/ready",
+    "alertmanager": "/-/ready",
+    "grafana": "/api/health",
+    "collector": "/",
+}
+GRAFANA_DATASOURCES = {"prometheus": "prometheus", "tempo": "tempo", "loki": "loki"}  # uid: type
+GRAFANA_DASHBOARD = "socboard-queue-latency"  # the uid the alert rule's dashboard_url names (observability/alerts/queue_latency.yml)
+GRAFANA_PANELS = 5
 CANARY = re.compile(r"CANARY-[A-Za-z0-9-]{1,60}")
 
 Fetch = Callable[[str, Mapping[str, str]], tuple[int, bytes]]  # (url, headers) -> (status, body); status 0 = no answer
@@ -295,6 +314,72 @@ def absent(
     return 0
 
 
+def grafana_problems(get: Fetch, base: str, token: str) -> list[str]:
+    """What is wrong with Grafana's provisioning, as one line each (none: it is as the files say)."""
+    found: list[str] = []
+    headers = {"Authorization": f"Basic {token}"}
+    status, body = get(f"{base}/api/datasources", headers)
+    document = parse(body) if status == 200 else None
+    if not isinstance(document, list):
+        return [f"datasources: cannot list them ({'HTTP ' + str(status) if status else 'no answer'})"]
+    types = {item.get("uid"): item.get("type") for item in document if isinstance(item, dict)}
+    for uid, kind in GRAFANA_DATASOURCES.items():
+        if types.get(uid) != kind:
+            found.append(f"datasource {uid}: missing or not of type {kind}")
+            continue
+        status, body = get(f"{base}/api/datasources/uid/{uid}/health", headers)
+        health = parse(body) if status == 200 else None
+        if not isinstance(health, dict) or str(health.get("status")).upper() != "OK":
+            found.append(f"datasource {uid}: its health check does not say OK ({'HTTP ' + str(status) if status != 200 else str(health)[:80]})")
+    status, body = get(f"{base}/api/dashboards/uid/{GRAFANA_DASHBOARD}", headers)
+    dashboard = parse(body) if status == 200 else None
+    if not isinstance(dashboard, dict) or not isinstance(dashboard.get("dashboard"), dict):
+        found.append(f"dashboard {GRAFANA_DASHBOARD}: not found ({'HTTP ' + str(status) if status else 'no answer'})")
+    else:
+        panels = dashboard["dashboard"].get("panels")
+        if not isinstance(panels, list) or len(panels) != GRAFANA_PANELS:
+            found.append(f"dashboard {GRAFANA_DASHBOARD}: {len(panels) if isinstance(panels, list) else 0} panels, not {GRAFANA_PANELS}")
+        if not (dashboard.get("meta") or {}).get("provisioned"):
+            found.append(f"dashboard {GRAFANA_DASHBOARD}: not provisioned from a file")
+    status, _ = get(f"{base}/api/dashboards/uid/{GRAFANA_DASHBOARD}", {})
+    if status != 401:
+        found.append(f"anonymous access: the dashboard answered {'HTTP ' + str(status) if status else 'nothing'} without a login, not 401")
+    return found
+
+
+def grafana(
+    base: str,
+    token: str,
+    deadline: float,
+    say: Callable[[str], None],
+    get: Fetch = fetch,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> int:
+    end = clock() + deadline
+    while True:
+        found = grafana_problems(get, base, token)
+        if not found or clock() >= end:
+            break
+        sleep(POLL_EVERY)
+    for line in found:
+        say(f"grafana: {line}")
+    if not found:
+        say("grafana: the three datasources answer, the dashboard is provisioned with its five panels, and anonymous access is refused")
+    return 1 if found else 0
+
+
+def grafana_token(secrets_file: str) -> str | None:
+    """The Basic token for admin, from NAME=value lines in the secrets file; None when the password is not there."""
+    try:
+        with open(secrets_file, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    match = re.search(r"^STACK_GRAFANA_ADMIN_PASSWORD=(.+)$", text, re.MULTILINE)
+    return base64.b64encode(f"admin:{match.group(1)}".encode()).decode() if match else None
+
+
 def ready(
     urls: Mapping[str, str],
     deadline: float,
@@ -334,6 +419,9 @@ def main(argv: Sequence[str] | None = None, **options) -> int:
     look = commands.add_parser("find", help="look for the trace id in the three stores")
     look.add_argument("trace_id", help="32 lower-case hex characters")
     look.add_argument("--deadline", type=positive, default=60.0, help="seconds to wait for each store (default 60)")
+    graf = commands.add_parser("grafana", help="check Grafana's provisioning: datasources, dashboard, no anonymous access")
+    graf.add_argument("--secrets", default="observability.secrets", help="the file with STACK_GRAFANA_ADMIN_PASSWORD")
+    graf.add_argument("--deadline", type=positive, default=60.0, help="seconds to wait (default 60)")
     none = commands.add_parser("absent", help="find the trace in the three stores, then check that the canary is in none")
     none.add_argument("trace_id", help="32 lower-case hex characters")
     none.add_argument("canary", help="the value the emitter was given (CANARY- and letters, digits or hyphens)")
@@ -343,6 +431,12 @@ def main(argv: Sequence[str] | None = None, **options) -> int:
     urls = options.pop("urls", DEFAULTS)
     if args.command == "ready":
         return ready(urls, args.deadline, say, **options)
+    if args.command == "grafana":
+        token = grafana_token(args.secrets)
+        if token is None:
+            print("observability query: refused: STACK_GRAFANA_ADMIN_PASSWORD is not in the secrets file", file=sys.stderr)
+            return 2
+        return grafana(urls["grafana"], token, args.deadline, say, **{k: v for k, v in options.items() if k != "wall"})
     if not TRACE_ID.fullmatch(args.trace_id) or set(args.trace_id) == {"0"}:
         print("observability query: refused: the trace id must be 32 lower-case hex characters and not all zeros", file=sys.stderr)
         return 2

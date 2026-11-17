@@ -20,6 +20,7 @@ frontend/dist
 
 # The Compose stack's local secrets (#221): `build: .` sends the folder as the build context.
 compose.secrets
+observability.secrets
 
 # Databases and their journal files.
 *.db

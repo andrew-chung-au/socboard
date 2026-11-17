@@ -35,6 +35,9 @@ terraform.rc
 # The Compose stack's local secrets (scripts/compose_secrets.py, #221).
 /compose.secrets
 
+# The observability layer's local secret (scripts/observability_secrets.py, #293).
+/observability.secrets
+
 # The browser test (#234): installed packages and failure artifacts.
 e2e/node_modules/
 e2e/test-results/

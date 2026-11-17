@@ -326,3 +326,11 @@ compose-up: ## Start Postgres, the app and a local proxy with Docker Compose (ne
 
 compose-down: ## Stop the Compose stack: containers and network are removed, the Postgres data is kept
 	docker compose --env-file compose.secrets down
+
+# --- Observability stack (issue #293) ----------------------------------------
+
+observability-up: ## Start the app stack with the observability layer (collector, Tempo, Loki, Prometheus, Alertmanager, Grafana) with Docker Compose (needs Docker); the first run makes Grafana's admin password in observability.secrets without printing it; waits until the app and Grafana are healthy
+	uv run --locked python scripts/observability_up.py up
+
+observability-down: ## Stop the observability stack: containers and network are removed, the volumes are kept
+	uv run --locked python scripts/observability_up.py down

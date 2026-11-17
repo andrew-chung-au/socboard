@@ -224,6 +224,49 @@ The `Dockerfile` builds one image that serves the API and the built frontend fro
 - **A second stack on the same host (#271):** three optional variables, each defaulting to today's dev value, so with none set nothing changes. `STACK_PROJECT` (default `socboard`) is the Compose project name; it prefixes the network, the containers and the volumes. `STACK_NET` (default `10.231.77`) is the first three octets of the network's `/24`: the gateway is `.1`, the proxy `.10` and the pool for the other containers `.128/25`, and Docker refuses a second network whose subnet overlaps the first, so a second stack needs its own prefix. `STACK_TRUSTED_PROXIES` (default: the proxy's address) is the address the app trusts to forward the caller's address; on the server it is the gateway. A second stack also needs its own `STACK_APP_PORT` and `STACK_PROXY_PORT`, and its own `STACK_PGDATA_DIR` if that is a host path (the default named volume already carries the project name). `tests/test_compose.py` checks the file with the defaults and with an example second stack (`STACK_PROJECT=socboard-prod`, `STACK_NET=10.231.78`).
 - **Stopping and starting over:** `make compose-down` removes the containers and the network and keeps the data. Deleting the data (`docker volume rm`) is your step. If you delete `compose.secrets` but keep the data, `db-init` cannot log in as the superuser, because Postgres set that password on its first start: restore the file or delete the data too.
 
+### Observability
+
+The observability layer (`compose.observability.yaml`, issues #292 and #293) adds a collector, Tempo (traces), Loki (logs), Prometheus (metrics), Alertmanager and Grafana to the Compose stack, so the app's traces, logs and the alert-to-queue measure can be looked at in one dashboard. Every port is on `127.0.0.1` only, and Grafana has no anonymous access. The signals the app may send are listed in `observability/CONTRACT.md`; the collector drops any other attribute. Needs Docker; never run in the agent's sandbox.
+
+Step 1: start the stack with Grafana.
+
+```
+make observability-up
+```
+
+Expected: it ends with `observability-up: Grafana is on http://127.0.0.1:3000/ (user admin; the password is in observability.secrets)`. The first run makes `observability.secrets` (git-ignored, readable by you only) with a random Grafana password and prints the name, never the value.
+If different: `Docker is not installed or not on the PATH; nothing was started` means install Docker; a service that is not healthy after 300 seconds is named by Compose, and `docker compose logs <service>` shows why.
+
+Step 2: sign in to Grafana at `http://127.0.0.1:3000/` as `admin`, with the password from the line `STACK_GRAFANA_ADMIN_PASSWORD=` in `observability.secrets`.
+
+Expected: the home page is the dashboard "SOCBoard: alert to queue", with the environment and version filters at the top. It is empty until the app has been used.
+
+Step 3: send some alerts the way the probe does, exporting its measure to the collector. The probe reads `SOCBOARD_INGEST_API_KEY` and `SOCBOARD_SEED_PASSWORD_LEAD`; this loads `compose.secrets` in a subshell, so nothing stays in your shell and nothing is printed.
+
+```
+( set -a; . ./compose.secrets; set +a; OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 OTEL_METRIC_EXPORT_INTERVAL=5000 uv run python scripts/observability_probe.py http://127.0.0.1:8000 --count 8 )
+```
+
+Expected: eight lines, `trace=`, `case=` and `delay=`, taking about 40 seconds. Within a minute the dashboard shows the probe's p50, p95 and p99 against the 5-second line, the delay buckets with trace links (click an exemplar to open its trace in Tempo), the ingest outcomes per minute and the `alert.ingested` log lines, whose `trace_id` opens the same trace.
+If different: `refused` with a variable name means `compose.secrets` is missing (run `make observability-up` first). Empty panels mean the probe's export did not reach the collector (`OTEL_EXPORTER_OTLP_ENDPOINT` on that command) or the filters at the top exclude the data. The app's own panels fill when the app receives alerts; `make observability-up` already points the app at the collector.
+
+Step 4: stop it.
+
+```
+make observability-down
+```
+
+Expected: the containers and the network are removed. The stores keep nothing: their volumes are in-memory file systems, so a restart starts empty (24 hours of data at most while running).
+
+In CI, the `socboard observability` workflow starts this same stack, finds one trace id in Tempo, Loki and Prometheus, and checks that a canary attribute the collector must drop is in none of them. It then runs the probe for about 40 seconds and photographs Grafana.
+
+Evidence for reviewers, taken from [that run](https://github.com/andrew-chung-au/socboard/actions/runs/44027949931) and committed once (CI never commits), in [`_docs/evidence/observability/2026-11-17/`](_docs/evidence/observability/2026-11-17/) with a `manifest.json`:
+
+- [`dashboard.png`](_docs/evidence/observability/2026-11-17/dashboard.png): the dashboard "SOCBoard: alert to queue" over the probe's window, with the 5-second line, the delay buckets and their exemplars, the ingest outcomes and the log lines. The p50, p95 and p99 sit under 500 ms because the contract's first bucket bound is 0.5 s and every delay in the run was a few milliseconds: Prometheus can only interpolate inside that bucket.
+- [`trace.png`](_docs/evidence/observability/2026-11-17/trace.png): one probe trace in Tempo, opened by its trace id: the server span and `ingest.alert`.
+- [`logs.png`](_docs/evidence/observability/2026-11-17/logs.png): the two log lines of that trace in Loki, found by the same trace id (the page's spinner was still showing when it was photographed; the content is complete).
+- `trace.json`, `logs.json`, `exemplars.json`: what Tempo, Loki and Prometheus answered for that trace, with the Grafana password and the canary strings replaced. `window.json`: the trace id and the absolute window the screenshots used.
+
 ### Tests against the stack
 
 `make test-stack` runs the journeys, the refusals and the hostile-text test of `tests/test_journeys.py`, and the live checks of `tests/test_stack.py`, over HTTP against a running Compose stack (`make compose-up`). `make test` runs the same journeys in process on SQLite as before. The address of the stack is the test variable defined at the top of `tests/stack_support.py` (not a runtime setting, so it is not in the table above); for the stack it is the proxy's, `http://127.0.0.1:8080`. It must be plain `http` on `127.0.0.1`, `localhost` or `::1`, with no path, user, query or fragment, because the tests ingest alerts and claim cases; any other value stops the run with fixed text.

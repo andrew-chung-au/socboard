@@ -44,5 +44,32 @@ jobs:
         with:
           version: "0.13.6"
 
+      # The screenshots for the reviewer evidence (#293): the browser is the one e2e/ already pins.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.0"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install the browser for the screenshots
+        run: |
+          make e2e-install
+          cd e2e && bunx playwright install --with-deps chromium
+
       - name: Run the observability checks
         run: bash observability/ci/check.sh
+        env:
+          # Set, so check.sh also runs the probe and photographs Grafana; the directory is uploaded below.
+          SCREENSHOT_DIR: ${{ runner.temp }}/observability-evidence
+
+      # CI never commits: a person commits these once, from the artifact, under _docs/evidence/observability/.
+      - name: Keep the screenshots and the query answers for 30 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observability-evidence
+          path: ${{ runner.temp }}/observability-evidence
+          retention-days: 30
+          if-no-files-found: ignore
