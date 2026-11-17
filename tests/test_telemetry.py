@@ -193,6 +193,76 @@ def test_no_report_when_both_are_set(rig):
     assert rig.stream.getvalue() == ""
 
 
+# --- the limit on the two operator-set values (#312) --------------------------------------------
+
+
+def run_with_resource(raw):
+    """Set up with `raw` as the resource variable; return the resource attributes, the JSON lines and the exported logs."""
+    spans, logs = InMemorySpanExporter(), InMemoryLogRecordExporter()
+    environ = {telemetry.ENDPOINT_VARIABLE: ON[telemetry.ENDPOINT_VARIABLE], telemetry.RESOURCE_VARIABLE: raw}
+    stop, stream = start(environ, span_exporter=spans, log_exporter=logs, metric_exporter=MemoryMetricExporter())
+    with telemetry.start_span("ingest.alert"):
+        pass
+    stop()
+    resource = dict(spans.get_finished_spans()[0].resource.attributes)
+    return resource, stream.getvalue(), "".join(everything(record) for record in logs.get_finished_logs())
+
+
+@pytest.mark.parametrize("name", telemetry.OPERATOR_ATTRIBUTES)
+@pytest.mark.parametrize("value", ["dev", "ci", "1.4.0+abc1234", "a" * 64, "A-b_9.+", "1.4.0%2Babc"])
+def test_an_operator_value_in_the_limit_is_used_unchanged(name, value):
+    resource, output, _ = run_with_resource(f"{name}={value}")
+    assert resource[name] == value.replace("%2B", "+")
+    assert output.count(name) == 0  # the one report names only the other attribute
+
+
+@pytest.mark.parametrize("name", telemetry.OPERATOR_ATTRIBUTES)
+@pytest.mark.parametrize(
+    "value",
+    ["", "a b", "a/b", "a<b", 'a"b', "a'b", "a\x01b", "a\tb", "caf\u00e9", "a" * 65, "a%20b", "a%0Ab", "a%C3%A9", "a%2Fb"],
+    ids=["empty", "space", "slash", "less-than", "double-quote", "single-quote", "control", "tab", "non-ascii", "65-characters",
+         "encoded-space", "encoded-newline", "encoded-non-ascii", "encoded-slash"],
+)  # fmt: skip
+def test_a_refused_operator_value_is_treated_as_missing_and_reported_once_without_the_value(name, value):
+    other = next(n for n in telemetry.OPERATOR_ATTRIBUTES if n != name)
+    resource, output, exported = run_with_resource(f"{name}={value},{other}=ok")
+    assert name not in resource
+    assert resource[other] == "ok"
+    reports = [json.loads(line) for line in output.splitlines()]
+    assert len(reports) == 1
+    assert reports[0]["level"] == "WARNING"
+    assert name in reports[0]["event"]
+    assert other not in reports[0]["event"]
+
+
+def test_a_refused_value_is_absent_from_every_log_output():
+    marker = "REFUSED-VALUE/<script>"
+    resource, output, exported = run_with_resource(f"deployment.environment.name={marker},service.version=1.0")
+    assert "deployment.environment.name" not in resource
+    assert "deployment.environment.name" in output
+    assert "REFUSED-VALUE" not in output + exported
+    assert "script" not in output + exported
+
+
+def test_both_refused_values_are_named_in_the_one_report():
+    resource, output, _ = run_with_resource("deployment.environment.name=a b,service.version=" + "z" * 65)
+    assert resource == {"service.name": "socboard"}
+    reports = [json.loads(line) for line in output.splitlines()]
+    assert len(reports) == 1
+    assert "deployment.environment.name" in reports[0]["event"]
+    assert "service.version" in reports[0]["event"]
+    assert "zzzz" not in output
+
+
+def test_a_refused_value_does_not_stop_the_app():
+    stop, _ = start({**ON, telemetry.RESOURCE_VARIABLE: "service.version=a b"}, span_exporter=InMemorySpanExporter(),
+                    log_exporter=InMemoryLogRecordExporter(), metric_exporter=MemoryMetricExporter())  # fmt: skip
+    try:
+        assert telemetry.is_on()
+    finally:
+        stop()
+
+
 # --- JSON lines --------------------------------------------------------------------------------
 
 
