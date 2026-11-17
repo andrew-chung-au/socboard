@@ -419,3 +419,17 @@ def test_the_histogram_is_exported_over_otlp_http_when_the_run_ends(app, monkeyp
     point = metric.histogram.data_points[0]
     assert point.count == 1 and tuple(point.explicit_bounds) == CONTRACT_BOUNDS
     assert [exemplar.trace_id.hex() for exemplar in point.exemplars] == [trace_id]
+
+
+def test_trace_id_option_is_the_traceparent_of_the_ingest_and_the_record(app):
+    fake = app()
+    code, records, _ = run_probe(fake.url, "--trace-id", "ab" * 16)
+    ingest = next(call for call in fake.calls if call[1] == "/api/alerts")
+    assert code == 0 and trace_of(ingest) == "ab" * 16 and records[0][1] == "ab" * 16
+
+
+@pytest.mark.parametrize("args", [("--trace-id", "AB" * 16), ("--trace-id", "0" * 32), ("--trace-id", "ab"), ("--trace-id", "ab" * 16, "--count", "2")])
+def test_a_bad_trace_id_option_is_refused_before_any_request(app, args):
+    fake = app()
+    code, records, _ = run_probe(fake.url, *args)
+    assert code == 2 and fake.calls == [] and records == []
