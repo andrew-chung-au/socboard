@@ -224,10 +224,10 @@ Fill the table once, when you run the steps, with the date, the line you saw, an
 
 | Step | Date | Pass or fail | Output or note | Run link |
 |---|---|---|---|---|
-| 1 install | | NOT CHECKED | | |
-| 2 variables | | NOT CHECKED | | |
-| 3 promote dev's digest (approved; summary names the approver) | | NOT CHECKED | | |
-| 4 prod health 200, sign-in page loads | | NOT CHECKED | | |
+| 1 install | 2026-11-17 | PASS | Installed by PR #357 (merge `91d985f`), which also gave the workflow its exception in the id-token test. The Actions tab lists "socboard promote prod". | https://github.com/andrew-chung-au/socboard/pull/357 |
+| 2 variables | 2026-11-17 | PASS (indirect) | The maintainer set `DEPLOY_INSTANCE_ID` and `DEPLOY_URL` on `deploy-prod` (2026-11-16). The agent cannot read them, but the promote's check step passed and its health check through `prod-44-216-250-242.sslip.io` answered 200, which needs both values to be right. | https://github.com/andrew-chung-au/socboard/actions/runs/44001761105 |
+| 3 promote dev's digest (approved; summary names the approver) | 2026-11-17 | PASS | Run #1, started by hand by `andrew-chung-au` on `main` with `digest` empty. `resolve` chose `sha256:25446a296fa32d3320c88e862c073729e2de33204ccee8a4946093a346981d57` (`20261117-020022-4d7abe0`, dev ran it at 02:08:30Z in run 44000643102); "Prod runs now: none". `promote` waited for `deploy-prod` and was approved by `andrew-chung-au` (approvals API). Log: role ID shown as `***`; `sent socboard-deploy for 20261117-020022-4d7abe0 to prod (command 00493ad7-3471-4568-963c-88cdc8bd7728)`; `socboard-deploy: deployed.` `deploy-record-prod`: result `deployed`, `requested_by` and `approved_by` `andrew-chung-au`, deployed at 02:18:56Z. | https://github.com/andrew-chung-au/socboard/actions/runs/44001761105 |
+| 4 prod health 200, sign-in page loads | 2026-11-17 | PASS (health) | The run's health check through Caddy: `health check 1 of 6: 200`. The sign-in page in a browser was not reported. | https://github.com/andrew-chung-au/socboard/actions/runs/44001761105 |
 | 5a rollback to an earlier digest | | NOT CHECKED | | |
 | 5b forward again | | NOT CHECKED | | |
 | 6a digest never in dev: refused, no approval asked | | NOT CHECKED | | |

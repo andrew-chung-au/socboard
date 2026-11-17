@@ -2188,7 +2188,7 @@ def prod_task_file():
     return found[0].read_text(encoding="utf-8")
 
 
-def test_the_prod_task_file_has_no_inline_secret_one_command_per_block_and_every_result_row_not_checked():
+def test_the_prod_task_file_has_no_inline_secret_one_command_per_block_and_every_result_row_recorded():
     text = prod_task_file()
     for line in text.splitlines():
         if "--secret-string" in line:
@@ -2196,8 +2196,16 @@ def test_the_prod_task_file_has_no_inline_secret_one_command_per_block_and_every
     blocks = re.findall(r"```\n(.*?)\n```", text, re.S)
     assert blocks and all("\n" not in block for block in blocks), [b for b in blocks if "\n" in b]
     assert not re.search(r"(?<![0-9])[0-9]{12}(?![0-9])|(?<![A-Za-z])arn:", text)
+    # No placeholder in angle brackets inside a command: on 2026-11-17 one was typed literally and the shell read `<` as a redirect.
+    assert not [b for b in blocks if re.search(r"<[a-z][a-z ]*>", b)], [b for b in blocks if re.search(r"<[a-z][a-z ]*>", b)]
+    for address in re.findall(r"(?<![0-9.])[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?![0-9])", text):
+        assert address == "127.0.0.1" or address.startswith(("10.231.", "0.0.0.0")), address
     table = text.split("| Step | Pass or fail | Output or note |")[1].split("## Risk")[0]
     rows = [line for line in table.splitlines() if line.startswith("|") and not line.startswith("|---")]
-    assert len(rows) == 14 and all(line.split("|")[2].strip() == "NOT CHECKED" for line in rows), rows
+    # The first prod run happened on 2026-11-17: every row holds a recorded result and a note (rows not run say NOT CHECKED, with why).
+    assert len(rows) == 14, rows
+    assert all(len(line.split("|")) == 5 for line in rows), rows
+    assert all(line.split("|")[2].strip().startswith(("PASS", "FAIL", "NOT CHECKED", "SKIPPED")) for line in rows), rows
+    assert all(line.split("|")[3].strip() for line in rows), rows
     for needle in ("postgres-prod", "environment=prod", "environment=Prod", "environment=staging", "already deployed", "socboard-prod-app-1", "127.0.0.1:8100", "reboot"):
         assert needle in table or needle in text, needle
