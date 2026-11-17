@@ -226,6 +226,12 @@ def test_the_mandate_says_the_incident_and_query_results_are_untrusted_data():
     assert UNTRUSTED_SENTENCE in MANDATE.read_text(encoding="utf-8")
 
 
+def test_the_mandate_describes_the_incident_file_of_handoff_py():
+    text = MANDATE.read_text(encoding="utf-8")
+    for word in ("handoff.py", "--environment", "--version", "refused", "startsAt", "dashboard_url"):
+        assert word in text
+
+
 def test_the_mandate_names_every_deny_listed_path():
     text = MANDATE.read_text(encoding="utf-8")
     for name in (*guard.DENY_DIRS, "Makefile", "AGENTS.md", "pyproject.toml", "uv.lock"):

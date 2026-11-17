@@ -99,6 +99,13 @@ Expected: the lines `deletion`, `non_fast_forward` and `pull_request` (any order
 If different: a missing line means that rule is not on `main`; open the ruleset and tick it.
 
 ```
+gh api repos/{owner}/{repo}/rules/branches/main --jq '.[] | select(.type == "pull_request") | .parameters.required_approving_review_count'
+```
+
+Expected: `1`.
+If different: `0` means no approval is required; open the ruleset and set Required approvals to 1.
+
+```
 gh api repos/{owner}/{repo}/rulesets --jq '.[] | [.name, .enforcement, (.bypass_actors | length)] | @tsv'
 ```
 
