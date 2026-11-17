@@ -2,8 +2,8 @@
 # grafana/loki 3.7.10). Structured metadata needs schema v13 on the tsdb index and
 # `allow_structured_metadata`; the native OTLP endpoint stores a log record's trace id as structured
 # metadata, which observability/ci/query.py checks.
-# Retention: 24 hours, by the compactor. VERIFY: the first run of the overlay shows Loki starting with
-# the compactor block below. The disk limit is the named volume's size (compose.observability.yaml).
+# Retention: 24 hours, by the compactor. Settled: Loki 3.7.10 starts with the compactor block below
+# (run 44007243871); the deletion after 24 hours has not been watched. The disk limit is the named volume's size (compose.observability.yaml).
 auth_enabled: false
 
 server:

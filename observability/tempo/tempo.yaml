@@ -2,7 +2,8 @@
 # grafana/tempo 3.1.1 with -target=all and no Kafka). Traces come in over OTLP/HTTP on 4318 (from the
 # collector) and are read by id on 3200.
 # Retention: blocks are kept 24 hours (a per-tenant default override, which the compaction workers read).
-# VERIFY: the first run of the overlay shows Tempo starting with this key and the block count staying small.
+# Settled: Tempo 3.1.1 starts with this key and logs `retention provider started` (run 44007243871);
+# the deletion after 24 hours has not been watched.
 # The disk limit is the named volume's size (compose.observability.yaml): a full volume stops writes, it
 # does not grow the host's disk.
 server:

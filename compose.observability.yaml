@@ -19,9 +19,9 @@
 # on a developer's machine). Each service has a memory limit; the five add up to 1344 MiB, and Grafana
 # (#293) has 160 MiB reserved, so the six stay within 1.5 GiB (1536 MiB).
 #
-# Images are pinned by tag and index digest, as compose.yaml does. VERIFY: each digest was read from the
-# registry on 2026-11-16 (Alertmanager's on 2026-11-17); the collector, Tempo, Loki and Prometheus ran in
-# `socboard observability` run 44003479301 (2026-11-17).
+# Images are pinned by tag and index digest, as compose.yaml does. Each digest was read from the registry
+# on 2026-11-16 (Alertmanager's on 2026-11-17) and pulled and run by `socboard observability` run
+# 44007243871 (2026-11-17), which settled the VERIFY notes of this file and of observability/*/.
 
 services:
   otel-collector:
@@ -112,7 +112,8 @@ services:
 
 volumes:
   # In-memory file systems of fixed size, owned by the user each image runs as, so the first start has
-  # no permission error and a store cannot outgrow its limit. VERIFY: tmpfs volumes accept uid and gid.
+  # no permission error and a store cannot outgrow its limit. Settled: all three stores started and
+  # wrote to them (run 44007243871).
   tempo-data:
     driver: local
     driver_opts:
