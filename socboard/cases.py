@@ -136,23 +136,17 @@ def create_cases_router(
         dependencies=[Depends(current_user)],
     )
 
-    queue_cache: dict = {}  # "until" and "cases" of the last build; the queue is the same for every caller
-
     @router.get("/queue", response_model=QueueResponse, operation_id="getQueue")
     def get_queue(session: Annotated[Session, Depends(get_session)]) -> QueueResponse:
-        if cache_seconds and queue_cache.get("until", 0) > clock():
-            cases = queue_cache["cases"]
-        else:
-            rows = session.execute(
-                _case_query()
-                .where(Case.status != STATUS_CLOSED)
-                .order_by(
-                    sql_case(SEVERITY_RANK, value=Alert.severity), Alert.alert_timestamp, Case.id
-                )
-            ).all()
-            cases = [CaseSummary(**_summary_fields(*row)) for row in rows]
-            if cache_seconds:
-                queue_cache.update(until=clock() + cache_seconds, cases=cases)
+        # Always read the database: a reused answer hid new cases (and claims) for up to
+        # `cache_seconds`, over the 5-second alert-to-queue SLO. `cache_seconds` is accepted and
+        # ignored, so an existing SOCBOARD_QUEUE_CACHE_SECONDS setting does no harm.
+        rows = session.execute(
+            _case_query()
+            .where(Case.status != STATUS_CLOSED)
+            .order_by(sql_case(SEVERITY_RANK, value=Alert.severity), Alert.alert_timestamp, Case.id)
+        ).all()
+        cases = [CaseSummary(**_summary_fields(*row)) for row in rows]
         telemetry.queue_read(cases)  # #291: the first read of each new case; does nothing when telemetry is off
         return QueueResponse(cases=cases, servedAt=datetime.now(UTC))
 
