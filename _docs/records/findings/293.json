@@ -42,6 +42,27 @@
       "commit": "2fdc419",
       "category": "process",
       "summary": "QA found that the alert rule of #296 links to the dashboard uid socboard-queue-latency, so the new dashboard takes that uid instead of changing #296's files, and a test now ties the rule's dashboard_url to it."
+    },
+    {
+      "id": "F-293-7",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/293#issuecomment-6937681624",
+      "commit": "0543ad8",
+      "category": "docs",
+      "summary": "The first evidence run showed the dashboard's quantiles all under 500 ms, because the contract's first bucket bound is 0.5 s and the probe's delays are a few milliseconds, and the logs screenshot caught Explore's spinner; both are stated beside the evidence in the README."
+    },
+    {
+      "id": "F-293-8",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/293#issuecomment-6937681624",
+      "commit": "0543ad8",
+      "category": "process",
+      "summary": "The maintainer's commit applied the workflow and the AGENTS.md lines but not the Makefile targets, so make observability-up does not exist on the branch yet and the README names it."
+    },
+    {
+      "id": "F-293-9",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/293#issuecomment-6937681624",
+      "commit": "91cd429",
+      "category": "test-gap",
+      "summary": "The proof of #295 (scripts/observability_check.py) failed once on this pull request's run (no queue.first_seen span linked to the ingest span of its trace) and passed on the re-run of the same commit and on the push run, so it is timing-sensitive; the screenshots still ran after it because check.sh now exits with the proof's code only at the end."
     }
   ]
 }

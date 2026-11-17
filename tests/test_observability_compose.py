@@ -397,6 +397,7 @@ def test_the_dashboard_has_the_panels_the_issue_asks_for():
         defaults = panel["fieldConfig"]["defaults"]
         assert defaults["custom"]["thresholdsStyle"] == {"mode": "line"} and defaults["unit"] == "s"
         assert [step["value"] for step in defaults["thresholds"]["steps"]] == [None, 5]
+        assert defaults["custom"]["axisSoftMax"] > 5  # the axis reaches the 5-second line even when every delay is a few milliseconds
     assert any("socboard_ingest_alerts_total" in e and "[1m]" in e and "by (outcome)" in e for e in sum(exprs.values(), []))
     logs = next(panel for panel in doc["panels"] if panel["type"] == "logs")
     assert logs["datasource"]["uid"] == "loki"

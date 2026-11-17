@@ -1,0 +1,3 @@
+# The defect patch keeps unified-diff context lines: an unchanged blank line is a single space.
+# Removing it would break the patch, so the whitespace check is off for this one file.
+defect.patch -whitespace
