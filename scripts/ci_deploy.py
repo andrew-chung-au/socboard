@@ -49,7 +49,10 @@ ALREADY = "socboard-deploy: already deployed. Nothing was changed."
 # text_for, which tests/test_ci_deploy.py compares with this table once that file is on main). Only these
 # lines are ever printed from the server's output.
 FAILURE_LINES = {
-    2: ("socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.",),
+    2: (
+        "socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.",
+        "socboard-deploy: refused: the environment must be dev or prod. Nothing was changed.",
+    ),
     3: ("socboard-deploy: the application secret could not be read or is not usable. The current release was not changed.",),
     4: ("socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed.",),
     5: ("socboard-deploy: db-init, migrate or seed failed. The current release was not changed.",),

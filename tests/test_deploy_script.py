@@ -40,6 +40,8 @@ PREVIOUS_IMAGE = f"{REPO}@{PREVIOUS}"
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 APP = "socboard-app-1"
 CAND = "socboard-deploy-candidate"
+PROD_APP = "socboard-prod-app-1"
+PROD_CAND = "socboard-prod-deploy-candidate"
 TOKEN = "imdsTokenCanary0001"
 
 # The four lines of the real script the test copy replaces: the folders and waits (the ambient-inputs
@@ -59,6 +61,8 @@ SECRET_VALUES = {
     "STACK_PG_OWNER_PASSWORD": "canaryOwnerDb0002",
     "STACK_PG_APP_PASSWORD": "canaryAppDb0003",
 }
+# Prod's secret holds other values than dev's (#267): a run that reads the wrong one shows the other's canaries.
+PROD_SECRET_VALUES = {name: value.replace("canary", "canaryProd", 1) for name, value in SECRET_VALUES.items()}
 OTHER_CANARIES = [TOKEN, "BODYCANARY", "DENIEDCANARY"]
 
 FIXED = {
@@ -104,7 +108,7 @@ def compose_tail(line):
 
 def kind(line):
     """A short name for one recorded call, or None for a note line."""
-    if line.startswith(("VARS_MODE", "MODES ", "IMG ", "SMOKE_ENV", "PULL_ENV", "ENV_SET ")):
+    if line.startswith(("VARS_MODE", "MODES ", "IMG ", "SMOKE_ENV", "PULL_ENV", "ENV_SET ", "RENDER ")):
         return None
     words = line.split()
     head = words[0]
@@ -129,9 +133,9 @@ def kind(line):
     if sub == "pull":
         return "pull"
     if sub == "rm":
-        return "rm-cand" if words[-1] == CAND else "rm-other"
+        return "rm-cand" if words[-1] in (CAND, PROD_CAND) else "rm-other"
     if sub == "stop":
-        return "stop-app" if words[-1] == APP else "stop-other"
+        return "stop-app" if words[-1] in (APP, PROD_APP) else "stop-other"
     if sub == "logs":
         return "logs"
     if sub == "network":
@@ -170,10 +174,13 @@ val() { local v; if [ -f "$S/$1" ]; then IFS= read -r v < "$S/$1"; else v=$2; fi
 DOCKER = r"""
 case "$1" in
   pull) [ -n "${STUB_PULL_FAIL:-}" ] && exit 1; exit 0 ;;
-  rm) [ "$3" = socboard-deploy-candidate ] && @RM@ -f "$S/cand_exists"; exit 0 ;;
-  stop) [ "$2" = socboard-app-1 ] && printf false > "$S/app_running"; exit 0 ;;
+  rm) @RM@ -f "$S/cand-$3"; exit 0 ;;
+  stop) case "$2" in socboard-app-1) printf false > "$S/app_running" ;; socboard-prod-app-1) printf false > "$S/prod_app_running" ;; esac; exit 0 ;;
   logs) f="$S/logs-$4"; [ -f "$f" ] || exit 1; @TAIL@ -n "$3" "$f"; exit 0 ;;
-  network) printf '%s ' "${STUB_GATEWAY-10.231.77.1}"; [ -n "${STUB_NETWORK_FAIL:-}" ] && exit 1; exit 0 ;;
+  network)
+    # Each stack's network has its own gateway unless the test sets one (#267): the stub is the table's other side.
+    case "${!#}" in socboard-prod_stack) gw=10.231.78.1 ;; *) gw=10.231.77.1 ;; esac
+    printf '%s ' "${STUB_GATEWAY-$gw}"; [ -n "${STUB_NETWORK_FAIL:-}" ] && exit 1; exit 0 ;;
   image)
     case "$4" in
       *image.source*) printf '%s' "${STUB_SOURCE-https://github.com/andrew-chung-au/socboard}" ;;
@@ -182,16 +189,17 @@ case "$1" in
     exit 0 ;;
   inspect)
     fmt=$3; name=$4
-    if [ "$name" = socboard-app-1 ]; then
-      [ -f "$S/app_image" ] || exit 1
+    case "$name" in socboard-app-1) p="" ;; socboard-prod-app-1) p=prod_ ;; *) p=none ;; esac
+    if [ "$p" != none ]; then
+      [ -f "$S/${p}app_image" ] || exit 1
       case "$fmt" in
-        *Config.Image*) val app_image ;;
-        *Health.Status*) val app_health healthy ;;
-        *) val app_running true ;;
+        *Config.Image*) val ${p}app_image ;;
+        *Health.Status*) val ${p}app_health healthy ;;
+        *) val ${p}app_running true ;;
       esac
       exit 0
     fi
-    [ -f "$S/cand_exists" ] || exit 1
+    [ -f "$S/cand-$name" ] || exit 1
     case "$fmt" in
       *Health.Status*) printf '%s' "${STUB_CAND_HEALTH:-healthy}" ;;
       *) printf '%s' "${STUB_CAND_RUNNING:-true}" ;;
@@ -215,6 +223,8 @@ case "$1" in
     # when the --env-file path does not exist, and when compose.yaml's required variables are unset or empty.
     if [ "$sub" = pull ]; then
       for n in @REQUIRED@; do echo "PULL_ENV $n=${!n-unset}" >> "$STUB_CALLS"; done
+      # What this call would render, with Compose's own defaults for what the environment leaves out (compose.yaml, #271).
+      echo "RENDER project=${STACK_PROJECT:-socboard} net=${STACK_NET:-10.231.77} port=${STACK_APP_PORT:-8000}" >> "$STUB_CALLS"
       [ -n "${STUB_COMPOSE_PULL_FAIL:-}" ] && exit 1
       [ -e "$envf" ] || exit 1
       for n in @REQUIRED@; do [ -n "${!n:-}" ] || exit 1; done
@@ -222,6 +232,16 @@ case "$1" in
     fi
     if [ -f "$envf" ]; then echo "VARS_MODE $(@STAT@ -c %a "$envf")" >> "$STUB_CALLS"; [ -f "$S/vars-snapshot" ] || @CP@ "$envf" "$S/vars-snapshot"; else echo "VARS_MODE missing" >> "$STUB_CALLS"; fi
     echo "IMG ${STACK_IMAGE-unset}" >> "$STUB_CALLS"
+    # What this call would render from the variable file, with Compose's defaults for the lines it lacks; `p` names the
+    # stack's stub state (dev's files have no prefix, prod's start with prod_).
+    proj=socboard; net=10.231.77; port=8000; p=""
+    if [ -f "$envf" ]; then
+      while IFS= read -r l; do
+        case "$l" in STACK_PROJECT=*) proj=${l#STACK_PROJECT=} ;; STACK_NET=*) net=${l#STACK_NET=} ;; STACK_APP_PORT=*) port=${l#STACK_APP_PORT=} ;; esac
+      done < "$envf"
+    fi
+    [ "$proj" = socboard-prod ] && p=prod_
+    echo "RENDER project=$proj net=$net port=$port" >> "$STUB_CALLS"
     # Names only, never values: a variable the script writes into its variable file must not arrive from outside.
     for n in @WRITTEN@; do [ -n "${!n+set}" ] && echo "ENV_SET $n" >> "$STUB_CALLS"; done
     for last; do :; done
@@ -234,12 +254,15 @@ case "$1" in
             [ -n "${STUB_UP_APP_FAIL:-}" ] && { [ "$STUB_UP_APP_FAIL" = all ] || [ -z "${STACK_IMAGE-}" ]; } && exit 1
             img=${STACK_IMAGE-}
             if [ -z "$img" ]; then while IFS= read -r l; do case "$l" in STACK_IMAGE=*) img=${l#STACK_IMAGE=} ;; esac; done < "$envf"; health=${STUB_NEW_HEALTH:-healthy}; else health=${STUB_RESTORE_HEALTH:-healthy}; fi
-            printf '%s' "$img" > "$S/app_image"; printf true > "$S/app_running"; printf '%s' "$health" > "$S/app_health" ;;
+            printf '%s' "$img" > "$S/${p}app_image"; printf true > "$S/${p}app_running"; printf '%s' "$health" > "$S/${p}app_health" ;;
         esac
         exit 0 ;;
       run)
         case " $* " in
-          *" --name "*) [ -n "${STUB_CAND_RUN_FAIL:-}" ] && exit 1; : > "$S/cand_exists" ;;
+          *" --name "*)
+            [ -n "${STUB_CAND_RUN_FAIL:-}" ] && exit 1
+            cname=""; prev=""; for w in "$@"; do [ "$prev" = --name ] && cname=$w; prev=$w; done
+            : > "$S/cand-$cname" ;;
           *)
             # The modes a container would meet now: the folder, compose.yaml and the bind-mounted db_init.py (unquoted on purpose: one line).
             m=$(@STAT@ -c %a "$pd/compose" "$pd/compose.yaml" "$pd/compose/db_init.py")
@@ -291,10 +314,11 @@ FAKE_BOTO3 = '''import os
 
 class _Client:
     def get_secret_value(self, SecretId):
-        assert SecretId == "socboard/app"
+        # Only the two names of the values table exist (#267); any other name fails like a secret that is not there.
+        files = {"socboard/app": os.environ["STUB_SECRET_FILE"], "socboard/app-prod": os.environ["STUB_SECRET_FILE_PROD"]}
         if os.environ.get("STUB_SECRET_RAISE"):
             raise RuntimeError("AccessDenied " + os.environ["STUB_SECRET_RAISE"])
-        with open(os.environ["STUB_SECRET_FILE"], encoding="utf-8") as handle:
+        with open(files[SecretId], encoding="utf-8") as handle:
             return {"SecretString": handle.read()}
 
 
@@ -318,17 +342,19 @@ class Box:
         self.knobs = base / "knobs.sh"
         self.test_path = f"{self.bin}:{self.tools}"
         self.secret_file = base / "secret.json"
+        self.secret_file_prod = base / "secret-prod.json"
         for folder in (self.bin, self.tools, self.state, self.base / "py" / "boto3", self.base / "run", self.base / "opt"):
             folder.mkdir(parents=True)
         (self.base / "py" / "boto3" / "__init__.py").write_text(FAKE_BOTO3, encoding="utf-8")
         # The stubs call their own helpers by absolute path, so the script's PATH stays small.
-        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "KNOBS": str(base / "knobs.sh"), "REQUIRED": " ".join(compose_variables()), "WRITTEN": " ".join([*SECRET_VALUES, "STACK_PGDATA_DIR"])}
+        self.paths = {"BASH": real("bash"), "RM": real("rm"), "TAIL": real("tail"), "STAT": real("stat"), "CP": real("cp"), "PYTHON": sys.executable, "FLOCK": real("flock"), "KNOBS": str(base / "knobs.sh"), "REQUIRED": " ".join(compose_variables()), "WRITTEN": " ".join([*SECRET_VALUES, "STACK_PGDATA_DIR", "STACK_PROJECT", "STACK_NET", "STACK_APP_PORT"])}
         for name, body in (("docker", DOCKER), ("curl", CURL), ("systemctl", SYSTEMCTL), ("apt-get", APT), ("python3", PYTHON3), ("flock", FLOCK)):
             self.stub(name, body)
         # The only real programs the script may run (everything else is a builtin or a stub).
         for name in ("mkdir", "rm", "mv", "ln", "readlink", "chmod", "sleep", "env"):
             (self.tools / name).symlink_to(real(name))
         self.write_secret(dict(SECRET_VALUES))
+        self.write_secret(dict(PROD_SECRET_VALUES), prod=True)
         self.script = base / "socboard-deploy-copy.sh"
         self.script.write_text("\n".join(self.copy_lines()) + "\n", encoding="utf-8")
 
@@ -363,24 +389,27 @@ class Box:
         path.write_text(text, encoding="utf-8")
         path.chmod(0o755)
 
-    def write_secret(self, data):
-        self.secret_file.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
+    def write_secret(self, data, prod=False):
+        path = self.secret_file_prod if prod else self.secret_file
+        path.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
 
-    def set_app(self, image, health="healthy", running="true"):
-        (self.state / "app_image").write_text(image, encoding="utf-8")
-        (self.state / "app_health").write_text(health, encoding="utf-8")
-        (self.state / "app_running").write_text(running, encoding="utf-8")
+    def set_app(self, image, health="healthy", running="true", prod=False):
+        prefix = "prod_" if prod else ""
+        (self.state / f"{prefix}app_image").write_text(image, encoding="utf-8")
+        (self.state / f"{prefix}app_health").write_text(health, encoding="utf-8")
+        (self.state / f"{prefix}app_running").write_text(running, encoding="utf-8")
 
     def set_logs(self, container, lines):
         (self.state / f"logs-{container}").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def previous_release(self):
-        """The files and `current` link an earlier deploy leaves."""
-        folder = self.opt / "releases" / "previous"
+    def previous_release(self, prod=False):
+        """The files and `current` link an earlier deploy leaves (prod's under /opt/socboard/prod)."""
+        base = self.opt / "prod" if prod else self.opt
+        folder = base / "releases" / "previous"
         folder.mkdir(parents=True)
         (folder / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
         (folder / "deploy.override.yaml").write_text("services: {}\n", encoding="utf-8")
-        (self.opt / "current").symlink_to(folder)
+        (base / "current").symlink_to(folder)
         return folder
 
     def run(self, *args, digest=DIGEST, env=None, use_default_arg=True, shell=None):
@@ -392,6 +421,7 @@ class Box:
             "STUB_CALLS": str(self.calls),
             "STUB_TOKEN": TOKEN,
             "STUB_SECRET_FILE": str(self.secret_file),
+            "STUB_SECRET_FILE_PROD": str(self.secret_file_prod),
             "STUB_PYPATH": str(self.base / "py"),
         }
         environment = {"PATH": self.test_path}
@@ -458,9 +488,14 @@ def logical_lines(text):
     return text.replace("\\\n", " ").splitlines()
 
 
-def test_the_script_is_a_bash_script_with_one_parameter_reference():
+def test_the_script_is_a_bash_script_with_two_parameter_references_each_written_once():
+    # Replaces the one-reference test (#267): the document has a second parameter, so the script holds two references.
+    # Systems Manager replaces every occurrence of a reference, so each is written once and no other `{{` exists.
     assert SCRIPT_TEXT.startswith("#!/bin/bash\n")
-    assert SCRIPT_TEXT.count("{{") == 1 and "DIGEST_PARAM='{{ digest }}'\n" in SCRIPT_TEXT
+    assert SCRIPT_TEXT.count("{{") == 2
+    assert SCRIPT_TEXT.count("DIGEST_PARAM='{{ digest }}'\n") == 1 and SCRIPT_TEXT.count("{{ digest }}") == 1
+    assert SCRIPT_TEXT.count("ENV_PARAM='{{ environment }}'\n") == 1 and SCRIPT_TEXT.count("{{ environment }}") == 1
+    assert re.findall(r"\{\{[^}]*\}\}", SCRIPT_TEXT) == ["{{ digest }}", "{{ environment }}"]
     assert len(SCRIPT_TEXT.encode()) < 60_000  # the document's limit is 64 KB
 
 
@@ -486,12 +521,15 @@ def test_the_data_folder_is_the_bootstraps_postgres_folder_and_a_direct_child_of
     assert "caddy" not in PurePosixPath(value).parts
 
 
-def test_the_script_unsets_the_ten_names_it_writes_before_the_lock_and_before_any_use():
+def test_the_script_unsets_the_thirteen_names_it_writes_before_the_lock_and_before_any_use():
+    # Replaces the ten-name test (#267): prod's variable file adds STACK_PROJECT, STACK_NET and STACK_APP_PORT.
     lines = SCRIPT_TEXT.splitlines()
-    unset = 'unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR'
+    unset = 'unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR STACK_PROJECT STACK_NET STACK_APP_PORT'
     assert lines.count(unset) == 1
+    assert len([line for line in lines if line.startswith("unset ") and "NAMES" in line]) == 1
     names = re.search(r"^NAMES=\(([^)]*)\)", SCRIPT_TEXT, re.M).group(1).split()
     assert len(names) == 8 and names == list(SECRET_VALUES)
+    assert len([*names, *unset.split()[2:]]) == 13 and len(set([*names, *unset.split()[2:]])) == 13
     # The lock is the first step, and the first use of any of the ten names comes after it (the image, the secret, the variable file).
     for later in ('mkdir -p "$RUN_DIR" || die 8', "flock -n 9 || die 8", 'IMAGE="$IMAGE_REPO@$digest"', "S[${line%%=*}]="):
         assert SCRIPT_TEXT.index(unset) < SCRIPT_TEXT.index(later), later
@@ -613,10 +651,14 @@ def test_the_terraform_files_match_what_the_script_expects():
     document = (ROOT / "terraform" / "server" / "deploy_document.tf").read_text(encoding="utf-8")
     assert 'resource "aws_ssm_document" "deploy"' in document and 'name            = "socboard-deploy"' in document
     assert 'file("${path.module}/socboard-deploy.sh")' in document
+    # Replaces the one-parameter shape (#267): two parameters, digest (unchanged) and environment (dev or prod, default dev).
     assert 'allowedPattern = "^sha256:[0-9a-f]{64}$"' in document
-    assert document.count("type           =") == 1 and "parameters = {" in document
+    assert 'allowedPattern = "^(dev|prod)$"' in document and 'default        = "dev"' in document
+    assert document.count("type           =") == 2 and document.count("allowedPattern =") == 2 and document.count("default        =") == 1
+    assert "parameters = {" in document and "digest = {" in document and "environment = {" in document
     tftest = (ROOT / "terraform" / "server" / "tests" / "server.tftest.hcl").read_text(encoding="utf-8")
     assert 'run "deploy_document"' in tftest
+    assert '== ["digest", "environment"]' in tftest and '"^(dev|prod)$"' in tftest
 
 
 # --- the digest ---------------------------------------------------------------------------------
@@ -1491,3 +1533,671 @@ def test_the_script_copy_started_with_sh_hands_over_to_bash_and_gives_the_same_r
     assert_only(r, 2, FIXED[2])
     assert set(r.kinds()) <= {"flock"}, r.kinds()
     assert_safe(r)
+
+
+# --- the environment, dev or prod (#267, Decision record: _docs/decisions/*-deploy-script-environment.md) -------------------
+# One fixed table in the script keyed by the checked name. These tests run the stubs for both rows, assert each row of the
+# issue's values table by name, and prove that neither stack's run names anything of the other's.
+
+ENV_LINE = "socboard-deploy: refused: the environment must be dev or prod. Nothing was changed."
+DEV_PREVIOUS_IMAGE = f"{REPO}@sha256:{'d' * 64}"
+PROD_PREVIOUS_IMAGE = f"{REPO}@sha256:{'f' * 64}"
+RELEASE_NAME = f"{REVISION}-{'a' * 12}"
+OVERRIDE_TEXT = "services:\n  db:\n    restart: unless-stopped\n  app:\n    restart: unless-stopped\n    environment:\n      SOCBOARD_TRUSTED_PROXIES: {}\n"
+NAME_ORDER = list(SECRET_VALUES)
+
+
+def assert_safe_prod(r):
+    """assert_safe, plus: none of prod's canaries reaches the output, a recorded argument or a file left behind."""
+    assert_safe(r)
+    calls = "\n".join(r.calls)
+    for canary in PROD_SECRET_VALUES.values():
+        assert canary not in r.out and canary not in calls, f"{canary} reached the output or a recorded argument"
+        for path in r.box.files_left():
+            if path.is_file():
+                assert canary not in path.read_text(encoding="utf-8", errors="replace"), f"{canary} left in {path}"
+
+
+def prod_canary_lines():
+    lines = [f"seen {value} here" for value in PROD_SECRET_VALUES.values()]
+    lines.append(f"two {PROD_SECRET_VALUES['SOCBOARD_TOKEN_SECRET']} and {PROD_SECRET_VALUES['STACK_PG_APP_PASSWORD']} on one line")
+    return lines
+
+
+def run_for(box, prod, env=None, digest=DIGEST):
+    return box.run(digest, "prod", env=env) if prod else box.run(digest, env=env)
+
+
+# The environment value: refused cases ---------------------------------------------------------------------------------
+
+BAD_ENVIRONMENTS = [
+    "", "Prod", "PROD", "Dev", "DEV", " prod", "prod ", " dev", "dev ", "prod\n", "dev\n", "\tprod", "prod\t", "staging", "dev,prod",
+    "dev prod", "prod;id", "$(id)", "../prod", "/opt/socboard/prod", "*", "prod/", "prod-", "{{ environment }}",
+]
+
+
+@pytest.mark.parametrize("bad", BAD_ENVIRONMENTS)
+def test_a_bad_environment_exits_2_with_its_own_line_before_any_call_and_changes_nothing(box, bad):
+    r = box.run(DIGEST, bad)
+    assert_only(r, 2, ENV_LINE)
+    assert set(r.kinds()) <= {"flock"}, r.kinds()  # no docker, curl, systemctl or apt-get call
+    assert [p.name for p in box.files_left()] == ["lock"]
+    assert_safe(r)
+
+
+@pytest.mark.parametrize("extra", [("prod", "extra"), ("dev", "extra"), ("dev", ""), ("prod", "dev")])
+def test_an_environment_followed_by_a_third_argument_is_refused(box, extra):
+    r = box.run(DIGEST, *extra)
+    assert_only(r, 2, ENV_LINE)
+    assert set(r.kinds()) <= {"flock"} and [p.name for p in box.files_left()] == ["lock"]
+
+
+@pytest.mark.parametrize("template", ["prod;touch {m}", "$(touch {m})", "dev`touch {m}`", "prod\ntouch {m}"])
+def test_a_command_in_the_environment_is_never_run(box, template):
+    marker = box.base / "env-marker"
+    r = box.run(DIGEST, template.format(m=shlex.quote(str(marker))))
+    assert r.code == 2 and r.out == ENV_LINE + "\n" and not marker.exists()
+
+
+def test_a_bad_digest_with_a_good_environment_and_a_good_digest_with_a_bad_environment_each_have_their_own_line(box, tmp_path):
+    bad_digest, bad_env = "sha256:" + "a" * 63 + "SECRETISH-DIGEST", "SECRETISH-ENV"
+    r = box.run(bad_digest, "prod")
+    assert_only(r, 2, FIXED[2])
+    assert "SECRETISH" not in r.out
+    r = Box(tmp_path / "second").run(DIGEST, bad_env)
+    assert_only(r, 2, ENV_LINE)
+    assert "SECRETISH" not in r.out
+    r = Box(tmp_path / "third").run(bad_digest, bad_env)  # both bad: the digest is checked first
+    assert_only(r, 2, FIXED[2])
+
+
+@pytest.mark.parametrize("args", [(DIGEST, "staging"), (DIGEST, "prod"), (DIGEST, "dev"), (DIGEST,), ("latest", "prod")])
+def test_the_digest_and_environment_checks_come_after_the_lock(box, args):
+    box.run_dir.mkdir(parents=True)
+    with open(box.run_dir / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        r = box.run(*args)
+    assert_only(r, 8, FIXED[8])
+    assert r.kinds() == ["flock"]
+
+
+def test_the_environment_check_is_one_case_on_the_whole_value_after_the_lock_and_the_digest_check():
+    code = "\n".join(line for line in SCRIPT_TEXT.splitlines() if not line.lstrip().startswith("#"))
+    assert code.count("case $envname in") == 1 and code.count("die 2 environment") == 1
+    order = ["flock -n 9 || die 8", "die 2\nfi", "case $envname in", "PREV=$(docker inspect"]
+    positions = [code.index(text) for text in order]
+    assert positions == sorted(positions), order
+    assert SCRIPT_TEXT.count("ENV_PARAM=") == 1 and SCRIPT_TEXT.count("$ENV_PARAM") == 2  # the table's whole use of the reference
+    assert FIXED[2] in text_for_lines() and ENV_LINE in text_for_lines()
+
+
+def text_for_lines():
+    return set(re.findall(r"say '(socboard-deploy: [^']*)'", SCRIPT_TEXT))
+
+
+# Dev stays as it is ----------------------------------------------------------------------------------------------------
+
+
+def tree(box):
+    found = {}
+    for folder in (box.run_dir, box.opt):
+        for path in sorted(folder.rglob("*")) if folder.exists() else []:
+            rel = str(path.relative_to(box.base))
+            if path.is_symlink():
+                found[rel] = ("link", os.readlink(path).replace(str(box.base), "@"))
+            elif path.is_file():
+                found[rel] = path.read_text(encoding="utf-8", errors="replace").replace(str(box.base), "@")
+            else:
+                found[rel] = "dir"
+    return found
+
+
+def collapse_polls(calls):
+    """A wait polls (running, then health) until its time is up, so the number of polls varies with the machine: keep the first pair."""
+    kept = []
+    for line in calls:
+        kept.append(line)
+        if len(kept) >= 4 and kept[-4:-2] == kept[-2:] and kept[-1].startswith("docker inspect"):
+            del kept[-2:]
+    return kept
+
+
+def observe(r):
+    """Everything a run leaves that a caller or the next run could see, with the test's folder replaced."""
+    box, base = r.box, str(r.box.base)
+    snap = box.state / "vars-snapshot"
+    state = {p.name: p.read_text(encoding="utf-8") for p in sorted(box.state.iterdir()) if p.is_file()}
+    return {
+        "code": r.code,
+        "out": r.out.replace(base, "@"),
+        "calls": [line.replace(base, "@") for line in collapse_polls(r.calls)],
+        "vars": snap.read_text(encoding="utf-8") if snap.exists() else None,
+        "tree": tree(box),
+        "state": state,
+    }
+
+
+def dev_previous(box):
+    box.set_app(PREVIOUS_IMAGE)
+    box.previous_release()
+    box.set_logs(APP, numbered())
+    box.set_logs(CAND, numbered())
+    box.set_logs("socboard-db-1", numbered())
+    set_step_output(box, "seed", numbered())
+
+
+# name: (expected exit code, setup, env, digest, lock held)
+DEV_SCENARIOS = {
+    "a good first deploy": (0, lambda b: None, {}, DIGEST, False),
+    "a good deploy over a previous release": (0, dev_previous, {}, DIGEST, False),
+    "already deployed": (0, lambda b: b.set_app(IMAGE), {}, DIGEST, False),
+    "a bad digest (exit 2)": (2, lambda b: None, {}, "latest", False),
+    "a bad secret (exit 3)": (3, dev_previous, {"STUB_SECRET_RAISE": "DENIEDCANARY"}, DIGEST, False),
+    "a failed pull (exit 4)": (4, dev_previous, {"STUB_PULL_FAIL": "1"}, DIGEST, False),
+    "a failed seed (exit 5)": (5, dev_previous, {"STUB_FAIL_SERVICE": "seed"}, DIGEST, False),
+    "an unhealthy candidate (exit 6)": (6, dev_previous, {"STUB_CAND_HEALTH": "starting"}, DIGEST, False),
+    "a failure after the swap (exit 7)": (7, dev_previous, {"STUB_NEW_HEALTH": "unhealthy"}, DIGEST, False),
+    "a held lock (exit 8)": (8, lambda b: None, {}, DIGEST, True),
+    "a failed restore (exit 9)": (9, dev_previous, {"STUB_NEW_HEALTH": "unhealthy", "STUB_RESTORE_HEALTH": "unhealthy"}, DIGEST, False),
+    "another gateway (exit 10)": (10, dev_previous, {"STUB_GATEWAY": "10.231.77.128"}, DIGEST, False),
+}
+
+
+def run_held(box, args, env, hold):
+    if not hold:
+        return box.run(*args, env=env)
+    box.run_dir.mkdir(parents=True)
+    with open(box.run_dir / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return box.run(*args, env=env)
+
+
+@pytest.mark.parametrize("name", list(DEV_SCENARIOS))
+def test_a_dev_run_is_identical_with_no_environment_and_with_dev(tmp_path, name):
+    code, setup, env, digest, hold = DEV_SCENARIOS[name]
+    seen = []
+    for label, args in (("none", (digest,)), ("dev", (digest, "dev"))):
+        box = Box(tmp_path / label)
+        setup(box)
+        r = run_held(box, args, env, hold)
+        assert r.code == code, r.out
+        seen.append(observe(r))
+    # The full call log, the variable file, the override file, the release folder and the `current` link (in "tree"), the app state.
+    assert seen[0] == seen[1]
+
+
+def test_the_dev_variable_file_and_override_file_are_the_ones_main_writes_byte_for_byte(tmp_path):
+    expected_vars = "".join(f"{name}={SECRET_VALUES[name]}\n" for name in NAME_ORDER) + f"STACK_IMAGE={IMAGE}\nSTACK_PGDATA_DIR=/srv/socboard-data/postgres\n"
+    for label, args in (("none", (DIGEST,)), ("dev", (DIGEST, "dev"))):
+        box = Box(tmp_path / label)
+        r = box.run(*args)
+        assert_only(r, 0, DEPLOYED)
+        assert (box.state / "vars-snapshot").read_text(encoding="utf-8") == expected_vars
+        override = box.opt / "releases" / RELEASE_NAME / "deploy.override.yaml"
+        assert override.read_text(encoding="utf-8") == OVERRIDE_TEXT.format("10.231.77.1")
+        assert os.readlink(box.opt / "current") == str(box.opt / "releases" / RELEASE_NAME)
+        assert not (box.opt / "prod").exists()
+        assert [line for line in r.calls if line.startswith("RENDER ")] == ["RENDER project=socboard net=10.231.77 port=8000"] * len([line for line in r.calls if line.startswith("RENDER ")])
+
+
+def test_a_dev_run_asks_for_dev_s_secret_and_names_and_container_port_separately(box):
+    r = box.run(DIGEST, "dev")
+    read = [line for line in r.calls if line.startswith("python3 ") and "get_secret_value" in line]
+    assert len(read) == 1 and read[0].endswith(" ".join(["socboard/app", *NAME_ORDER]))
+    assert "socboard/app-prod" not in "\n".join(r.calls)
+    assert "CONTAINER_PORT='8000'" in SCRIPT_TEXT and 'CAND_PORT="127.0.0.1:$CAND_HOST_PORT:$CONTAINER_PORT"' in SCRIPT_TEXT
+
+
+def test_the_derived_names_follow_the_table_s_project_as_they_did_on_main():
+    for line in (
+        'STACK_NETWORK="${PROJECT}_stack"', 'APP="$PROJECT-app-1"', 'DB="$PROJECT-db-1"', 'CAND="$PROJECT-deploy-candidate"',
+        'CAND_PORT="127.0.0.1:$CAND_HOST_PORT:$CONTAINER_PORT"',
+    ):
+        assert SCRIPT_TEXT.splitlines().count(line) == 1, line
+    assert "PROJECT='socboard'" in SCRIPT_TEXT.splitlines() and "APP_PORT='8000'" in SCRIPT_TEXT.splitlines()
+
+
+# Prod uses prod's values: one assertion per row of the table ---------------------------------------------------------------
+
+
+@pytest.fixture
+def prod(box):
+    r = box.run(DIGEST, "prod")
+    assert_only(r, 0, DEPLOYED)
+    return r
+
+
+def test_a_prod_run_calls_things_in_the_documented_order_and_prints_one_line(prod):
+    assert prod.kinds() == SUCCESS_ORDER
+    assert_safe_prod(prod)
+
+
+def test_the_prod_variable_file_holds_the_ten_lines_and_three_more_and_nothing_else(prod):
+    expected = "".join(f"{name}={PROD_SECRET_VALUES[name]}\n" for name in NAME_ORDER) + (
+        f"STACK_IMAGE={IMAGE}\nSTACK_PGDATA_DIR=/srv/socboard-data/postgres-prod\nSTACK_PROJECT=socboard-prod\nSTACK_NET=10.231.78\nSTACK_APP_PORT=8100\n"
+    )
+    assert (prod.box.state / "vars-snapshot").read_text(encoding="utf-8") == expected
+
+
+def test_the_prod_override_file_carries_prod_s_trusted_proxy(prod):
+    override = prod.box.opt / "prod" / "releases" / RELEASE_NAME / "deploy.override.yaml"
+    assert override.read_text(encoding="utf-8") == OVERRIDE_TEXT.format("10.231.78.1")
+
+
+def test_the_prod_gateway_check_inspects_prod_s_network(prod):
+    network = [line for line in prod.calls if line.startswith("docker network")]
+    assert len(network) == 1 and network[0].split()[-1] == "socboard-prod_stack" and network[0].startswith("docker network inspect --format ")
+
+
+def test_the_prod_candidate_is_prod_s_published_on_8101_to_container_port_8000(prod):
+    run = [line for line in prod.calls if "--name" in line]
+    assert len(run) == 1 and " ".join(compose_tail(run[0])) == f"run --no-deps -d --pull never --name {PROD_CAND} -p 127.0.0.1:8101:8000 app"
+    assert [line for line in prod.calls if line.startswith("docker rm")] == [f"docker rm -f {PROD_CAND}"] * 2  # the leftover removal, then the candidate's
+
+
+def test_the_prod_smoke_check_and_swap_use_the_app_on_8100(prod):
+    smoke = [line for line in prod.calls if line.startswith("docker run")]
+    assert smoke == [f"docker run --rm --pull never --network host -e SOCBOARD_SEED_PASSWORD_LEAD -e SOCBOARD_INGEST_API_KEY {IMAGE} python -m socboard.smoke http://127.0.0.1:8100"]
+    assert "SMOKE_ENV ok" in prod.calls
+    ups = [line for line in prod.calls if line.startswith("docker compose") and " up " in line and line.endswith(" app")]
+    assert len(ups) == 1 and ups[0].endswith("up -d --no-deps --pull never --no-build app")
+
+
+def test_the_prod_containers_are_the_ones_every_inspect_asks_about(prod):
+    inspects = [line.split()[-1] for line in prod.calls if line.startswith("docker inspect")]
+    assert inspects and set(inspects) <= {PROD_APP, PROD_CAND}, inspects
+    assert PROD_APP in inspects and PROD_CAND in inspects
+
+
+def test_the_prod_health_request_goes_to_the_prod_hostname_through_caddy(box):
+    # The prefix is the one main.tf's prod_hostname rule puts before the dev hostname.
+    rule = re.search(r'prod_hostname\s*=\s*"(prod-)\$\{local\.hostname\}"', MAIN_TF.read_text(encoding="utf-8"))
+    assert rule, "main.tf no longer derives prod_hostname the way this test reads it"
+    r = box.run(DIGEST, "prod", env={"STUB_IP": "203.0.113.77"})
+    assert r.code == 0
+    expected = rule.group(1) + "203-0-113-77.sslip.io"
+    health = [line for line in r.calls if line.startswith("curl") and "/api/health" in line]
+    assert len(health) == 1
+    assert f"--resolve {expected}:443:127.0.0.1" in health[0] and health[0].endswith(f"https://{expected}/api/health")
+
+
+def test_a_prod_run_renders_every_compose_call_with_prod_s_project_network_and_port(prod):
+    renders = [line for line in prod.calls if line.startswith("RENDER ")]
+    assert len(renders) == 7, renders  # the database pull, then db up, three one-shot runs, the candidate and the swap
+    assert set(renders) == {"RENDER project=socboard-prod net=10.231.78 port=8100"}
+    pull = [i for i, line in enumerate(prod.calls) if line.startswith("docker compose") and line.endswith(" pull db")]
+    assert len(pull) == 1 and prod.calls[pull[0] + 1 + len(compose_variables())] == "RENDER project=socboard-prod net=10.231.78 port=8100"
+    assert not [line for line in prod.calls if re.search(r"project=socboard(?![-\w])", line)]
+
+
+def test_the_prod_secret_is_prod_s_name_passed_as_an_argument_and_read_once(prod):
+    read = [line for line in prod.calls if line.startswith("python3 ") and "get_secret_value" in line]
+    assert len(read) == 1 and read[0].endswith(" ".join(["socboard/app-prod", *NAME_ORDER]))
+    assert prod.kinds().count("secret-read") == 1
+    assert re.search(r"socboard/app(?![-\w])", "\n".join(prod.calls)) is None
+    assert 'SecretId=secret_id' in SCRIPT_TEXT and 'SecretId="' not in SCRIPT_TEXT  # the name is never written inside the Python text
+
+
+def test_the_prod_release_folder_and_current_link_are_under_opt_prod(prod):
+    release = prod.box.opt / "prod" / "releases" / RELEASE_NAME
+    assert (release / "compose.yaml").is_file() and (release / "compose" / "db_init.py").is_file()
+    assert os.readlink(prod.box.opt / "prod" / "current") == str(release)
+    assert not (prod.box.opt / "current").exists() and not (prod.box.opt / "current").is_symlink() and not (prod.box.opt / "releases").exists()
+    assert not (prod.box.opt / "prod" / "current.new").exists()
+    assert {p.name for p in prod.box.opt.iterdir()} == {"prod"}
+
+
+def test_a_prod_run_leaves_the_one_lock_and_no_variable_file(prod):
+    assert [p.name for p in prod.box.run_dir.iterdir()] == ["lock"]
+    assert_safe_prod(prod)
+
+
+def test_the_prod_data_folder_project_ports_and_network_are_prod_s_in_the_table():
+    prod_branch = SCRIPT_TEXT.split("  prod)\n")[1].split("    ;;\n")[0]
+    for line in (
+        "HOST_PREFIX='prod-'", "SECRET_ID='socboard/app-prod'", "DATA_DIR='/srv/socboard-data/postgres-prod'", "PROJECT='socboard-prod'",
+        "APP_PORT='8100'", "CAND_HOST_PORT='8101'", "NET_PREFIX='10.231.78'", 'PROXY_ADDR="$NET_PREFIX.1"', 'ENV_DIR="$OPT_DIR/prod"',
+        'STACK_VARS=(STACK_PROJECT="$PROJECT" STACK_NET="$NET_PREFIX" STACK_APP_PORT="$APP_PORT")',
+    ):
+        assert line in [text.strip() for text in prod_branch.splitlines()], line
+    assert "CONTAINER_PORT" not in prod_branch  # the container's port is one constant for both
+
+
+def test_prod_checks_its_own_container_for_already_deployed(box):
+    box.set_app(IMAGE, prod=True)
+    r = box.run(DIGEST, "prod")
+    assert_only(r, 0, ALREADY)
+    assert r.kinds() == ["flock", "inspect-image", "inspect-health", "inspect-running"]
+    assert {line.split()[-1] for line in r.calls if line.startswith("docker inspect")} == {PROD_APP}
+
+
+def test_dev_running_the_same_digest_does_not_make_a_prod_run_already_deployed(box):
+    box.set_app(IMAGE)  # dev's app runs this digest, healthy
+    r = box.run(DIGEST, "prod")
+    assert_only(r, 0, DEPLOYED)
+    assert "pull" in r.kinds() and "up-app" in r.kinds()
+
+
+def test_a_prod_failure_after_the_swap_restores_prod_s_previous_image_from_prod_s_current_link(box):
+    box.set_app(PROD_PREVIOUS_IMAGE, prod=True)
+    previous = box.previous_release(prod=True)
+    box.set_logs(PROD_APP, numbered())
+    r = box.run(DIGEST, "prod", env={"STUB_NEW_HEALTH": "unhealthy"})
+    assert r.code == 7 and r.lines() == [FIXED["7r"]] + numbered()[10:]
+    assert [line for line in r.calls if line.startswith("IMG ") and line != "IMG unset"] == [f"IMG {PROD_PREVIOUS_IMAGE}"]
+    restore = [i for i, line in enumerate(r.calls) if line.startswith("IMG ") and line != "IMG unset"][0]
+    assert str(previous / "compose.yaml") in r.calls[restore - 2]
+    assert (box.opt / "prod" / "current").resolve() == previous.resolve()
+    assert (box.state / "prod_app_image").read_text(encoding="utf-8") == PROD_PREVIOUS_IMAGE
+    assert [line for line in r.calls if line.startswith("docker logs")] == [f"docker logs --tail 20 {PROD_APP}"]
+    assert_safe_prod(r)
+
+
+def test_a_prod_first_deploy_that_fails_after_the_swap_stops_only_the_prod_app(box):
+    box.set_logs(PROD_APP, numbered(5))
+    r = box.run(DIGEST, "prod", env={"STUB_NEW_HEALTH": "unhealthy"})
+    assert r.code == 7 and r.lines() == [FIXED["7n"]] + numbered(5)
+    assert [line for line in r.calls if line.startswith("docker stop")] == [f"docker stop {PROD_APP}"]
+    assert (box.state / "prod_app_running").read_text(encoding="utf-8") == "false"
+    assert not (box.opt / "prod" / "current").exists() and not (box.opt / "prod" / "current").is_symlink()
+
+
+def test_a_prod_secret_missing_a_name_exits_3_and_dev_s_secret_is_never_used_instead(box):
+    box.write_secret({k: v for k, v in PROD_SECRET_VALUES.items() if k != "STACK_PG_APP_PASSWORD"}, prod=True)  # dev's secret is complete
+    r = box.run(DIGEST, "prod")
+    refused(r, 3, FIXED[3])
+    assert not {"up-db", "run-seed"} & set(r.kinds())
+    assert_safe_prod(r)
+
+
+def test_a_bad_prod_secret_does_not_stop_a_dev_run_and_a_bad_dev_secret_does_not_stop_a_prod_run(box, tmp_path):
+    box.write_secret("this is not json DENIEDCANARY", prod=True)
+    assert_only(box.run(DIGEST), 0, DEPLOYED)
+    other = Box(tmp_path / "other")
+    other.write_secret("this is not json DENIEDCANARY")
+    r = other.run(DIGEST, "prod")
+    assert_only(r, 0, DEPLOYED)
+    assert_safe_prod(r)
+
+
+# Prod's gateway and the swapped-table refusals -------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("gateway", ["10.231.77.1", "10.231.78.128", "", "10.231.78.2", "10.231.78.1 10.231.78.2"])
+def test_a_prod_run_whose_network_reports_another_gateway_exits_10_before_any_migration(box, gateway):
+    box.set_app(PROD_PREVIOUS_IMAGE, prod=True)
+    r = box.run(DIGEST, "prod", env={"STUB_GATEWAY": gateway})
+    refused(r, 10, FIXED[10])
+    assert not {"run-db-init", "run-candidate"} & set(r.kinds())
+    assert r.kinds()[-1] == "network"
+
+
+def test_a_prod_network_that_cannot_be_read_exits_10(box):
+    r = box.run(DIGEST, "prod", env={"STUB_NETWORK_FAIL": "1"})
+    refused(r, 10, FIXED[10])
+    assert "run-db-init" not in r.kinds()
+
+
+@pytest.mark.parametrize("gateway", ["10.231.78.1", "10.231.77.128", "10.231.78.128", ""])
+def test_a_dev_run_whose_network_reports_prod_s_or_another_gateway_exits_10(box, gateway):
+    r = box.run(DIGEST, "dev", env={"STUB_GATEWAY": gateway})
+    refused(r, 10, FIXED[10])
+    assert not {"run-db-init", "run-candidate"} & set(r.kinds())
+
+
+def test_each_stack_accepts_only_its_own_gateway(tmp_path):
+    for label, args, gateway, code in (
+        ("dev-own", (DIGEST,), "10.231.77.1", 0), ("dev-prod", (DIGEST,), "10.231.78.1", 10),
+        ("prod-own", (DIGEST, "prod"), "10.231.78.1", 0), ("prod-dev", (DIGEST, "prod"), "10.231.77.1", 10),
+    ):
+        assert Box(tmp_path / label).run(*args, env={"STUB_GATEWAY": gateway}).code == code, label
+
+
+# Neither stack touches the other (the limit) ----------------------------------------------------------------------------------
+
+# name: (exit code, env for a dev run, env for a prod run)
+STACK_SCENARIOS = {
+    "a good deploy": (0, {}, {}),
+    "a secret that cannot be read": (3, {"STUB_SECRET_RAISE": "DENIEDCANARY"}, {"STUB_SECRET_RAISE": "DENIEDCANARY"}),
+    "a failed pull": (4, {"STUB_PULL_FAIL": "1"}, {"STUB_PULL_FAIL": "1"}),
+    "a failed seed": (5, {"STUB_FAIL_SERVICE": "seed"}, {"STUB_FAIL_SERVICE": "seed"}),
+    "an unhealthy candidate": (6, {"STUB_CAND_HEALTH": "starting"}, {"STUB_CAND_HEALTH": "starting"}),
+    "a failure after the swap": (7, {"STUB_NEW_HEALTH": "unhealthy"}, {"STUB_NEW_HEALTH": "unhealthy"}),
+    "a failed restore": (9, {"STUB_NEW_HEALTH": "unhealthy", "STUB_RESTORE_HEALTH": "unhealthy"}, {"STUB_NEW_HEALTH": "unhealthy", "STUB_RESTORE_HEALTH": "unhealthy"}),
+    "another gateway": (10, {"STUB_GATEWAY": "10.231.77.128"}, {"STUB_GATEWAY": "10.231.78.128"}),
+}
+
+
+def seed_stack(box, prod):
+    """A running, healthy stack: its app on a digest, its release folder and `current`, a candidate left in its name."""
+    box.set_app(PROD_PREVIOUS_IMAGE if prod else DEV_PREVIOUS_IMAGE, prod=prod)
+    box.previous_release(prod=prod)
+    (box.state / f"cand-{PROD_CAND if prod else CAND}").write_text("", encoding="utf-8")
+    box.set_logs(PROD_APP if prod else APP, ["OTHER-STACK-LOG"])
+
+
+def stack_state(box, prod):
+    """The stub's record of one stack (containers) and its folders on the disk."""
+    prefix, cand = ("prod_", PROD_CAND) if prod else ("", CAND)
+    state = {name: (box.state / name).read_text(encoding="utf-8") if (box.state / name).exists() else None
+             for name in (f"{prefix}app_image", f"{prefix}app_health", f"{prefix}app_running", f"cand-{cand}")}
+    base = box.opt / "prod" if prod else box.opt
+    files = {"current": os.readlink(base / "current") if (base / "current").is_symlink() else None}
+    for path in sorted((base / "releases").rglob("*")) if (base / "releases").exists() else []:
+        files[str(path.relative_to(base))] = path.read_text(encoding="utf-8") if path.is_file() else "dir"
+    return state, files
+
+
+def names_of_the_other_stack(box, prod_is_running):
+    """Patterns that must match nothing a run of the other stack records, prints or writes."""
+    if prod_is_running:  # a dev run: nothing of prod's
+        return [r"socboard-prod", r"socboard/app-prod", r"127\.0\.0\.1:810[01](?!\d)", r"port=810[01]", r"postgres-prod", r"10\.231\.78",
+                r"prod-203-0-113-10", re.escape(str(box.opt)) + r"/prod", r"STACK_PROJECT", r"STACK_NET", r"STACK_APP_PORT"]
+    return [  # a prod run: nothing of dev's
+        r"(?<![\w-])socboard-(app-1|db-1|deploy-candidate)(?![\w-])", r"socboard_stack", r"project=socboard(?![-\w])", r"socboard/app(?![-\w])",
+        r"127\.0\.0\.1:800[01](?!\d)", r"port=800[01](?!\d)", r"/srv/socboard-data/postgres(?!-prod)", r"10\.231\.77",
+        r"(?<!prod-)203-0-113-10\.sslip\.io", re.escape(str(box.opt)) + r"/(releases|current)",
+    ]
+
+
+def everything_a_run_names(r):
+    box = r.box
+    parts = [r.out, *r.calls]
+    snap = box.state / "vars-snapshot"
+    if snap.exists():
+        parts.append(snap.read_text(encoding="utf-8"))
+    for path in box.files_left():
+        if path.is_file() and path.name != "lock":
+            parts.append(path.read_text(encoding="utf-8", errors="replace"))
+    return "\n".join(parts)
+
+
+@pytest.mark.parametrize("name", list(STACK_SCENARIOS))
+def test_a_prod_run_never_touches_a_running_dev_stack(box, name):
+    code, _, env = STACK_SCENARIOS[name]
+    seed_stack(box, prod=False)
+    if code in (7, 9):
+        seed_stack(box, prod=True)  # prod's own previous release, to restore
+    dev_before = stack_state(box, prod=False)
+    r = box.run(DIGEST, "prod", env=env)
+    assert r.code == code, r.out
+    assert stack_state(box, prod=False) == dev_before  # dev's container record, release folder and `current` link: identical
+    text = everything_a_run_names(r)
+    for pattern in names_of_the_other_stack(box, prod_is_running=False):
+        assert not re.search(pattern, text), pattern
+    assert_safe_prod(r)
+
+
+@pytest.mark.parametrize("name", list(STACK_SCENARIOS))
+def test_a_dev_run_never_touches_a_running_prod_stack(box, name):
+    code, env, _ = STACK_SCENARIOS[name]
+    seed_stack(box, prod=True)
+    if code in (7, 9):
+        seed_stack(box, prod=False)
+    prod_before = stack_state(box, prod=True)
+    r = box.run(DIGEST, env=env)
+    assert r.code == code, r.out
+    assert stack_state(box, prod=True) == prod_before
+    text = everything_a_run_names(r)
+    for pattern in names_of_the_other_stack(box, prod_is_running=True):
+        assert not re.search(pattern, text), pattern
+    assert_safe(r)
+
+
+def test_the_never_touch_patterns_do_catch_the_other_stack_s_names(box):
+    """A pattern list that matched nothing would pass every test above; each must match a sample of what it guards against."""
+    dev_samples = ["socboard-app-1", "docker rm -f socboard-deploy-candidate", "socboard_stack", "RENDER project=socboard net=10.231.77", "socboard/app SOCBOARD_TOKEN_SECRET",
+                   "127.0.0.1:8000", "127.0.0.1:8001:8000", "port=8000", "/srv/socboard-data/postgres\n", "203-0-113-10.sslip.io", f"{box.opt}/releases/x", f"{box.opt}/current"]
+    prod_samples = ["socboard-prod-app-1", "socboard/app-prod", "127.0.0.1:8100", "127.0.0.1:8101:8000", "port=8100", "/srv/socboard-data/postgres-prod", "10.231.78.1",
+                    "prod-203-0-113-10.sslip.io", f"{box.opt}/prod/current", "STACK_PROJECT=socboard-prod"]
+    for patterns, samples in ((names_of_the_other_stack(box, False), dev_samples), (names_of_the_other_stack(box, True), prod_samples)):
+        for sample in samples:
+            assert any(re.search(pattern, sample) for pattern in patterns), sample
+    for sample in prod_samples:  # prod's own names are not dev's
+        assert not any(re.search(pattern, sample) for pattern in names_of_the_other_stack(box, False)), sample
+
+
+# The lock and the variable file: one of each for both stacks -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("holder, runner", [("dev", (DIGEST, "prod")), ("prod", (DIGEST,)), ("prod", (DIGEST, "dev")), ("dev", (DIGEST, "prod"))])
+def test_a_run_of_one_stack_while_the_other_holds_the_lock_exits_8_and_leaves_the_holders_variable_file(box, holder, runner):
+    box.run_dir.mkdir(parents=True)
+    planted = box.run_dir / "stack-vars"
+    planted.write_text(f"STACK_IMAGE=planted-by-{holder}\n", encoding="utf-8")
+    with open(box.run_dir / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        r = box.run(*runner)
+    assert_only(r, 8, FIXED[8])
+    assert r.kinds() == ["flock"]
+    assert planted.read_text(encoding="utf-8") == f"STACK_IMAGE=planted-by-{holder}\n"
+    assert sorted(p.name for p in box.files_left()) == ["lock", "stack-vars"]
+
+
+def test_both_stacks_use_the_one_lock_and_the_one_variable_file_path():
+    assert SCRIPT_TEXT.count("RUN_DIR=") == 1 and SCRIPT_TEXT.count('VARS="$RUN_DIR/stack-vars"') == 1 and SCRIPT_TEXT.count('"$RUN_DIR/lock"') == 1
+    assert "stack-vars-" not in SCRIPT_TEXT and "lock-dev" not in SCRIPT_TEXT and "lock-prod" not in SCRIPT_TEXT
+
+
+def test_a_prod_run_and_a_dev_run_one_after_the_other_each_leave_only_the_lock(box):
+    assert_only(box.run(DIGEST, "prod"), 0, DEPLOYED)
+    assert [p.name for p in box.run_dir.iterdir()] == ["lock"]
+    other = "sha256:" + "b" * 64
+    r = box.run(other)
+    assert_only(r, 0, DEPLOYED)
+    assert [p.name for p in box.run_dir.iterdir()] == ["lock"]
+    assert (box.state / "app_image").read_text(encoding="utf-8") == f"{REPO}@{other}"
+    assert (box.state / "prod_app_image").read_text(encoding="utf-8") == IMAGE  # the dev run left prod's app on its digest
+
+
+# Exported variables: the three new names, and the ones that look like an environment choice ----------------------------------------
+
+HOSTILE_STACK = {"STACK_PROJECT": "EXPORTEDCANARY-project", "STACK_NET": "EXPORTEDCANARY-net", "STACK_APP_PORT": "EXPORTEDCANARY-port"}
+ENVIRONMENT_CHOICES = {"ENVIRONMENT": "prod", "DEPLOY_ENV": "prod", "SOCBOARD_ENV": "prod"}
+
+
+@pytest.mark.parametrize("args", [(DIGEST,), (DIGEST, "dev"), (DIGEST, "prod")])
+def test_exported_stack_project_net_and_port_change_nothing_for_a_dev_or_a_prod_run(tmp_path, args):
+    clean = Box(tmp_path / "clean").run(*args)
+    dirty = Box(tmp_path / "dirty").run(*args, env=HOSTILE_STACK)
+    assert clean.code == 0 and dirty.code == 0
+    assert observe(clean) == observe(dirty)
+    assert "EXPORTEDCANARY" not in everything_a_run_names(dirty)
+    assert not [line for line in dirty.calls if line.startswith("ENV_SET ")], "a written name reached a Compose call"
+
+
+@pytest.mark.parametrize("name", list(ENVIRONMENT_CHOICES))
+@pytest.mark.parametrize("args", [(DIGEST,), (DIGEST, "dev")])
+def test_an_exported_environment_name_set_to_prod_does_not_make_a_dev_run_a_prod_run(tmp_path, name, args):
+    clean = Box(tmp_path / "clean").run(*args)
+    dirty = Box(tmp_path / "dirty").run(*args, env={name: "prod"})
+    assert dirty.code == 0 and observe(clean) == observe(dirty)
+    assert not (tmp_path / "dirty" / "opt" / "socboard" / "prod").exists()
+    assert "socboard-prod" not in everything_a_run_names(dirty)
+
+
+@pytest.mark.parametrize("name", list(ENVIRONMENT_CHOICES))
+def test_an_exported_environment_name_set_to_dev_does_not_make_a_prod_run_a_dev_run(tmp_path, name):
+    clean = Box(tmp_path / "clean").run(DIGEST, "prod")
+    dirty = Box(tmp_path / "dirty").run(DIGEST, "prod", env={name: "dev"})
+    assert dirty.code == 0 and observe(clean) == observe(dirty)
+
+
+# What is never printed, for prod as for dev -------------------------------------------------------------------------------------
+
+
+def test_a_prod_candidate_log_with_every_secret_value_prints_none_of_them(box):
+    box.set_logs(PROD_CAND, prod_canary_lines())
+    r = box.run(DIGEST, "prod", env={"STUB_CAND_HEALTH": "starting"})
+    assert r.code == 6 and r.lines()[0] == FIXED[6]
+    assert r.out.count("[redacted]") == 10
+    assert_safe_prod(r)
+
+
+def test_a_prod_value_inside_a_longer_value_leaves_no_tail_of_the_longer_one(box):
+    box.write_secret(good(SOCBOARD_INGEST_API_KEY="canaryShared00001", SOCBOARD_SEED_PASSWORD_ANALYST_A="canaryShared00001LONGTAILxyz"), prod=True)
+    box.set_logs(PROD_CAND, ["x canaryShared00001LONGTAILxyz y canaryShared00001 z"])
+    r = box.run(DIGEST, "prod", env={"STUB_CAND_HEALTH": "starting"})
+    assert r.lines() == [FIXED[6], "x [redacted] y [redacted] z"]
+
+
+def test_the_prod_candidate_log_is_read_before_the_candidate_is_removed(box):
+    box.set_logs(PROD_CAND, numbered(3))
+    r = box.run(DIGEST, "prod", env={"STUB_CAND_HEALTH": "starting"})
+    kinds = r.kinds()
+    assert kinds.index("logs") < len(kinds) - 1 - kinds[::-1].index("rm-cand")
+    assert [line for line in r.calls if line.startswith("docker logs")] == [f"docker logs --tail 20 {PROD_CAND}"]
+    assert r.lines() == [FIXED[6]] + numbered(3)
+
+
+@pytest.mark.parametrize("service", ["db-init", "migrate", "seed"])
+def test_a_prod_failed_step_prints_no_secret_value(box, service):
+    set_step_output(box, service, prod_canary_lines())
+    r = box.run(DIGEST, "prod", env={"STUB_FAIL_SERVICE": service})
+    assert r.code == 5 and r.lines()[:2] == [FIXED[5], f"socboard-deploy: failed step: {service}"]
+    assert r.out.count("[redacted]") == 10
+    assert_safe_prod(r)
+
+
+def test_a_prod_database_that_does_not_start_exits_5_with_its_own_log(box):
+    set_step_output(box, "db", ["compose-says-unhealthy"])
+    box.set_logs("socboard-prod-db-1", numbered(30))
+    r = box.run(DIGEST, "prod", env={"STUB_DB_UP_FAIL": "1"})
+    step_failed(r, "db", numbered()[10:])
+    assert [line for line in r.calls if line.startswith("docker logs")] == ["docker logs --tail 20 socboard-prod-db-1"]
+
+
+@pytest.mark.parametrize("restore", [None, "unhealthy"])
+def test_prod_logs_after_the_swap_print_no_secret_value(box, restore):
+    box.set_app(PROD_PREVIOUS_IMAGE, prod=True)
+    box.previous_release(prod=True)
+    box.set_logs(PROD_APP, prod_canary_lines())
+    env = {"STUB_NEW_HEALTH": "unhealthy", **({"STUB_RESTORE_HEALTH": restore} if restore else {})}
+    r = box.run(DIGEST, "prod", env=env)
+    assert r.code == (9 if restore else 7)
+    assert r.out.count("[redacted]") == 10
+    assert_safe_prod(r)
+
+
+# --- the human's task file for the first prod deploy (#267) ------------------------------------------------------------------------
+
+
+def prod_task_file():
+    found = sorted((ROOT / "_human-tasks").glob("*-human-task-267-engineer-first-prod-deploy.md"))
+    assert len(found) == 1
+    return found[0].read_text(encoding="utf-8")
+
+
+def test_the_prod_task_file_has_no_inline_secret_one_command_per_block_and_every_result_row_not_checked():
+    text = prod_task_file()
+    for line in text.splitlines():
+        if "--secret-string" in line:
+            assert "--secret-string file://" in line, line
+    blocks = re.findall(r"```\n(.*?)\n```", text, re.S)
+    assert blocks and all("\n" not in block for block in blocks), [b for b in blocks if "\n" in b]
+    assert not re.search(r"(?<![0-9])[0-9]{12}(?![0-9])|(?<![A-Za-z])arn:", text)
+    table = text.split("| Step | Pass or fail | Output or note |")[1].split("## Risk")[0]
+    rows = [line for line in table.splitlines() if line.startswith("|") and not line.startswith("|---")]
+    assert len(rows) == 14 and all(line.split("|")[2].strip() == "NOT CHECKED" for line in rows), rows
+    for needle in ("postgres-prod", "environment=prod", "environment=Prod", "environment=staging", "already deployed", "socboard-prod-app-1", "127.0.0.1:8100", "reboot"):
+        assert needle in table or needle in text, needle

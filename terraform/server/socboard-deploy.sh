@@ -1,10 +1,12 @@
 #!/bin/bash
 # socboard-deploy (issue #237, Deploy item D20). The whole content of the Systems Manager document
-# `socboard-deploy` (deploy_document.tf); it runs as root on the server. One input: an image digest.
-# It takes that image to a running app behind host Caddy, or leaves the current release serving and
-# exits non-zero. Decision record: _docs/decisions/*-deploy-script.md.
+# `socboard-deploy` (deploy_document.tf); it runs as root on the server. Two inputs: an image digest and
+# an environment, `dev` (the default) or `prod` (issue #267). It takes that image to a running app behind
+# host Caddy, or leaves the current release serving and exits non-zero. A prod run uses prod's values
+# from one fixed table below and touches nothing of dev's. Decision records: _docs/decisions/*-deploy-script.md
+# and _docs/decisions/*-deploy-script-environment.md.
 #
-# Order: lock, digest check, "already deployed" check, pull by digest and label check, the release's
+# Order: lock, digest check, environment check, "already deployed" check, pull by digest and label check, the release's
 # compose.yaml and compose/db_init.py, the database image pull, the secret, the stack's variable file, db, db-init, migrate
 # and seed, a candidate app on a spare loopback port, the swap, the checks after it, clean-up.
 # Nothing before the swap touches the running app. The swap is not zero downtime.
@@ -45,9 +47,13 @@ done < <(compgen -e)
 unset clean name
 case $- in *x*) exit 1 ;; esac
 
-# The document replaces the one parameter reference on the next line before the script runs; run any
-# other way, the script takes the digest as its first argument. Keep that the only such reference.
+# The document replaces the two parameter references on the next lines before the script runs; run any
+# other way, the script takes the digest as its first argument and the environment as its second.
+# Keep these the only such references, each written once: Systems Manager replaces every occurrence, so a
+# third (in a comparison, say) would be replaced too. The unreplaced environment reference is recognised
+# by building its text (tpl, below), never by writing it again.
 DIGEST_PARAM='{{ digest }}'
+ENV_PARAM='{{ environment }}'
 
 set -u
 export LC_ALL=C
@@ -64,28 +70,30 @@ DATA_DIR='/srv/socboard-data/postgres'
 # The stack network's gateway as the app sees Caddy's requests (README, "The forwarded address").
 # VERIFY: Compose pins this gateway; the check below fails the run if the network has another.
 PROXY_ADDR='10.231.77.1'
-# The Compose project name (`name:` in compose.yaml) and the app's loopback ports: one place each.
+# The Compose project name (`name:` in compose.yaml), the app's loopback ports (APP_PORT is the app's, CAND_HOST_PORT the
+# candidate's) and the app's port inside the container: one place each.
 PROJECT='socboard'
 APP_PORT='8000'
 CAND_HOST_PORT='8001'
-STACK_NETWORK="${PROJECT}_stack"
-# VERIFY: the name Compose gives the app container (project, service `app`, number 1).
-APP="$PROJECT-app-1"
-# VERIFY: the name Compose gives the database container (project, service `db`, number 1).
-DB="$PROJECT-db-1"
-CAND="$PROJECT-deploy-candidate"
-CAND_PORT="127.0.0.1:$CAND_HOST_PORT:$APP_PORT"
+CONTAINER_PORT='8000'
+# The environment's values table (issue #267). The lines above and the three below are dev's row, the values of a run
+# with `dev` or no environment; the `prod` branch of the case after the lock replaces each one. Nothing here or there
+# is read from the environment, the document or the arguments but the checked name. $OPT_DIR below stays one constant:
+# ENV_DIR is the environment's folder under it.
+HOST_PREFIX=''
+STACK_VARS=()
 RUN_DIR='/run/socboard-deploy'
 OPT_DIR='/opt/socboard'
+ENV_DIR="$OPT_DIR"
 WAIT=90
 POLL=3
 VARS="$RUN_DIR/stack-vars"
 NAMES=(SOCBOARD_TOKEN_SECRET SOCBOARD_INGEST_API_KEY SOCBOARD_SEED_PASSWORD_ANALYST_A
   SOCBOARD_SEED_PASSWORD_ANALYST_B SOCBOARD_SEED_PASSWORD_LEAD STACK_PG_SUPERUSER_PASSWORD
   STACK_PG_OWNER_PASSWORD STACK_PG_APP_PASSWORD)
-# Compose lets a shell variable override the same name in the variable file, so none of the ten names
-# the script writes there may be inherited.
-unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR
+# Compose lets a shell variable override the same name in the variable file, so none of the names
+# the script writes there (the ten of a dev run, and prod's three more) may be inherited.
+unset "${NAMES[@]}" STACK_IMAGE STACK_PGDATA_DIR STACK_PROJECT STACK_NET STACK_APP_PORT
 
 CAND_UP=0
 LOCKED=0
@@ -100,7 +108,12 @@ tpl() { printf '%s%s%s%s' '{' '{' "$1" '}}'; }
 
 text_for() {
   case "$1" in
-    2) say 'socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.' ;;
+    2)
+      case "${2:-}" in
+        environment) say 'socboard-deploy: refused: the environment must be dev or prod. Nothing was changed.' ;;
+        *) say 'socboard-deploy: refused: the digest must be sha256: followed by 64 lower-case hex digits. Nothing was changed.' ;;
+      esac
+      ;;
     3) say 'socboard-deploy: the application secret could not be read or is not usable. The current release was not changed.' ;;
     4) say "socboard-deploy: the image, the database image or the Compose files could not be fetched, or are not this repository's. The current release was not changed." ;;
     5) say 'socboard-deploy: db-init, migrate or seed failed. The current release was not changed.' ;;
@@ -190,6 +203,8 @@ compose_pull_db() {
   local n
   local -a placeholders=()
   for n in "${PULL_VARS[@]}"; do placeholders+=("$n=placeholder-not-a-secret"); done
+  # A prod run renders the file with prod's project and network, never dev's defaults (these are not secrets).
+  [ "${#STACK_VARS[@]}" -eq 0 ] || placeholders+=("${STACK_VARS[@]}")
   env "${placeholders[@]}" docker compose --project-directory "$REL" --env-file /dev/null -f "$REL/compose.yaml" -f "$REL/deploy.override.yaml" pull db
 }
 
@@ -213,7 +228,7 @@ public_hostname() {
   # The session token goes in on standard input: it is a credential, so never on a command line.
   ip=$(printf 'header = "X-aws-ec2-metadata-token: %s"\n' "$token" | curl --silent --fail --max-time 5 --proto '=http' --config - "$IMDS/latest/meta-data/public-ipv4") || return 1
   [[ $ip =~ ^[0-9]+(\.[0-9]+){3}$ ]] || return 1
-  printf '%s.sslip.io' "${ip//./-}"
+  printf '%s%s.sslip.io' "$HOST_PREFIX" "${ip//./-}"
 }
 
 # The checks after the swap; each must pass.
@@ -238,8 +253,8 @@ check_release() {
 
 # The last step of the swap: `current` names the release that now runs. A failure leaves `current` as it was.
 link_current() {
-  ln -sfn "$REL" "$OPT_DIR/current.new" && mv -T "$OPT_DIR/current.new" "$OPT_DIR/current" && return 0
-  rm -f "$OPT_DIR/current.new"
+  ln -sfn "$REL" "$ENV_DIR/current.new" && mv -T "$ENV_DIR/current.new" "$ENV_DIR/current" && return 0
+  rm -f "$ENV_DIR/current.new"
   return 1
 }
 
@@ -257,6 +272,44 @@ if [ "${#digest}" -ne 71 ] || [ "$hex" = "$digest" ] || [[ $hex == *[!0-9a-f]* ]
   die 2
 fi
 IMAGE="$IMAGE_REPO@$digest"
+
+# --- 2b. the environment check and the values table (the document's allowedPattern is the first check) ----------
+# The second argument when one is given (a third argument is refused), else the document's value; run by hand with
+# one argument, the reference stays as written and means dev. The case matches the whole value, nothing else is run.
+if [ "$#" -ge 3 ]; then
+  envname=''
+elif [ "$#" -eq 2 ]; then
+  envname=$2
+elif [ "$ENV_PARAM" = "$(tpl ' environment ')" ]; then
+  envname=dev
+else
+  envname=$ENV_PARAM
+fi
+case $envname in
+  dev) ;;
+  prod)
+    HOST_PREFIX='prod-'
+    SECRET_ID='socboard/app-prod'
+    DATA_DIR='/srv/socboard-data/postgres-prod'
+    PROJECT='socboard-prod'
+    APP_PORT='8100'
+    CAND_HOST_PORT='8101'
+    NET_PREFIX='10.231.78'
+    PROXY_ADDR="$NET_PREFIX.1"
+    ENV_DIR="$OPT_DIR/prod"
+    # Prod only: the variable file and the database image pull's placeholders carry them, dev's carry none (compose.yaml's defaults).
+    STACK_VARS=(STACK_PROJECT="$PROJECT" STACK_NET="$NET_PREFIX" STACK_APP_PORT="$APP_PORT")
+    ;;
+  *) die 2 environment ;;
+esac
+unset envname
+STACK_NETWORK="${PROJECT}_stack"
+# VERIFY: the name Compose gives the app container (project, service `app`, number 1).
+APP="$PROJECT-app-1"
+# VERIFY: the name Compose gives the database container (project, service `db`, number 1).
+DB="$PROJECT-db-1"
+CAND="$PROJECT-deploy-candidate"
+CAND_PORT="127.0.0.1:$CAND_HOST_PORT:$CONTAINER_PORT"
 
 # --- 3. already deployed -----------------------------------------------------------------------
 PREV=$(docker inspect --format "$(tpl .Config.Image)" "$APP" 2>/dev/null) || PREV=''
@@ -284,7 +337,7 @@ revision=$(docker image inspect --format "$(tpl 'index .Config.Labels "org.openc
 if [ "${#revision}" -ne 40 ] || [[ $revision == *[!0-9a-f]* ]]; then die 4; fi
 
 # --- 5. the Compose files of the image's revision, as data -----------------------------------------
-REL="$OPT_DIR/releases/$revision-${hex:0:12}"
+REL="$ENV_DIR/releases/$revision-${hex:0:12}"
 mkdir -p "$REL/compose" || die 4
 for f in compose.yaml compose/db_init.py; do
   if ! curl --silent --fail --max-time 60 --proto '=https' --tlsv1.2 --output "$REL/$f.part" "$RAW_BASE/$revision/$f" || [ ! -s "$REL/$f.part" ]; then
@@ -310,11 +363,11 @@ if ! python3 -c 'import boto3' >/dev/null 2>&1; then
 fi
 read -r -d '' PYCODE <<'PY'
 import json, re, sys
-names = sys.argv[1:]
+secret_id, names = sys.argv[1], sys.argv[2:]
 try:
     import boto3
     client = boto3.client("secretsmanager", region_name="us-east-1")
-    data = json.loads(client.get_secret_value(SecretId="socboard/app")["SecretString"])
+    data = json.loads(client.get_secret_value(SecretId=secret_id)["SecretString"])
 except Exception:
     sys.exit(1)
 if not isinstance(data, dict) or set(data) != set(names):
@@ -328,7 +381,7 @@ for name in names:
 for name in names:
     print(name + "=" + data[name])
 PY
-lines=$(python3 -c "$PYCODE" "${NAMES[@]}" 2>/dev/null </dev/null) || die 3
+lines=$(python3 -c "$PYCODE" "$SECRET_ID" "${NAMES[@]}" 2>/dev/null </dev/null) || die 3
 while IFS= read -r line; do
   S[${line%%=*}]=${line#*=}
 done <<<"$lines"
@@ -346,6 +399,7 @@ done
 {
   for n in "${NAMES[@]}"; do printf '%s=%s\n' "$n" "${S[$n]}"; done
   printf '%s=%s\n' STACK_IMAGE "$IMAGE" STACK_PGDATA_DIR "$DATA_DIR"
+  [ "${#STACK_VARS[@]}" -eq 0 ] || printf '%s\n' "${STACK_VARS[@]}"
 } >"$VARS" || die 3
 chmod 600 "$VARS" || die 3
 
@@ -384,7 +438,7 @@ if [ -z "$PREV" ]; then
   [ -z "$lines" ] || printf '%s\n' "$lines"
   exit 7
 fi
-PREV_DIR=$(readlink "$OPT_DIR/current" 2>/dev/null) || PREV_DIR=''
+PREV_DIR=$(readlink "$ENV_DIR/current" 2>/dev/null) || PREV_DIR=''
 [ -f "$PREV_DIR/compose.yaml" ] && [ -f "$PREV_DIR/deploy.override.yaml" ] || PREV_DIR=$REL
 REL=$PREV_DIR
 if STACK_IMAGE=$PREV compose up -d --no-deps --pull never --no-build app >/dev/null 2>&1 && wait_healthy "$APP"; then
