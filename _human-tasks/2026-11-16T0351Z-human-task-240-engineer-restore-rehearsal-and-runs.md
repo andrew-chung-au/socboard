@@ -4,13 +4,24 @@
 
 Stage (b) of #240: prove the runbook `_docs/runbooks/deploy-and-teardown.md` on the real server, and record the result in this file. The steps themselves are in the runbook (one command per block, `Expected:` and `If different:`); this file says which ones to run, in what order, and what to write down. Issue: #240.
 
+## What changed in these steps (2026-11-17)
+
+The steps were rewritten for copy and paste after the #267 run (`_human-tasks/2026-11-17T0030Z-human-task-267-engineer-first-prod-deploy.md`, "What changed after the first run"), with no change to what they do. The old text named values as `<instance id>`, `<hostname>`, `<data volume id>`, `<digest>` and `<secret file>`; those were typed literally in the #267 run and the shell read `<` as a redirect. They are now shortcuts set once in "Before you start", item 2, each echoed, and one fixed secret path. No step in this file is marked done: the table has no result yet.
+
+The runbook's own command blocks still contain angle-bracket placeholders (for example `--instance-ids <instance id>`). This file does not change the runbook. In "Before you start", item 3, a table says which shortcut replaces which placeholder, and what to do for a value the runbook only prints while you work.
+
 ## Where to run it
 
-Your own machine, with your own AWS credentials for the account (SSO, region `us-east-1`), in a clone of the repository on `main` with the runbook merged. Steps on the server run in a Session Manager session, as the runbook says. Not here: the agent's sandbox, which has no AWS access. The agent never runs these steps. Every destructive step (deleting the scratch volume) is the human's only.
+- On your own machine, in a terminal opened at the **repository root** (`cd ~/projects/socboard`), in a clone on `main` with the runbook merged. Every `terraform` command uses `-chdir=terraform/...`, which only works from the root.
+- AWS: use your own credentials (SSO is fine), region `us-east-1`. If you use a named profile, add `--profile NAME` to every `aws` command, or run `export AWS_PROFILE=NAME` once in the terminal.
+- Steps on the server run in a Session Manager session, as the runbook says. Session Manager needs the plugin on your machine (`session-manager-plugin` prints "installed successfully"). Without it, use the AWS Console: EC2, the instance, Connect, Session Manager.
+- Not here: the agent's sandbox, which has no AWS access. The agent never runs these steps. Every destructive step (deleting the scratch volume) is the human's only.
+
+**How to read the commands.** Copy each block exactly. Shortcuts (`I`, `H`, `V`, `D`, and the others in item 3) exist only in the terminal where you set them: in a new terminal, run the shortcut blocks again. A send with an empty shortcut fails with `InvalidParameters`. A shortcut set on your machine does not exist inside a Session Manager session on the server; there, type the value itself, which you read with `echo "$I"` on your machine.
 
 If a tool shows a permission prompt, reject one prompt at a time; rejecting ends the agent's turn, so tell it to continue.
 
-Values used below, never copied into this file: `<instance id>`, `<hostname>` and `<data volume id>` are outputs of `terraform/server/`; `<digest>` is read in the runbook's Step 2.2.1; `<secret file>` is a path outside the repository. This file holds no account number, no ARN, no real IP address, no e-mail address and no secret value.
+This file holds no account number, no ARN, no real IP address, no e-mail address and no secret value. Never paste one into it.
 
 ## Before you start
 
@@ -22,6 +33,80 @@ date -u +%Y-%m-%dT%H:%M:%SZ
 
 Expected: the current UTC time. Write it in the table below as the start; write the time again at the end of the rehearsal, so the table holds how long it took.
 If different: none.
+
+2. Set the shortcuts. Each value comes from a command that reads the real value; each is followed by an echo.
+
+```
+I=$(terraform -chdir=terraform/server output -raw instance_id)
+```
+
+```
+echo "I=[$I]"
+```
+
+Expected: `I=[i-` followed by hex digits `]`.
+If different: empty brackets mean you are not at the repository root, or Terraform has no state here. Stop.
+
+```
+H=$(terraform -chdir=terraform/server output -raw hostname)
+```
+
+```
+echo "H=[$H]"
+```
+
+Expected: `H=[` four numbers with dashes, then `.sslip.io]`.
+If different: empty brackets: as for `I`.
+
+```
+V=$(terraform -chdir=terraform/server output -raw data_volume_id)
+```
+
+```
+echo "V=[$V]"
+```
+
+Expected: `V=[vol-` followed by hex digits `]`.
+If different: empty brackets: as for `I`.
+
+The digest comes from the runbook's Step 2.2.1 (the newest `socboard publish` run's job summary), not from a command here. Replace PASTE-DIGEST-HERE with `sha256:` and the 64 hex digits, then echo it:
+
+```
+D=PASTE-DIGEST-HERE
+```
+
+```
+echo "D=[$D]"
+```
+
+Expected: `D=[sha256:` and 64 hex digits `]`.
+If different: the text `PASTE-DIGEST-HERE` is still there, or the digits are fewer than 64: copy the digest again from the job summary.
+
+3. Which shortcut replaces which placeholder in the runbook's blocks. Type the shortcut where the runbook shows the placeholder, for example `--instance-ids "$I"` in place of `--instance-ids <instance id>`. Remove the angle brackets with the words inside them.
+
+| The runbook says | Use | Where the value comes from |
+|---|---|---|
+| `<instance id>` | `"$I"` | set above |
+| `<hostname>` | `"$H"` | set above |
+| `<data volume id>` | `"$V"` | set above |
+| `<digest>` | `"$D"` | set above |
+| `<secret file>` | `/tmp/socboard-dev-secret.json` (in `file://` form: `file:///tmp/socboard-dev-secret.json`, three slashes in a row) | a fixed path outside the repository, used for the whole rotation |
+| `<snapshot id>`, `<zone>`, `<scratch volume id>`, `<command id>`, `<run id>` | a shortcut you set when the runbook prints the value | the runbook step that prints it ("Use it as ...") |
+
+For a value the runbook prints, set the shortcut right after that step, with the printed value in place of the capitals, then echo it. For the scratch volume (Step 7.1.3):
+
+```
+S=PASTE-SCRATCH-VOLUME-ID-HERE
+```
+
+```
+echo "S=[$S]"
+```
+
+Expected: `S=[vol-` followed by hex digits `]`.
+If different: `PASTE-SCRATCH-VOLUME-ID-HERE` still showing means the value was not pasted; copy it from the runbook step's output.
+
+Do the same for `<snapshot id>` (name it `SNAP`), `<zone>` (name it `Z`) and `<command id>` (name it `C`). A shortcut set from a runbook step's output is the only value in this file that you copy by eye: check it with the echo before you use it.
 
 ## Steps
 
@@ -35,7 +120,7 @@ Risk: a second volume is attached to the live instance and deleted at the end. T
 
 ### Step 2: one routine deploy and one failed-run read, by hand
 
-Run the runbook's Steps 2.2.1 to 2.2.4 (the newest digest, then the same digest again) and Step 2.3.2 (the digest of 64 zeros). Expected: `socboard-deploy: already deployed. Nothing was changed.` or `socboard-deploy: deployed.`, then exit 4 and its fixed text from the runbook's section 3 table. Record whether the output matched the table in section 3, and replace the runbook's unseen `Expected:` lines with what you saw.
+Run the runbook's Steps 2.2.1 to 2.2.4 (the newest digest, then the same digest again, with `"$D"` for the digest and `"$I"` for the instance) and Step 2.3.2 (the digest of 64 zeros). Expected: `socboard-deploy: already deployed. Nothing was changed.` or `socboard-deploy: deployed.`, then exit 4 and its fixed text from the runbook's section 3 table. Record whether the output matched the table in section 3, and replace the runbook's unseen `Expected:` lines with what you saw.
 If different: stop and record what was printed.
 Risk: a deploy of a new digest swaps the app (a short outage); the zero digest changes nothing.
 
@@ -43,7 +128,7 @@ Refusal test: Step 2.3.1 of the runbook (the value `latest`), in your own machin
 
 ### Step 3: one rotation, end to end
 
-Rotate `SOCBOARD_INGEST_API_KEY` (the runbook's 6.2), using Steps 6.0.1 to 6.0.4 and then a deploy of a different digest or section 6.8's procedure. Record what the app does before and after (an ingest with the old key and with the new one) and that no value was printed.
+Rotate `SOCBOARD_INGEST_API_KEY` (the runbook's 6.2), using Steps 6.0.1 to 6.0.4 and then a deploy of a different digest or section 6.8's procedure. Use the fixed path `/tmp/socboard-dev-secret.json` for the secret file, and `file:///tmp/socboard-dev-secret.json` in the `put-secret-value` command. Record what the app does before and after (an ingest with the old key and with the new one) and that no value was printed.
 
 Expected: the check in 6.2 passes and no step printed a value.
 If different: stop; the secret's previous version is restored by putting the previous file the same way (the runbook's Undo for section 6).
@@ -63,6 +148,15 @@ git status --short
 
 Expected: only this file and the evidence timeline show as changed once the table is filled in. Commit them; the timeline line for #240 is already there as pending and is updated, not added again.
 If different: a listed file you did not mean to change: leave it out of the commit.
+
+After the rotation, remove the secret file if the runbook's Step 6.0.4 did not:
+
+```
+rm -f /tmp/socboard-dev-secret.json
+```
+
+Expected: nothing printed.
+If different: none.
 
 ## Record the result
 
