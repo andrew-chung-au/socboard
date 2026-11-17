@@ -86,5 +86,5 @@ The maintainer helped another agent during the prod steps.
 ## Follow-ups for the next session
 
 - After this branch merges: close #267 (the Close comment cites QA PASS e341c81 and merge 91c84d2).
-- #267 rows 11 to 14 and #269 rows 5a to 6c (repeat, refusals, rollback, refused runs) are still NOT CHECKED. They add evidence but no rubric point.
+- #267 rows 11 to 14 and #269 rows 5a to 6c (repeat, refusals, rollback, refused runs) are still NOT CHECKED. They are filed as #363, placed in the supporting list. They add evidence but no rubric point.
 - The other task files (#268, #269, #240) use the same `<placeholder>` style; rewrite them as this one was.
