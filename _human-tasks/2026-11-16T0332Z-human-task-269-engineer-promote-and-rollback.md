@@ -38,46 +38,17 @@ If different: stop; promote would reach a server without the `environment` param
 
 ### Step 1: Install the workflow (a protected file)
 
-```
-cp _human-tasks/269-proposed/promote-prod.yml .github/workflows/promote-prod.yml
-```
+The install is a pull request (branch `issue-269-install-promote`, 2026-11-17). It moves the proposal to `.github/workflows/promote-prod.yml` unchanged and adds the workflow's exception to the id-token rule in `tests/test_terraform_plan_workflow.py`. Approving and merging that pull request is this step. It replaces the earlier copy-and-commit commands.
 
-Expected: nothing printed.
-If different: "No such file" means this clone is not on `main` after #269 merged; run `git pull` and try again.
+Check it after the merge:
 
 ```
-git rm -q _human-tasks/269-proposed/promote-prod.yml
+gh api repos/andrew-chung-au/socboard/contents/.github/workflows/promote-prod.yml --jq .path
 ```
 
-Expected: nothing printed.
-
-```
-git add .github/workflows/promote-prod.yml
-```
-
-```
-git status --short
-```
-
-Expected: one line, `R  _human-tasks/269-proposed/promote-prod.yml -> .github/workflows/promote-prod.yml` (git sees an unchanged copy as a rename), or on an older git the pair `A  .github/workflows/promote-prod.yml` and `D  _human-tasks/269-proposed/promote-prod.yml`.
-If different: a line for any other path means something else is staged; unstage only that path with `git restore --staged <path>` before the commit.
-
-The pre-commit hook refuses a commit that touches `.github/*` unless you approve it; you are that approval.
-
-```
-HUMAN_APPROVED=1 git commit -m "Install the promote-to-prod workflow (#269)"
-```
-
-Expected: one commit adding the workflow and removing the proposal. `make verify` then reads the real file (the tests read whichever of the two exists, never both).
-If different: if the hook still refuses, read its message and tell the orchestrator; do not use `--no-verify`.
-
-```
-git push origin main
-```
-
-Expected: the push succeeds; the Actions tab lists "socboard promote prod" with a "Run workflow" button.
-If different: a pre-push refusal names the failing check (`make verify`); fix nothing by hand, copy its last lines into the table and tell the orchestrator. A missing workflow in the Actions tab after a good push means the file is not on `main`: check `git log -1 --stat origin/main`.
-Risk: adds a manual workflow; it does nothing until someone starts it and you approve it. Undo: delete the file in a new commit.
+Expected: `.github/workflows/promote-prod.yml`. The Actions tab lists "socboard promote prod" with a "Run workflow" button.
+If different: a 404 means the pull request is not merged yet.
+Risk: adds a manual workflow. It does nothing until someone starts it and you approve it. Undo: delete the file in a new pull request.
 
 ### Step 2: Set the two Environment variables on `deploy-prod`
 
