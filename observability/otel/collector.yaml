@@ -2,7 +2,9 @@
 # settled each exporter and path: `socboard observability` run 44003479301, 2026-11-17).
 # OTLP over HTTP in; traces to Tempo, logs to Loki's native OTLP endpoint, metrics to Prometheus by remote
 # write. The `transform/allowlist` processor is the second line of defence after the app's own allow-list
-# (#289): whatever reaches the collector, only the names of observability/CONTRACT.md leave it.
+# (#289): of the attributes that reach the collector, only the names of observability/CONTRACT.md leave it.
+# It does not reach an exemplar's own attributes, a span's status message, or the names of spans, events,
+# links and metrics; the app sets those in code, from fixed words (CONTRACT sections 2 and 3).
 receivers:
   otlp:
     protocols:

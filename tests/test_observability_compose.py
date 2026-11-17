@@ -155,6 +155,14 @@ def test_the_five_services_fit_the_memory_budget_with_grafanas_share():
     assert total + 160 <= 1536
 
 
+def test_each_volume_cap_is_below_its_services_memory_limit():
+    doc = load()
+    caps = {name: int(re.search(r"size=(\d+)m", volume["driver_opts"]["o"]).group(1)) for name, volume in doc["volumes"].items()}
+    owners = {"tempo-data": "tempo", "loki-data": "loki", "prometheus-data": "prometheus"}
+    for volume, service in owners.items():
+        assert caps[volume] < mebibytes(doc["services"][service]["mem_limit"]), (volume, service)
+
+
 def test_every_file_the_overlay_mounts_exists():
     doc = load()
     for service in doc["services"].values():

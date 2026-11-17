@@ -14,9 +14,11 @@
 # A second stack on the same host needs its own values, as it does for STACK_APP_PORT (#271).
 #
 # Limits: each store keeps 24 hours of data at most, in a named volume whose size is capped (the volumes
-# below are in-memory file systems of fixed size, so a full store stops writing instead of filling the
-# host's disk; the data does not survive a host restart, which is right for a stack that runs in CI and
-# on a developer's machine). Each service has a memory limit; the five add up to 1344 MiB, and Grafana
+# below are in-memory file systems of fixed size, so a full store cannot fill the host's disk; the data does
+# not survive a host restart, which is right for a stack that runs in CI and on a developer's machine).
+# Those pages are charged to the container that writes them, so each cap is below its service's mem_limit
+# (192 MiB against 256, 256 against 384), and a store that outgrew its cap would fail its writes before it
+# was killed; no run is long enough to show which comes first (checked by tests/test_observability_compose.py). Each service has a memory limit; the five add up to 1344 MiB, and Grafana
 # (#293) has 160 MiB reserved, so the six stay within 1.5 GiB (1536 MiB).
 #
 # Images are pinned by tag and index digest, as compose.yaml does. Each digest was read from the registry
@@ -93,7 +95,7 @@ services:
     user: "65534:65534"
     mem_limit: 64m
     volumes:
-      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./observability/alertmanager:/etc/alertmanager:ro
     ports:
       - 127.0.0.1:${STACK_ALERTMANAGER_PORT:-9093}:9093
     networks: [stack]
