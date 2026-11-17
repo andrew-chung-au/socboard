@@ -25,7 +25,7 @@ No fallback was needed: neither the collector's `filelog` receiver for logs nor 
 ## Seen in the log, not a failure
 
 - Tempo warned once, `unowned file entry ignored during wal replay` (file `blocks`), at start-up on the empty volume.
-- Tempo logged one error line `error calling scheduler ... no jobs found` (its backend worker finding no work), about 35 seconds after start. The checks passed with it.
+- Tempo logged one warning and one error line for the same event, `error calling scheduler ... no jobs found` (its backend worker finding no work), about 15 seconds after Tempo started (about 35 seconds into the run). The checks passed with it.
 
 Neither changes a result; if a later run fails near them, start there.
 
