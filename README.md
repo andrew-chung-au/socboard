@@ -258,7 +258,14 @@ make observability-down
 
 Expected: the containers and the network are removed. The stores keep nothing: their volumes are in-memory file systems, so a restart starts empty (24 hours of data at most while running).
 
-In CI, the `socboard observability` workflow starts this same stack, finds one trace id in Tempo, Loki and Prometheus, and checks that a canary attribute the collector must drop is in none of them.
+In CI, the `socboard observability` workflow starts this same stack, finds one trace id in Tempo, Loki and Prometheus, and checks that a canary attribute the collector must drop is in none of them. It then runs the probe for about 40 seconds and photographs Grafana.
+
+Evidence for reviewers, taken from [that run](https://github.com/andrew-chung-au/socboard/actions/runs/44027949931) and committed once (CI never commits), in [`_docs/evidence/observability/2026-11-17/`](_docs/evidence/observability/2026-11-17/) with a `manifest.json`:
+
+- [`dashboard.png`](_docs/evidence/observability/2026-11-17/dashboard.png): the dashboard "SOCBoard: alert to queue" over the probe's window, with the 5-second line, the delay buckets and their exemplars, the ingest outcomes and the log lines. The p50, p95 and p99 sit under 500 ms because the contract's first bucket bound is 0.5 s and every delay in the run was a few milliseconds: Prometheus can only interpolate inside that bucket.
+- [`trace.png`](_docs/evidence/observability/2026-11-17/trace.png): one probe trace in Tempo, opened by its trace id: the server span and `ingest.alert`.
+- [`logs.png`](_docs/evidence/observability/2026-11-17/logs.png): the two log lines of that trace in Loki, found by the same trace id (the page's spinner was still showing when it was photographed; the content is complete).
+- `trace.json`, `logs.json`, `exemplars.json`: what Tempo, Loki and Prometheus answered for that trace, with the Grafana password and the canary strings replaced. `window.json`: the trace id and the absolute window the screenshots used.
 
 ### Tests against the stack
 
