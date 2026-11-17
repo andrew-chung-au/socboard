@@ -153,12 +153,16 @@ gh workflow run oncall-drill.yml --ref main
 Expected: `Created workflow_dispatch event for oncall-drill.yml at main`.
 If different: a 404 means the workflow is not on `main` yet; finish step 3.
 
+The run has a number, its **run id**. GitHub's tools call the same number `databaseId`, and it is also the last part of the run's web address (`.../actions/runs/<number>`). Print it:
+
 ```
-gh run list --workflow oncall-drill.yml --limit 1 --json databaseId,status,url --jq '.[0]'
+gh run list --workflow oncall-drill.yml --limit 1 --json databaseId --jq '.[0].databaseId'
 ```
 
-Expected: one run with its `databaseId` and `url`. Note the id; it is `<run id>` below. The run takes about 25 to 35 minutes: the first job waits up to 10 minutes for the alert to fire.
-If different: if no run is listed after a minute, repeat the command.
+Expected: one number, for example `44065861050`. This is the run id. Everywhere below, `<run id>` means this number: type the number itself, without the `<` and `>`, which the shell reads as a redirect.
+If different: no output means the run has not started; wait a minute and repeat. Note the number now (the result table has a place for it).
+
+The run takes about 25 to 35 minutes: the first job waits up to 10 minutes for the alert to fire.
 
 The `agent` job waits for approval only if the `oncall` Environment has required reviewers; if it does, approve it in the browser (browser).
 
