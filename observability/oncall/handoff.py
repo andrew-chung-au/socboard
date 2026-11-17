@@ -1,11 +1,14 @@
 """Alert-to-agent hand-off (#297): wait for QueueLatencyOverSLO, then write the agent's input file.
 
-    python observability/oncall/handoff.py http://127.0.0.1:9093 --grafana-url http://localhost:3000
+    python observability/oncall/handoff.py http://127.0.0.1:9093 --grafana-url http://localhost:3000 \\
+        --environment dev --version 1.2.3
 
 Polls Alertmanager's GET /api/v2/alerts every 5 seconds until the alert is active or the timeout
 ends. On a match it writes `incident.json` (path: --out) holding only checked values: a field that
-fails its check is left out and its name is listed under `refused`; nothing from the payload enters
-the file as free text, and an extra label or annotation is listed by a fixed word, never by its name.
+fails its check is left out and its name is listed under `refused`. Every value is a fixed text, a
+time parsed into one form, or a value the caller gave (--environment, --version; the payload's own
+environment and version are kept only when equal to them). No payload free text enters the file, and
+an extra label or annotation is listed by a fixed word, never by its name.
 
 Exit codes: 0 the file was written; 2 a refused address or Grafana URL, an unreachable Alertmanager
 or an unwritable file; 3 the timeout ended with no matching alert (nothing is written).
@@ -104,11 +107,13 @@ def _is_active(alert: dict) -> bool:
     return status == "firing"  # webhook: alerts[].status
 
 
-def parse(payload, grafana_url: str) -> dict | None:
+def parse(payload, grafana_url: str, environment: str, version: str) -> dict | None:
     """The incident for the first active QueueLatencyOverSLO in `payload`, or None.
 
     `payload` is the API v2 list or a webhook body ({"status", "alerts": [...]}); `grafana_url` is
-    a checked base URL (parse_grafana_url). Only checked values and fixed texts reach the result.
+    a checked base URL (parse_grafana_url); `environment` and `version` are the values the caller
+    expects (checked by parse_field). The payload's environment and version are accepted only when
+    they equal these, so every value in the result is a fixed text, a parsed time or a caller value.
     """
     if isinstance(payload, dict) and payload.get("status") == "firing":
         payload = payload.get("alerts")
@@ -127,8 +132,8 @@ def parse(payload, grafana_url: str) -> dict | None:
         started = _time(alert.get("startsAt"))
         checks = {
             "startsAt": started,
-            "environment": _field(annotations.get("environment")),
-            "version": _field(annotations.get("version")),
+            "environment": _same(annotations.get("environment"), environment),
+            "version": _same(annotations.get("version"), version),
             "dashboard_url": _dashboard(annotations.get("dashboard_url"), grafana_url),
             "summary": SUMMARY if annotations.get("summary") == SUMMARY else None,
             "owner": OWNER if annotations.get("owner") == OWNER else None,
@@ -149,8 +154,17 @@ def parse(payload, grafana_url: str) -> dict | None:
     return None
 
 
-def _field(value) -> str | None:
-    return value if isinstance(value, str) and FIELD_VALUE.fullmatch(value) else None
+def parse_field(value: str, name: str) -> str:
+    """An --environment or --version argument under #312's rule, or Refused."""
+    if not FIELD_VALUE.fullmatch(value):
+        raise Refused(f"{name} must be 1 to 64 characters from A-Z a-z 0-9 . _ + -")
+    return value
+
+
+def _same(value, expected: str) -> str | None:
+    # A canary or an instruction can match #312's character rule, so a format check is not enough:
+    # the payload's value is accepted only when it equals what the caller expects.
+    return expected if isinstance(value, str) and value == expected else None
 
 
 def _dashboard(value, base: str) -> str | None:
@@ -192,12 +206,16 @@ def main(argv=None, *, fetch_alerts=fetch, clock=time.monotonic, sleep=time.slee
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("address", help="http://127.0.0.1:<port>, or http://alertmanager:<port> inside the stack network")
     parser.add_argument("--grafana-url", required=True, help="Grafana base URL; the alert's dashboard_url must start with it")
+    parser.add_argument("--environment", required=True, help="the environment the alert must name (for example dev)")
+    parser.add_argument("--version", required=True, help="the version the alert must name")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="seconds to wait (default 600)")
     parser.add_argument("--out", default="incident.json", help="where to write the file (default incident.json)")
     args = parser.parse_args(argv)
     try:
         host, port = parse_address(args.address)
         grafana_url = parse_grafana_url(args.grafana_url)
+        environment = parse_field(args.environment, "--environment")
+        version = parse_field(args.version, "--version")
     except Refused as error:
         print(f"refused: {error}", file=sys.stderr)
         return 2
@@ -207,7 +225,7 @@ def main(argv=None, *, fetch_alerts=fetch, clock=time.monotonic, sleep=time.slee
     deadline = clock() + args.timeout
     while True:
         try:
-            incident = parse(fetch_alerts(host, port), grafana_url)
+            incident = parse(fetch_alerts(host, port), grafana_url, environment, version)
         except Unreachable:
             print("Alertmanager is unreachable", file=sys.stderr)
             return 2
