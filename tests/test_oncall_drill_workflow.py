@@ -242,6 +242,15 @@ def test_the_report_job_scans_every_other_jobs_log():
     assert '.name != "report"' in TEXT  # the report job's own log is the only one left out
 
 
+def test_the_report_job_fetches_logs_with_escape_sequences_and_fails_closed_on_an_empty_one():
+    # Run 44091359362: without the flag gh printed nothing for every job log, so the scan read empty files.
+    fetches = [line for line in TEXT.splitlines() if "actions/jobs/$id/logs" in line]
+    assert len(fetches) == 1
+    assert "gh api --allow-escape-sequences " in fetches[0]
+    assert "test -s" in fetches[0] and "fetch=1" in fetches[0]
+    assert 'if [ "$fetch" -ne 0 ] && [ "$scan" -eq 0 ]; then scan=2; fi' in TEXT
+
+
 def test_the_scripts_the_workflow_calls_exist():
     for name in set(re.findall(r"observability/drill/[A-Za-z_]+\.(?:py|sh|mjs)", TEXT)):
         assert (ROOT / name).is_file(), name
