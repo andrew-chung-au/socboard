@@ -1,0 +1,163 @@
+# How to use this file
+#
+# observability/CONTRACT.md is the document people read and change first. This file is its machine
+# copy: a change to a name or value goes to CONTRACT.md, and this file follows it in the same pull
+# request. Tests read this file for names and values instead of copying them by hand
+# (tests/test_observability_contract.py fails, naming the first difference, when the two disagree).
+#
+# Prose cells of the tables (parent, link, descriptions, "when") are copied as the contract words them.
+# The canary strings are not here: CONTRACT.md section 8 is the only list, and
+# tests/observability_support.py reads it from there.
+
+# Section 1. The telemetry resource.
+resource_attributes:
+  - name: service.name
+    component: app
+    type: string
+    values: [socboard]
+    set_from: fixed in code
+  - name: service.name
+    component: probe
+    type: string
+    values: [socboard-probe]
+    set_from: fixed in the probe
+  - name: deployment.environment.name
+    component: app
+    type: string
+    description: for example dev, ci
+    set_from: OTEL_RESOURCE_ATTRIBUTES
+  - name: service.version
+    component: app
+    type: string
+    description: the image or commit version
+    set_from: OTEL_RESOURCE_ATTRIBUTES
+
+# Section 2. Metrics.
+metrics:
+  - name: socboard.ingest.alerts
+    type: counter
+    unit: "{alert}"
+    labels:
+      outcome: [accepted, refused]
+    prometheus_names: [socboard_ingest_alerts_total]
+  - name: socboard.alert.time_to_queue
+    type: histogram
+    unit: s
+    labels: {}
+    bucket_bounds: [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30]
+    prometheus_names:
+      - socboard_alert_time_to_queue_seconds_bucket
+      - socboard_alert_time_to_queue_seconds_sum
+      - socboard_alert_time_to_queue_seconds_count
+  - name: socboard.probe.time_to_queue
+    type: histogram
+    unit: s
+    labels: {}
+    bucket_bounds: [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30]
+    prometheus_names:
+      - socboard_probe_time_to_queue_seconds_bucket
+      - socboard_probe_time_to_queue_seconds_sum
+      - socboard_probe_time_to_queue_seconds_count
+
+# Section 3. Spans and the attributes they may carry.
+spans:
+  - name: POST /api/alerts
+    kind: server
+    parent: "the caller's traceparent, if any"
+    link: none
+    attributes: []
+  - name: ingest.alert
+    kind: internal
+    parent: the server span above
+    link: none
+    attributes: [socboard.alert.severity, socboard.case.id]
+  - name: queue.first_seen
+    kind: internal
+    parent: none (its own trace)
+    link: a link to the span context of ingest.alert
+    attributes: [socboard.alert.severity, socboard.case.id]
+
+span_attributes:
+  - name: socboard.alert.severity
+    type: string
+    values: [Low, Medium, High, Critical]
+  - name: socboard.case.id
+    type: string
+    description: "the public case id exactly as the API returns it, an opaque string (openapi.yaml)"
+
+# Section 4. Logs: one JSON object per line.
+log_fields:
+  - name: timestamp
+    type: string
+    description: "UTC time, RFC 3339"
+  - name: level
+    type: string
+    values: [DEBUG, INFO, WARNING, ERROR]
+  - name: logger
+    type: string
+    description: "the logger's name, a fixed dotted name in the code"
+  - name: event
+    type: string
+    description: one of the events below
+  - name: trace_id
+    type: string
+    description: "32 lower-case hex characters (section 5); left out of the line when no span is active"
+  - name: span_id
+    type: string
+    description: "16 lower-case hex characters; left out of the line when no span is active"
+  - name: service.name
+    type: string
+    values: [socboard]
+
+log_events:
+  - name: alert.ingested
+    when: the ingest accepted an alert
+    extra_fields: []
+  - name: alert.first_in_queue
+    when: the first queue read returned the case
+    extra_fields: []
+
+# Section 6. The alert. `expression` and each annotation `value` are what observability/alerts/queue_latency.yml
+# holds (a test checks the two files agree); CONTRACT.md words the expression as a meaning.
+alert:
+  name: QueueLatencyOverSLO
+  for: 2m
+  labels:
+    severity: page
+    service: socboard
+  expression: >-
+    histogram_quantile(0.95, sum by (le) (rate(socboard_probe_time_to_queue_seconds_bucket[5m]))) > 5
+    and
+    sum(increase(socboard_probe_time_to_queue_seconds_count[5m])) >= 20
+  annotations:
+    - name: summary
+      content: one fixed sentence saying the 5-second promise is missed
+      source: written in the rule
+      value: A new alert took more than 5 seconds to show in the SOCBoard queue (95th percentile of the probe over 5 minutes).
+    - name: environment
+      content: the deployment.environment.name value
+      source: the series' resource attributes
+      value: '{{ with query `target_info{job="socboard-probe"}` }}{{ (index . 0).Labels.deployment_environment_name }}{{ end }}'
+    - name: version
+      content: the service.version value
+      source: the series' resource attributes
+      value: '{{ with query `target_info{job="socboard-probe"}` }}{{ (index . 0).Labels.service_version }}{{ end }}'
+    - name: owner
+      content: the team or person to page
+      source: written in the rule
+      value: socboard on-call (the maintainer)
+    - name: dashboard_url
+      content: a link to the Grafana dashboard
+      source: written in the rule
+      value: http://localhost:3000/d/socboard-queue-latency
+
+# Section 7. The Alertmanager payload fields the hand-off script reads, and no others.
+alertmanager_payload:
+  - field: status
+    meaning: firing or resolved
+  - field: alerts[].labels.alertname
+    meaning: the alert's name, matched against QueueLatencyOverSLO
+  - field: alerts[].annotations
+    meaning: the five annotations of section 6
+  - field: alerts[].startsAt
+    meaning: when the alert began firing, RFC 3339
