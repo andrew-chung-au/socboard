@@ -63,4 +63,5 @@ none
 
 ## Follow-ups for the next session
 
-- After the maintainer applies the three protected diffs, a run with screenshots produces the artifact; commit it once under `_docs/evidence/observability/<date>/` with `manifest.py build`.
+- Done: the maintainer applied the workflow and `AGENTS.md` diffs (commit 08e775d); run 44027949931 produced the artifact; it is committed once under `_docs/evidence/observability/2026-11-17/` with its manifest. Not applied: the Makefile diff (F-293-8), so `make observability-up` does not exist on the branch yet.
+- The proof of #295 failed once on the pull request run and passed on the re-run of the same commit (F-293-9): worth a look by the DevOps lane.
