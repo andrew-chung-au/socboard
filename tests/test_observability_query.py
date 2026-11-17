@@ -21,7 +21,7 @@ spec.loader.exec_module(query)
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 OTHER_ID = "00f067aa0ba902b700f067aa0ba902b7"
-URLS = {"tempo": "http://tempo", "loki": "http://loki", "prometheus": "http://prom", "alertmanager": "http://am", "collector": "http://coll"}
+URLS = {"tempo": "http://tempo", "loki": "http://loki", "prometheus": "http://prom", "alertmanager": "http://am", "grafana": "http://graf", "collector": "http://coll"}
 
 
 def tempo_trace(names=("ingest.alert",)):
@@ -179,10 +179,10 @@ def test_the_loki_query_asks_for_the_trace_id_and_the_label_split():
 def test_ready_waits_for_each_store_and_names_the_late_ones():
     clock, lines = Clock(), []
     assert query.ready(URLS, 120.0, lines.append, Stores(), clock.sleep, clock.monotonic) == 0
-    assert lines == ["tempo: ready", "loki: ready", "prometheus: ready", "alertmanager: ready", "collector: ready"]
+    assert lines == ["tempo: ready", "loki: ready", "prometheus: ready", "alertmanager: ready", "grafana: ready", "collector: ready"]
     clock, lines = Clock(), []
     assert query.ready(URLS, 10.0, lines.append, Stores(ready=503), clock.sleep, clock.monotonic) == 1
-    assert lines[-1] == "not ready in time: tempo, loki, prometheus, alertmanager, collector" and "tempo: not ready (HTTP 503)" in lines
+    assert lines[-1] == "not ready in time: tempo, loki, prometheus, alertmanager, grafana, collector" and "tempo: not ready (HTTP 503)" in lines
 
 
 def test_the_real_fetch_sends_the_urls_and_headers_and_reads_the_answer():
@@ -303,3 +303,88 @@ def test_a_bad_canary_exits_2_before_any_request(canary, capsys):
     stores = LeakStores()
     assert query.main(["absent", TRACE_ID, canary], urls=URLS, get=stores) == 2
     assert stores.requests == [] and "refused" in capsys.readouterr().err
+
+
+# --- grafana: what Grafana made of its provisioning (#293) -----------------------------------------------
+
+TOKEN = "YWRtaW46c3ludGhldGljLXBhc3N3b3Jk"  # base64 of admin:synthetic-password
+
+
+class GrafanaStores:
+    """A fake Grafana: signed-in requests see the provisioned state, anonymous ones get 401."""
+
+    def __init__(self, datasources=None, health=None, dashboard=None, anonymous=401):
+        self.datasources = datasources if datasources is not None else [{"uid": "prometheus", "type": "prometheus"}, {"uid": "tempo", "type": "tempo"}, {"uid": "loki", "type": "loki"}]
+        self.health = health or {}
+        self.dashboard = dashboard if dashboard is not None else (200, json.dumps({"dashboard": {"panels": [{}] * 5}, "meta": {"provisioned": True}}).encode())
+        self.anonymous, self.requests = anonymous, []
+
+    def __call__(self, url, headers):
+        self.requests.append((url, dict(headers)))
+        signed_in = headers.get("Authorization") == f"Basic {TOKEN}"
+        path = url.removeprefix("http://graf")
+        if path.startswith("/api/dashboards/uid/"):
+            return self.dashboard if signed_in else (self.anonymous, b"")
+        if not signed_in:
+            return 401, b""
+        if path == "/api/datasources":
+            return 200, json.dumps(self.datasources).encode()
+        for uid in ("prometheus", "tempo", "loki"):
+            if path == f"/api/datasources/uid/{uid}/health":
+                return self.health.get(uid, (200, b'{"status": "OK", "message": "ok"}'))
+        return 404, b""
+
+
+def run_grafana(stores, deadline=60.0):
+    clock, lines = Clock(), []
+    code = query.grafana("http://graf", TOKEN, deadline, lines.append, stores, clock.sleep, clock.monotonic)
+    return code, lines, clock
+
+
+def test_a_provisioned_grafana_passes_and_signs_in_with_basic_auth():
+    stores = GrafanaStores()
+    code, lines, clock = run_grafana(stores)
+    assert code == 0 and clock.sleeps == []
+    assert lines == ["grafana: the three datasources answer, the dashboard is provisioned with its five panels, and anonymous access is refused"]
+    assert all(h == {"Authorization": f"Basic {TOKEN}"} for u, h in stores.requests if "datasources" in u)
+    assert stores.requests[-1] == ("http://graf/api/dashboards/uid/socboard-alert-to-queue", {})  # the last request is the anonymous one
+
+
+@pytest.mark.parametrize(
+    ("stores", "expected"),
+    [
+        (GrafanaStores(datasources=[{"uid": "prometheus", "type": "prometheus"}, {"uid": "loki", "type": "loki"}]), "grafana: datasource tempo: missing or not of type tempo"),
+        (GrafanaStores(datasources=[{"uid": "prometheus", "type": "prometheus"}, {"uid": "tempo", "type": "jaeger"}, {"uid": "loki", "type": "loki"}]), "grafana: datasource tempo: missing or not of type tempo"),
+        (GrafanaStores(health={"loki": (200, b'{"status": "ERROR", "message": "no"}')}), "grafana: datasource loki: its health check does not say OK"),
+        (GrafanaStores(health={"loki": (500, b"")}), "grafana: datasource loki: its health check does not say OK (HTTP 500)"),
+        (GrafanaStores(dashboard=(404, b"")), "grafana: dashboard socboard-alert-to-queue: not found (HTTP 404)"),
+        (GrafanaStores(dashboard=(200, json.dumps({"dashboard": {"panels": [{}] * 4}, "meta": {"provisioned": True}}).encode())), "grafana: dashboard socboard-alert-to-queue: 4 panels, not 5"),
+        (GrafanaStores(dashboard=(200, json.dumps({"dashboard": {"panels": [{}] * 5}, "meta": {"provisioned": False}}).encode())), "grafana: dashboard socboard-alert-to-queue: not provisioned from a file"),
+        (GrafanaStores(anonymous=200), "grafana: anonymous access: the dashboard answered HTTP 200 without a login, not 401"),
+    ],
+)
+def test_each_refused_state_of_grafana_fails_and_says_which(stores, expected):
+    code, lines, clock = run_grafana(stores, deadline=4.0)
+    assert code == 1 and any(line.startswith(expected) for line in lines), lines
+    assert sum(clock.sleeps) >= 4.0  # it polled to its deadline first, as the other checks do
+
+
+def test_grafana_that_is_not_there_is_reported_not_crashed():
+    code, lines, _ = run_grafana(lambda url, headers: (0, b""), deadline=2.0)
+    assert code == 1 and lines == ["grafana: datasources: cannot list them (no answer)"]
+
+
+def test_the_token_is_read_from_the_secrets_file_and_never_printed(tmp_path, capsys):
+    secrets_file = tmp_path / "observability.secrets"
+    secrets_file.write_text("OTHER=x\nSTACK_GRAFANA_ADMIN_PASSWORD=synthetic-password\n", encoding="utf-8")
+    assert query.grafana_token(str(secrets_file)) == TOKEN
+    assert query.grafana_token(str(tmp_path / "missing")) is None
+    secrets_file.write_text("OTHER=x\n", encoding="utf-8")
+    assert query.grafana_token(str(secrets_file)) is None
+    assert query.main(["grafana", "--secrets", str(secrets_file)], urls={**URLS}, get=GrafanaStores()) == 2
+    assert "refused" in capsys.readouterr().err
+    secrets_file.write_text("STACK_GRAFANA_ADMIN_PASSWORD=synthetic-password\n", encoding="utf-8")
+    clock = Clock()
+    assert query.main(["grafana", "--secrets", str(secrets_file)], urls={**URLS}, get=GrafanaStores(), sleep=clock.sleep, clock=clock.monotonic) == 0
+    out = capsys.readouterr().out
+    assert "synthetic-password" not in out and TOKEN not in out

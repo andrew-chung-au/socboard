@@ -42,6 +42,9 @@ compose up --build --detach --wait --wait-timeout 300
 echo "--- waiting for readiness"
 uv run --locked python observability/ci/query.py ready
 
+echo "--- Grafana's provisioning (datasources, the dashboard, no anonymous access)"
+uv run --locked python observability/ci/query.py grafana
+
 echo "--- memory used by each container (the six observability services stay within 1.5 GiB, #292)"
 docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
 

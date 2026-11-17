@@ -121,6 +121,9 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${STACK_GRAFANA_ADMIN_PASSWORD:?STACK_GRAFANA_ADMIN_PASSWORD is required (make observability-up makes it)}
+      # Grafana 13 downloads a set of plugins at start-up; this stack needs none (the three datasources are built in),
+      # and the downloads fill the volume and the memory limit (the first run showed it).
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"

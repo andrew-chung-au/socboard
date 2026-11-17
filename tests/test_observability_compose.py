@@ -100,6 +100,8 @@ def problems(doc):
         found.append("grafana: anonymous access is not switched off")
     if "${STACK_GRAFANA_ADMIN_PASSWORD:?" not in str(grafana.get("GF_SECURITY_ADMIN_PASSWORD")):
         found.append("grafana: the admin password is not the required STACK_GRAFANA_ADMIN_PASSWORD (no default, no literal)")
+    if str(grafana.get("GF_PLUGINS_PREINSTALL_DISABLED")).lower() != "true":
+        found.append("grafana: plugin preinstall is not disabled (it downloads at start-up and fills the volume)")
     if not (services.get("grafana") or {}).get("healthcheck"):
         found.append("grafana: no healthcheck (make observability-up waits for it)")
     command = " ".join(map(str, (services.get("prometheus") or {}).get("command") or []))
@@ -137,6 +139,7 @@ def test_the_real_overlay_passes_every_rule():
         (lambda d: d["services"]["grafana"]["environment"].pop("GF_SECURITY_ADMIN_PASSWORD"), "admin password"),
         (lambda d: d["services"]["grafana"]["environment"].update({"GF_SECURITY_ADMIN_PASSWORD": "admin"}), "admin password"),
         (lambda d: d["services"]["grafana"].pop("healthcheck"), "healthcheck"),
+        (lambda d: d["services"]["grafana"]["environment"].pop("GF_PLUGINS_PREINSTALL_DISABLED"), "plugin preinstall"),
         (lambda d: d["services"]["tempo"].pop("mem_limit"), "no mem_limit"),
         (lambda d: d["services"]["tempo"].update({"mem_limit": "2g"}), "may use"),
         (lambda d: d["services"]["tempo"].pop("user"), "root"),
