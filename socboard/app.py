@@ -29,7 +29,7 @@ from typing import Literal
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 
-from socboard import __version__, database, settings, spa
+from socboard import __version__, database, settings, spa, telemetry
 from socboard.auth import (
     add_login_route,
     create_users_router,
@@ -73,11 +73,13 @@ def create_app(environ: Mapping[str, str] | None = None) -> FastAPI:
     login_guard = resolve_login_guard(source)
     ingest_limiter = resolve_ingest_limiter(source)
     database_state = DatabaseState(database.resolve_url(source))
+    shutdown_telemetry = telemetry.setup(source)  # after the checks above, so a refused start leaves no threads
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
         database_state.dispose()
+        shutdown_telemetry()
 
     # No interactive docs and no served schema: the contract is openapi.yaml.
     app = FastAPI(
