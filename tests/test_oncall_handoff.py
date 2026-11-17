@@ -34,7 +34,7 @@ VERSION = "1.2.3+abc"
 
 
 def parse_alerts(payload, grafana=GRAFANA, environment=ENVIRONMENT, version=VERSION):
-    return parse_alerts(payload, grafana, environment, version)
+    return handoff.parse(payload, grafana, environment, version)
 
 
 def rule_of_the_alert():
