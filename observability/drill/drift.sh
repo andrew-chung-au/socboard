@@ -33,9 +33,6 @@ if ! git apply --check "$root/observability/drill/defect.patch"; then
 fi
 git apply "$root/observability/drill/defect.patch"
 echo "drift: the defect applies; running the existing Python suite with it (it must pass)"
-# The two tests deselected here inspect the patch against the unpatched files; they cannot hold on a copy
-# that already carries it, and the apply check above does their job.
-uv run --locked pytest -q \
-  --deselect tests/test_oncall_drill.py::test_defect_patch_applies_to_the_current_files \
-  --deselect tests/test_oncall_drill.py::test_the_patch_check_fails_when_cases_py_drifts
+# The whole suite, as on a drill branch: tests/test_oncall_drill.py checks a tree that carries the defect too.
+uv run --locked pytest -q
 echo "drift: the existing suite does not catch the defect, as the drill needs"
