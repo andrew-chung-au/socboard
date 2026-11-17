@@ -1,0 +1,46 @@
+# Loki as one process with local storage (#292; from #340's skeleton, settled by run 44003479301 on
+# grafana/loki 3.7.10). Structured metadata needs schema v13 on the tsdb index and
+# `allow_structured_metadata`; the native OTLP endpoint stores a log record's trace id as structured
+# metadata, which observability/ci/query.py checks.
+# Retention: 24 hours, by the compactor. Settled: Loki 3.7.10 starts with the compactor block below
+# (run 44007243871); the deletion after 24 hours has not been watched. The disk limit is the named volume's size (compose.observability.yaml).
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+limits_config:
+  allow_structured_metadata: true
+  retention_period: 24h
+
+analytics:
+  reporting_enabled: false

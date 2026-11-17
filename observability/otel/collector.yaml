@@ -1,0 +1,96 @@
+# The collector of the observability overlay (#292; from the walking skeleton of #340, whose first run
+# settled each exporter and path: `socboard observability` run 44003479301, 2026-11-17).
+# OTLP over HTTP in; traces to Tempo, logs to Loki's native OTLP endpoint, metrics to Prometheus by remote
+# write. The `transform/allowlist` processor is the second line of defence after the app's own allow-list
+# (#289): of the attributes that reach the collector, only the names of observability/CONTRACT.md leave it.
+# It does not reach an exemplar's own attributes, a span's status message, or the names of spans, events,
+# links and metrics; the app sets those in code, from fixed words (CONTRACT sections 2 and 3).
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+processors:
+  # Keep only the contract's attribute names, on every signal and at every level (resource, scope, span,
+  # span event, log record, metric data point); anything else is dropped before an exporter sees it.
+  #   resource: service.name, deployment.environment.name, service.version   (contract section 1)
+  #   span:     socboard.alert.severity, socboard.case.id                      (section 3)
+  #   log:      event                                                          (section 4)
+  #   datapoint: outcome                                                       (section 2)
+  # A new name is a change to the contract first (its own pull request), then here and in the test that
+  # reads this file (tests/test_observability_compose.py).
+  # `error_mode: ignore` keeps a statement that cannot run on one item from stopping the pipeline; the
+  # statements below have no such case, and the canary check in observability/ci/check.sh would show a
+  # leak.
+  transform/allowlist:
+    error_mode: ignore
+    trace_statements:
+      - context: resource
+        statements:
+          - keep_keys(attributes, ["service.name", "deployment.environment.name", "service.version"])
+      - context: scope
+        statements:
+          - delete_matching_keys(attributes, ".*")
+      - context: span
+        statements:
+          - keep_keys(attributes, ["socboard.alert.severity", "socboard.case.id"])
+      - context: spanevent
+        statements:
+          - delete_matching_keys(attributes, ".*")
+    metric_statements:
+      - context: resource
+        statements:
+          - keep_keys(attributes, ["service.name", "deployment.environment.name", "service.version"])
+      - context: scope
+        statements:
+          - delete_matching_keys(attributes, ".*")
+      - context: datapoint
+        statements:
+          - keep_keys(attributes, ["outcome"])
+    log_statements:
+      - context: resource
+        statements:
+          - keep_keys(attributes, ["service.name", "deployment.environment.name", "service.version"])
+      - context: scope
+        statements:
+          - delete_matching_keys(attributes, ".*")
+      - context: log
+        statements:
+          - keep_keys(attributes, ["event"])
+
+exporters:
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+    tls:
+      insecure: true
+  # Loki's native OTLP endpoint is /otlp; the exporter adds /v1/logs.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+  # Remote write sends the histogram's exemplars with the data point.
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+    tls:
+      insecure: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/allowlist]
+      exporters: [otlphttp/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [transform/allowlist]
+      exporters: [otlphttp/loki]
+    metrics:
+      receivers: [otlp]
+      processors: [transform/allowlist]
+      exporters: [prometheusremotewrite]

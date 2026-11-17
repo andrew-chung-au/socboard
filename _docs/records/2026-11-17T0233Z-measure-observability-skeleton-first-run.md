@@ -1,5 +1,7 @@
 # Observability skeleton: the first run, and what it settled
 
+> The configs this run used were in `observability/ci/skeleton/`. #292 moved them into `compose.observability.yaml` and `observability/{otel,tempo,loki,prometheus}/` (history: `git log --follow`).
+
 Recorded once, when the run happened (`.kiro/steering/evidence-and-steps.md`, rule 2). Issue #340.
 
 - **The run:** `socboard observability` run 44003479301, on 2026-11-17, branch `install-observability-workflow` at 0b3ad94 (the maintainer's commit that installs the workflow, pull request 361). Result: success, about 50 seconds. Link: https://github.com/andrew-chung-au/socboard/actions/runs/44003479301

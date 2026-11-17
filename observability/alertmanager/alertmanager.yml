@@ -1,0 +1,13 @@
+# Alertmanager for the observability overlay (#292). `group_wait` is 5 seconds, so the first
+# notification of a firing alert leaves quickly. The only receiver is a placeholder with no
+# destination: #297 adds the route to the on-call agent (a script that reads Alertmanager's alerts) and
+# edits this file, not the compose file.
+route:
+  receiver: placeholder
+  group_by: ["alertname"]
+  group_wait: 5s
+  group_interval: 1m
+  repeat_interval: 1h
+
+receivers:
+  - name: placeholder
