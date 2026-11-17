@@ -1,6 +1,6 @@
 """Synthetic probe (#294): ingest one synthetic alert, poll the queue, report the time to appear.
 
-    .venv/bin/python scripts/observability_probe.py [--count N] [--interval S] <url>
+    .venv/bin/python scripts/observability_probe.py [--count N] [--interval S] [--trace-id <32 hex>] <url>
 
 Each cycle: sign in as `lead`, one queue read (so the app's watch rule sees a watched board), one
 ingest with a new `traceparent` (sampled), then a queue read every second, with the same trace id,
@@ -17,6 +17,9 @@ the cycle's trace id, under the resource `service.name=socboard-probe` (plus wha
 unset or empty nothing is created: the default records nothing, and the OpenTelemetry packages are
 not imported. The tests pass a fake, or the SDK's in-memory reader.
 
+`--trace-id` (#295) makes the one cycle use the given trace id instead of a random one; it needs
+`--count 1`, and a bad value is refused (exit 2) before any request.
+
 The URL is plain `http` on `localhost`, `127.0.0.1` or `::1`, or on one of the stack's service names
 (`STACK_SERVICE_NAMES`, from `compose.yaml`, for a run inside the stack network), with no path. The
 service names are a fixed list, not a setting: a variable could point the credentials at any host.
@@ -31,6 +34,7 @@ argument, URL or variable (before any request).
 import argparse
 import math
 import os
+import re
 import secrets
 import sys
 import time
@@ -65,6 +69,7 @@ PROBE_SERVICE_NAME = "socboard-probe"
 HISTOGRAM_NAME = "socboard.probe.time_to_queue"
 BUCKET_BOUNDS = (0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30)  # seconds
 ENDPOINT_VARIABLE = "OTEL_EXPORTER_OTLP_ENDPOINT"
+TRACE_ID = re.compile(r"[0-9a-f]{32}")
 
 
 def build_recorder(environ: Mapping[str, str], reader=None) -> tuple[Recorder | None, Callable[[], None]]:
@@ -178,9 +183,13 @@ def cycle(
     say: Callable[[str], None],
     sleep: Callable[[float], None],
     clock: Callable[[], float],
+    trace_id: str | None = None,
 ) -> tuple[int, int]:
-    """One cycle. (exit code 0 or 1, seconds to wait before the next cycle or 0 for the interval)."""
-    trace_id = secrets.token_hex(16)
+    """One cycle. (exit code 0 or 1, seconds to wait before the next cycle or 0 for the interval).
+
+    `trace_id` is the caller's choice (the CI proof of #295 chooses it); None draws a random one.
+    """
+    trace_id = trace_id or secrets.token_hex(16)
     trace = {"traceparent": f"00-{trace_id}-{secrets.token_hex(8)}-01"}
     token = smoke.step_login(limited(client), password)
     read_queue(client, token)  # the watch read: the app sees a watched board before the ingest
@@ -227,13 +236,14 @@ def run(
     say: Callable[[str], None],
     sleep: Callable[[float], None],
     clock: Callable[[], float],
+    trace_id: str | None = None,
 ) -> int:
     code = 0
     for number in range(count):
         began = clock()
         wait = 0
         try:
-            result, wait = cycle(client, password, key, record, say, sleep, clock)
+            result, wait = cycle(client, password, key, record, say, sleep, clock, trace_id)
             code = max(code, result)
         except smoke.StepFailed as failure:
             say(f"cycle failed ({failure})")
@@ -273,7 +283,11 @@ def main(
     parser.add_argument("url", help="http://127.0.0.1:<port>, or http://app:8000 inside the stack network")
     parser.add_argument("--count", type=positive_int, default=1, help="cycles to run (default 1)")
     parser.add_argument("--interval", type=non_negative, default=5.0, help="seconds between cycle starts (default 5)")
+    parser.add_argument("--trace-id", help="use this trace id (32 lower-case hex characters) for the one cycle, as the CI proof does (#295)")
     args = parser.parse_args(argv)  # a bad argument exits 2
+    if args.trace_id is not None and (args.count != 1 or not TRACE_ID.fullmatch(args.trace_id) or set(args.trace_id) == {"0"}):
+        print("observability probe: refused: --trace-id is 32 lower-case hex characters, not all zeros, and needs --count 1", file=sys.stderr)
+        return 2
     source = os.environ if environ is None else environ
     try:
         scheme, host, port, prefix = parse_url(args.url)
@@ -291,7 +305,7 @@ def main(
     client = smoke.Client(scheme, host, port, prefix, deadline=0.0)
     say = lambda line: print(line, flush=True)  # noqa: E731
     try:
-        return run(client, password, key, args.count, args.interval, record or (lambda delay, trace_id: None), say, sleep, clock)
+        return run(client, password, key, args.count, args.interval, record or (lambda delay, trace_id: None), say, sleep, clock, args.trace_id)
     finally:
         shutdown()
 

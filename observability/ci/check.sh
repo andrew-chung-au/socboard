@@ -56,7 +56,21 @@ uv run --locked python observability/emitter.py --trace-id "$TRACE_ID" --canary 
 echo "--- looking for the trace id, and for the canary that must not be there"
 uv run --locked python observability/ci/query.py absent "$TRACE_ID" "$CANARY"
 
-# Reviewer evidence (#293): with SCREENSHOT_DIR set (the workflow sets it where it also has a browser and
+echo "--- the proof: one trace id in the trace, the logs and the exemplars, and no canary stored (#295)"
+mkdir -p .scratch/observability
+proof=0
+logcheck=0
+uv run --locked python scripts/observability_check.py run --report .scratch/observability/check.json || proof=$?
+compose logs --no-color otel-collector > .scratch/observability/collector.log 2>&1 || true
+uv run --locked python scripts/observability_check.py collector-log .scratch/observability/collector.log --report .scratch/observability/check.json || logcheck=$?
+# The redacted report goes to the job log between marker lines and a table to the step summary (no artifact upload).
+uv run --locked python scripts/observability_check.py show --report .scratch/observability/check.json || logcheck=$(( logcheck > 1 ? logcheck : 1 ))
+# Exit with the worse (larger non-zero) code of the two checks.
+if [ "$logcheck" -gt "$proof" ]; then
+  proof=$logcheck
+fi
+
+# Reviewer evidence (#293), after the proof of #295 so a failed proof does not hide the screenshots: with SCREENSHOT_DIR set (the workflow sets it where it also has a browser and
 # uploads the directory as an artifact), the real probe runs against the real app for about 40 seconds,
 # so the dashboard has points to draw, and Grafana's dashboard, one trace and its log lines are
 # photographed. Left unset, as it is on a developer's machine, this is skipped.
@@ -83,3 +97,6 @@ if [ -n "${SCREENSHOT_DIR:-}" ]; then
   printf '{"trace_id": "%s", "from_ms": %s, "to_ms": %s}\n' "$PROBE_TRACE" "$FROM_MS" "$TO_MS" > "$SCREENSHOT_DIR/window.json"
   ls -l "$SCREENSHOT_DIR"
 fi
+
+# The proof's result is the script's result.
+exit "$proof"
