@@ -1,0 +1,43 @@
+# The collector of the walking skeleton (#340): OTLP over HTTP in; traces to Tempo, logs to Loki's
+# native OTLP endpoint, metrics to Prometheus by remote write. No processor: #292 adds the allow-list.
+# VERIFY: each exporter and path below against the run of `socboard observability`; the pull request
+# records the ones that held.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+exporters:
+  # Tempo's own OTLP/HTTP receiver (tempo.yaml). VERIFY: path /v1/traces under this endpoint.
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+    tls:
+      insecure: true
+  # Loki's native OTLP endpoint is /otlp (the exporter adds /v1/logs). VERIFY: on this Loki version.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+  # Remote write sends the histogram's exemplars when the data point has them. VERIFY: exemplars arrive.
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+    tls:
+      insecure: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/tempo]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp/loki]
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheusremotewrite]
