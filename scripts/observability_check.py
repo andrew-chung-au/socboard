@@ -24,10 +24,19 @@
    names), Prometheus (series, label names, exemplars) for each canary of CONTRACT section 8.
 
 `collector-log FILE` searches the collector's own log (check.sh saves `docker compose logs` of the
-collector) for the canaries and adds the answer to the report.
+collector) for the canaries and adds the answer to the report. The log must hold a line of the collector
+(the `docker compose logs` prefix), or the answer is "cannot tell".
+
+`show [--report PATH]` prints the redacted report between two marker lines (the job log keeps the
+evidence without an artifact) and, when `GITHUB_STEP_SUMMARY` is set, appends a table of the result lines.
+
+A canary scan fails closed: an empty or cut answer (Loki at its line limit, a Tempo search at its limit,
+a trace the search listed that cannot be read, no `socboard_*` series, no log line of either run trace id)
+is "cannot tell", not "none found". Exemplars of every series are searched.
 
 It prints the trace id, one line per signal, and for a canary only its kind, never its value. The report
-(`--report`, default `.scratch/observability/check.json`) holds ids, names and times only. The base URL
+(`--report`, default `.scratch/observability/check.json`) holds ids, the known span names, digit-only
+times and the result lines, and no string copied from a store. The base URL
 must be plain `http` on the loopback with no path, or the script exits 2 before any request. Standard
 library only, apart from what the probe imports. Exit 0 when every check passed, 1 when one failed, 2 for
 a refused argument.
@@ -71,6 +80,9 @@ ALERT_HISTOGRAM = query.EXEMPLAR_METRIC  # socboard_alert_time_to_queue_seconds_
 PROBE_HISTOGRAM = "socboard_probe_time_to_queue_seconds_bucket"
 LOKI_HEADERS = {"X-Loki-Response-Encoding-Flags": "categorize-labels"}
 LOG_LIMIT = 5000
+TEMPO_LIMIT = 50
+KNOWN_SPANS = (SERVER_SPAN, INGEST_SPAN, QUEUE_SPAN)
+COLLECTOR_LINE = re.compile(r"^\S*otel-collector\S*\s+\|", re.MULTILINE)  # the prefix `docker compose logs` puts on each line
 ALL_STREAMS = '{service_name=~".+"}'
 ALL_SERIES = '{__name__=~".+"}'
 DEFAULT_URL = "http://127.0.0.1:8000"
@@ -120,6 +132,19 @@ def normal_id(value, size: int) -> str:
     return raw.hex() if len(raw) == size else ""
 
 
+def digits(value) -> str:
+    """`value` when it is a number or a string of ASCII digits, else "": nothing else of a store's answer goes in the report."""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9]{1,30}", value) else ""
+
+
+def number(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and abs(value) != float("inf") else None
+
+
 def spans_of(document) -> list[dict]:
     """Every span (a mapping with a name and a spanId) anywhere in a Tempo answer."""
     found: list[dict] = []
@@ -149,9 +174,9 @@ def tempo_trace(get: Fetch, base: str, trace_id: str):
     return get_json(get, f"{base}/api/traces/{trace_id}", {"Accept": "application/json"})
 
 
-def tempo_search(get: Fetch, base: str, traql: str, start: float, end: float):
+def tempo_search(get: Fetch, base: str, traql: str, start: float, end: float, limit: int = TEMPO_LIMIT):
     """(trace ids, None) or (None, why not)."""
-    params = {"q": traql, "start": str(int(start)), "end": str(int(end) + 1), "limit": "50"}
+    params = {"q": traql, "start": str(int(start)), "end": str(int(end) + 1), "limit": str(limit)}
     document, why = get_json(get, f"{base}/api/search?{urllib.parse.urlencode(params)}")
     if document is None:
         return None, why
@@ -178,7 +203,7 @@ def check_tempo(get: Fetch, base: str, trace_id: str, started: float, wall: floa
     ingest_id = normal_id(ingest.get("spanId"), 8)
     if normal_id(ingest.get("parentSpanId"), 8) != normal_id(server.get("spanId"), 8):
         return f"{INGEST_SPAN} is not a child of the server span"
-    seen["spans"] = [{"name": s["name"], "spanId": normal_id(s.get("spanId"), 8), "start": str(s.get("startTimeUnixNano", ""))} for s in spans]
+    seen["spans"] = [{"name": s["name"], "spanId": normal_id(s.get("spanId"), 8), "start": digits(s.get("startTimeUnixNano"))} for s in spans if s["name"] in KNOWN_SPANS]
     ids, why = tempo_search(get, base, f'{{ name = "{QUEUE_SPAN}" }}', started - 60, wall + 60)
     if ids is None:
         return f"no {QUEUE_SPAN} found ({why})"
@@ -211,6 +236,11 @@ def loki_lines(get: Fetch, base: str, selector: str, started: float, wall: float
     document, why = get_json(get, f"{base}/loki/api/v1/query_range?{urllib.parse.urlencode(params)}", LOKI_HEADERS)
     if document is None:
         return None, why
+    return loki_lines_of(document)
+
+
+def loki_lines_of(document):
+    """([(time ns, line, labels, metadata)], None) or (None, why not), from a query_range answer."""
     data = document.get("data") if isinstance(document, dict) else None
     results = data.get("result") if isinstance(data, dict) else None
     if not isinstance(results, list):
@@ -245,7 +275,7 @@ def check_loki(get: Fetch, base: str, trace_id: str, started: float, wall: float
     missing = [event for event in events if event not in found]
     if missing:
         return "no log line " + " or ".join(missing) + " with this trace id"
-    seen["lines"] = [{"time": ts, "event": event, "traceId": trace_id} for event, ts in found.items()]
+    seen["lines"] = [{"time": digits(ts), "event": event, "traceId": trace_id} for event, ts in found.items()]
     return None
 
 
@@ -263,7 +293,7 @@ def exemplar_ids(get: Fetch, base: str, metric: str, started: float, wall: float
         for exemplar in (each.get("exemplars") or []) if isinstance(each, dict) else []:
             labels = exemplar.get("labels") if isinstance(exemplar, dict) else None
             if isinstance(labels, dict) and isinstance(labels.get("trace_id"), str):
-                ids[labels["trace_id"]] = exemplar.get("timestamp")
+                ids[labels["trace_id"]] = number(exemplar.get("timestamp"))
     return ids, None
 
 
@@ -290,43 +320,73 @@ def scan_tempo(get, base, ids, canaries, started, wall):
     found, why = tempo_search(get, base, '{ resource.service.name = "socboard" }', started - 60, wall + 60)
     if found is None:
         return None, f"cannot search ({why})"
+    if len(found) >= TEMPO_LIMIT:
+        return None, f"cannot tell: the search reached its limit of {TEMPO_LIMIT} traces"
     wanted += [each for each in found if each not in wanted]
     for each in wanted:
         status, body = get(f"{base}/api/traces/{each}", {"Accept": "application/json"})
-        if status == 200:
-            bodies.append(body)
-        elif each in ids:
-            return None, f"cannot read a trace of the run (HTTP {status})" if status else "cannot read a trace of the run (no answer)"
+        if status != 200:
+            what = "a trace of the run" if each in ids else "a trace the search listed"
+            return None, f"cannot read {what} (HTTP {status})" if status else f"cannot read {what} (no answer)"
+        bodies.append(body)
     return sorted({kind for body in bodies for kind in kinds_in(body, canaries)}), None
 
 
-def scan_loki(get, base, canaries, started, wall):
+def scan_loki(get, base, canaries, started, wall, run_ids: Sequence[str] = ()):
+    """The kinds found in every line of the window (newest first, so a cut drops the oldest) and the label names.
+
+    Fails closed ("cannot tell") when the answer reaches LOG_LIMIT lines, and when its lines do not
+    include each trace id of the run: an empty or partial answer proves nothing.
+    """
     params = {"start": str(int((started - 60) * 1e9)), "end": str(int((wall + 60) * 1e9))}
-    every_line = {**params, "query": ALL_STREAMS, "limit": str(LOG_LIMIT), "direction": "forward"}
-    paths = [
-        f"/loki/api/v1/query_range?{urllib.parse.urlencode(every_line)}",
-        f"/loki/api/v1/labels?{urllib.parse.urlencode(params)}",
-    ]
+    every_line = {**params, "query": ALL_STREAMS, "limit": str(LOG_LIMIT), "direction": "backward"}
     found: set[str] = set()
-    for path in paths:
+    lines = None
+    for path in (f"/loki/api/v1/query_range?{urllib.parse.urlencode(every_line)}", f"/loki/api/v1/labels?{urllib.parse.urlencode(params)}"):
         status, body = get(f"{base}{path}", LOKI_HEADERS)
         if status != 200:
             return None, f"cannot read (HTTP {status})" if status else "cannot read (no answer)"
         found |= set(kinds_in(body, canaries))
-    return sorted(found), None
+        if lines is None:
+            document = query.parse(body)
+            lines, why = loki_lines_of(document) if document is not None else (None, "the answer is not JSON")
+            if lines is None:
+                return None, f"cannot read the log lines ({why})"
+    if found:
+        return sorted(found), None
+    if len(lines) >= LOG_LIMIT:
+        return None, f"cannot tell: the answer reached its limit of {LOG_LIMIT} lines"
+    absent = [each for each in dict.fromkeys(run_ids) if not any(each in line or each in str(labels) or each in str(meta) for _, line, labels, meta in lines)]
+    if absent:
+        return None, f"cannot tell: the answer holds no line of {len(absent)} of the run's {len(set(run_ids))} trace ids"
+    return [], None
 
 
 def scan_prometheus(get, base, canaries, started, wall):
+    """The kinds found in the series, the label names and the exemplars of every series.
+
+    Fails closed unless the series answer holds a `socboard_*` series.
+    """
     window = {"start": f"{started - 60:.3f}", "end": f"{wall + 60:.3f}"}
-    paths = [f"/api/v1/series?{urllib.parse.urlencode({**window, 'match[]': ALL_SERIES})}", f"/api/v1/labels?{urllib.parse.urlencode(window)}"]
-    paths += [f"/api/v1/query_exemplars?{urllib.parse.urlencode({**window, 'query': metric})}" for metric in (ALERT_HISTOGRAM, PROBE_HISTOGRAM)]
+    series_path = f"/api/v1/series?{urllib.parse.urlencode({**window, 'match[]': ALL_SERIES})}"
+    paths = [series_path, f"/api/v1/labels?{urllib.parse.urlencode(window)}"]
+    paths += [f"/api/v1/query_exemplars?{urllib.parse.urlencode({**window, 'query': metric})}" for metric in (ALL_SERIES, ALERT_HISTOGRAM, PROBE_HISTOGRAM)]
     found: set[str] = set()
+    named = False
     for path in paths:
         status, body = get(f"{base}{path}", {})
         if status != 200:
             return None, f"cannot read (HTTP {status})" if status else "cannot read (no answer)"
         found |= set(kinds_in(body, canaries))
-    return sorted(found), None
+        if path == series_path:
+            document = query.parse(body)
+            data = document.get("data") if isinstance(document, dict) else None
+            named = isinstance(data, list) and any(isinstance(each, dict) and str(each.get("__name__", "")).startswith("socboard_") for each in data)
+    if found:
+        return sorted(found), None
+    if not named:
+        return None, "cannot tell: the series answer holds no socboard_* series"
+    return [], None
 
 
 # ---- the traffic
@@ -361,6 +421,8 @@ def canary_traffic(url: str, password: str, key: str, canaries: Mapping[str, str
     case_id = parsed.get("id") if isinstance(parsed, dict) else None
     if isinstance(case_id, str) and case_id:
         send("note", 201, "POST", f"/api/cases/{urllib.parse.quote(case_id, safe='')}/notes", {"Authorization": f"Bearer {token}"}, {"text": canaries["case-note"]})
+    elif answer is not None:
+        problems.append("note: the ingest answer has no case id, so the note was not sent")
     send("failed sign-in", 401, "POST", "/api/login", None, {"username": smoke.LEAD_USERNAME, "password": canaries["password"]})
     refused = {**alert, "title": "SYNTHETIC refused alert", "description": "Refused: wrong key.", "asset": canaries.get("account-number", "probe-host")}
     send("ingest with a wrong key", 401, "POST", "/api/alerts", {"X-API-Key": canaries["ingest-key"]}, refused)
@@ -369,9 +431,19 @@ def canary_traffic(url: str, password: str, key: str, canaries: Mapping[str, str
 
 
 def run_probe(url: str, password: str, key: str, otlp: str, trace_id: str) -> int:
-    os.environ.setdefault(probe.ENDPOINT_VARIABLE, otlp)  # the OTLP exporter reads the process environment
-    environ = {smoke.PASSWORD_VARIABLE: password, smoke.KEY_VARIABLE: key, probe.ENDPOINT_VARIABLE: os.environ[probe.ENDPOINT_VARIABLE]}
-    return probe.main([url, "--trace-id", trace_id], environ)
+    """One probe cycle. The OTLP exporter reads the process environment, so for the run the endpoint is
+    the loopback store URL whatever the caller's environment says, and every other OTEL_EXPORTER_OTLP_*
+    variable (headers, a metrics-only endpoint, ...) is removed. The environment is restored after."""
+    saved = dict(os.environ)
+    try:
+        for name in [name for name in os.environ if name.startswith("OTEL_EXPORTER_OTLP_")]:
+            del os.environ[name]
+        os.environ[probe.ENDPOINT_VARIABLE] = otlp
+        environ = {smoke.PASSWORD_VARIABLE: password, smoke.KEY_VARIABLE: key, probe.ENDPOINT_VARIABLE: otlp}
+        return probe.main([url, "--trace-id", trace_id], environ)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
 
 
 # ---- the run
@@ -432,7 +504,7 @@ def check(
     tempo_ids = [trace_id, canary_trace_id] + ([tempo["queue_first_seen"]["traceId"]] if "queue_first_seen" in tempo else [])
     scans = {
         "tempo": scan_tempo(get, urls["tempo"], tempo_ids, canaries, started, wall()),
-        "loki": scan_loki(get, urls["loki"], canaries, started, wall()),
+        "loki": scan_loki(get, urls["loki"], canaries, started, wall(), [trace_id, canary_trace_id]),
         "prometheus": scan_prometheus(get, urls["prometheus"], canaries, started, wall()),
     }
     for store, (kinds, why) in scans.items():
@@ -466,6 +538,8 @@ def scan_collector_log(path: Path, canaries: Mapping[str, str]) -> tuple[list[st
         return None, "the collector log cannot be read"
     if not body.strip():
         return None, "the collector log is empty, so it proves nothing"
+    if not COLLECTOR_LINE.search(body.decode("utf-8", "replace")):
+        return None, "the collector log holds no line of the collector (an error text, not its log), so it proves nothing"
     return kinds_in(body, canaries), ""
 
 
@@ -488,6 +562,46 @@ def read_secrets(path: Path, environ: Mapping[str, str]) -> dict[str, str]:
     return values
 
 
+BEGIN_MARK = "----- observability report (redacted) begin -----"
+END_MARK = "----- observability report (redacted) end -----"
+
+
+def summary_table(results: Sequence) -> str:
+    rows = ["### Observability proof (#295)", "", "| Result | Line |", "| --- | --- |"]
+    for line in (str(each) for each in results):
+        rows.append(f"| {'FAIL' if line.startswith('FAIL') else 'ok'} | {line.replace('|', '/')} |")
+    return "\n".join(rows) + "\n"
+
+
+def show_report(path: Path, canaries: Mapping[str, str], summary: str | None, say: Callable[[str], None]) -> int:
+    """Print the redacted report JSON between marker lines, and append a result table to the step summary.
+
+    A report that holds a canary is not printed (only the kinds are named): the report is meant to be
+    read in a job log, so the log gets the same check as the stores.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+        report = json.loads(text)
+    except (OSError, ValueError):
+        say(f"report: none at {path}, nothing to print")
+        return 0
+    kinds = kinds_in(text.encode("utf-8"), canaries)
+    if kinds:
+        say(f"FAIL report holds canary kinds: {', '.join(kinds)}; it is not printed")
+        return 1
+    say(BEGIN_MARK)
+    say(text.rstrip("\n"))
+    say(END_MARK)
+    results = report.get("results") if isinstance(report, dict) else None
+    if summary and isinstance(results, list):
+        try:
+            with open(summary, "a", encoding="utf-8") as handle:
+                handle.write(summary_table(results))
+        except OSError:
+            say("report: the step summary cannot be written")
+    return 0
+
+
 def positive(text: str) -> float:
     value = float(text)
     if not value > 0 or value == float("inf"):
@@ -506,22 +620,29 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
     log = commands.add_parser("collector-log", help="search the collector's log file for the canaries")
     log.add_argument("file")
     log.add_argument("--report", default=DEFAULT_REPORT)
+    show = commands.add_parser("show", help="print the redacted report between marker lines, and a result table to $GITHUB_STEP_SUMMARY when it is set")
+    show.add_argument("--report", default=DEFAULT_REPORT)
     args = parser.parse_args(argv)
     source = os.environ if environ is None else environ
     say = options.pop("say", lambda line: print(line, flush=True))
     canaries = support.canaries()
+    if args.command == "show":
+        return show_report(Path(args.report), canaries, source.get("GITHUB_STEP_SUMMARY"), say)
     if args.command == "collector-log":
+        results: list[str] = []
         kinds, why = scan_collector_log(Path(args.file), canaries)
         if kinds is None:
-            say(f"FAIL canary collector log: {why}")
+            results.append(f"FAIL canary collector log: {why}")
         elif kinds:
-            say(f"FAIL canary collector log: found canary kinds: {', '.join(kinds)}")
+            results.append(f"FAIL canary collector log: found canary kinds: {', '.join(kinds)}")
         else:
-            say(f"canary collector log: none of the {len(canaries)} canary kinds found")
+            results.append(f"canary collector log: none of the {len(canaries)} canary kinds found")
+        say(results[0])
         report_path = Path(args.report)
         if report_path.is_file():
             report = json.loads(report_path.read_text(encoding="utf-8"))
             report.setdefault("canary", {}).setdefault("stores", {})["collector"] = {"found": kinds if kinds is not None else "cannot tell"}
+            report.setdefault("results", []).extend(results)
             write_report(report_path, report)
         return 0 if kinds == [] else 1
     try:
@@ -533,7 +654,14 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
     urls = store_urls(source)
     drive_probe = options.pop("drive_probe", lambda trace_id: run_probe(args.url, password, key, urls["otlp"], trace_id))
     drive_canaries = options.pop("drive_canaries", lambda trace_id: canary_traffic(args.url, password, key, canaries, trace_id))
-    code, report = check(secrets.token_hex(16), secrets.token_hex(16), urls, canaries, args.deadline, say, drive_probe, drive_canaries, **options)
+    results: list[str] = []
+
+    def say_and_keep(line: str) -> None:
+        results.append(line)
+        say(line)
+
+    code, report = check(secrets.token_hex(16), secrets.token_hex(16), urls, canaries, args.deadline, say_and_keep, drive_probe, drive_canaries, **options)
+    report["results"] = list(results)
     if code != 2:
         write_report(Path(args.report), report)
         say(f"report: {args.report}")

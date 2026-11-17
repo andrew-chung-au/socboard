@@ -54,7 +54,14 @@ uv run --locked python observability/ci/query.py absent "$TRACE_ID" "$CANARY"
 echo "--- the proof: one trace id in the trace, the logs and the exemplars, and no canary stored (#295)"
 mkdir -p .scratch/observability
 proof=0
+logcheck=0
 uv run --locked python scripts/observability_check.py run --report .scratch/observability/check.json || proof=$?
 compose logs --no-color otel-collector > .scratch/observability/collector.log 2>&1 || true
-uv run --locked python scripts/observability_check.py collector-log .scratch/observability/collector.log --report .scratch/observability/check.json || proof=$?
+uv run --locked python scripts/observability_check.py collector-log .scratch/observability/collector.log --report .scratch/observability/check.json || logcheck=$?
+# The redacted report goes to the job log between marker lines and a table to the step summary (no artifact upload).
+uv run --locked python scripts/observability_check.py show --report .scratch/observability/check.json || logcheck=$(( logcheck > 1 ? logcheck : 1 ))
+# Exit with the worse (larger non-zero) code of the two checks.
+if [ "$logcheck" -gt "$proof" ]; then
+  proof=$logcheck
+fi
 exit "$proof"
