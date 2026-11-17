@@ -345,6 +345,22 @@ def test_the_mandate_names_the_tool_options_of_the_pinned_action():
         assert exact in text
 
 
+def test_the_mandate_requires_the_scrub_and_a_patch_step_with_pinned_git_config():
+    text = MANDATE.read_text(encoding="utf-8")
+    pinned = "-c core.fsmonitor=false -c core.hooksPath=/dev/null"
+    for wording in (
+        "`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: 1` in the job's `env:`",
+        "`GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null`",
+        "records `sha256sum .git/config`",
+        "fails unless `.git/config` still has the recorded hash",
+        f"`git {pinned} add -N .`",
+        f"`git {pinned} diff --no-ext-diff --no-textconv > fix.patch`",
+        "The tool list is not a network or command boundary.",
+    ):
+        assert wording in text
+    assert "any other command." not in text  # the old claim that nothing else can run
+
+
 def test_the_mandate_names_every_deny_listed_path():
     text = MANDATE.read_text(encoding="utf-8")
     for name in (*guard.DENY_DIRS, "Makefile", "AGENTS.md", "pyproject.toml", "uv.lock"):
