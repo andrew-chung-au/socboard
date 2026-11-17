@@ -47,7 +47,8 @@ Tracks run in parallel after the contract: **A** app telemetry, **B** stack, **C
 | #292 O7 Collector and storage | B | #340 | `socboard observability` run |
 | #293 O8 Grafana and `make observability-up` | B | #292 | committed screenshots and manifest |
 | #294 O9 Synthetic probe | C | #338, #288 | CI run |
-| #296 O11 Alert and promtool tests | C | #338 (#292 to load it) | `socboard observability` run |
+| #296 O11 Alert and promtool tests | C | #338 | the pull request's CI run (promtool in Docker) |
+| #348 O11a The alert in the observability check: `check.sh` call, load check, dashboard line | C | #340, #292, #293 (each part lands as its issue merges) | `socboard observability` run |
 | #297 O12 Alert-to-agent hand-off | C | #296 | CI run |
 | #298 O13 On-call mandate, guard, two jobs (Heavy) | C | #297 | CI run of the guard tests, mandate file |
 | #295 O10 CI check: shared trace id, no canary (Heavy) | Join | #290, #291, #292, #294, #340 | run log and committed query JSON |

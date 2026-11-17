@@ -1,0 +1,46 @@
+# QueueLatencyOverSLO (#296): pages when users wait too long for a new alert to show in the queue.
+# The names and values follow observability/CONTRACT.md section 6; tests/test_observability_alerts.py
+# fails when this file and the contract differ, and observability/alerts/tests/ holds the promtool cases.
+#
+# Threshold: 5 seconds, the spec's promise (_docs/specs.md section 5): a new alert is in the queue
+# within 5 seconds. The rule fires only when the 95th percentile is strictly above 5, so a
+# measurement of exactly 5 seconds is not late.
+#
+# Duration: 2 minutes (for: 2m), so one slow cycle does not page. The 5-minute window sets how fast
+# the alert resolves (about 5 minutes after the probe is fast again), not how fast it fires.
+#
+# Minimum volume: at least 20 measurements in the window (the probe makes 60 in 5 minutes at its
+# 5-second default). An idle, stopped or silent probe has fewer, so it never pages: this rule
+# is about slow users, not about a missing probe.
+#
+# The source is the probe's histogram (socboard_probe_time_to_queue_seconds), never the in-app
+# one, which is a diagnostic and records only while someone watches the queue.
+#
+# Buckets: a bound sits exactly at 5 (0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 30), so a measurement of
+# exactly 5 seconds counts in the le="5" bucket and the percentile is decided by that bound, not by
+# interpolation across it. A measurement above the top bound (30) is reported as 30, which still fires.
+#
+# First thing to do when it pages: open dashboard_url, then open the trace on the slowest recent
+# measurement (its exemplar) and see whether the time goes in the ingest or in the queue read.
+#
+# The percentile sums buckets by le, which drops every other label, so `environment` and `version`
+# cannot come from $labels. They are read from the probe's target_info series (resource attributes
+# of the probe's telemetry); see the comment on issue #296.
+groups:
+  - name: socboard-queue-latency
+    rules:
+      - alert: QueueLatencyOverSLO
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(socboard_probe_time_to_queue_seconds_bucket[5m]))) > 5
+          and
+          sum(increase(socboard_probe_time_to_queue_seconds_count[5m])) >= 20
+        for: 2m
+        labels:
+          severity: page
+          service: socboard
+        annotations:
+          summary: A new alert took more than 5 seconds to show in the SOCBoard queue (95th percentile of the probe over 5 minutes).
+          environment: '{{ with query `target_info{job="socboard-probe"}` }}{{ (index . 0).Labels.deployment_environment_name }}{{ end }}'
+          version: '{{ with query `target_info{job="socboard-probe"}` }}{{ (index . 0).Labels.service_version }}{{ end }}'
+          owner: socboard on-call (the maintainer)
+          dashboard_url: http://localhost:3000/d/socboard-queue-latency
