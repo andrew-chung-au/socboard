@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROPOSED = ROOT / "observability" / "ci" / "proposed" / "observability.yml"
 WORKFLOWS = ROOT / ".github" / "workflows"
 NAME = "socboard observability"
+BROWSER_INSTALL = "make e2e-install\ncd e2e && bunx playwright install --with-deps chromium"
 REQUIRED_PATHS = {
     "observability/**",
     "compose.observability.yaml",
@@ -73,12 +74,18 @@ def problems(doc):
     for job in jobs.values():
         if "permissions" in job:
             found.append("a job sets its own permissions")
-        runs = [step["run"] for step in job.get("steps", []) if "run" in step]
-        if runs != ["bash observability/ci/check.sh"]:
-            found.append(f"the job runs {runs}, not only bash observability/ci/check.sh")
+        runs = [step["run"].strip() for step in job.get("steps", []) if "run" in step]
+        if runs != [BROWSER_INSTALL, "bash observability/ci/check.sh"]:
+            found.append(f"the job runs {runs}, not the browser install and bash observability/ci/check.sh")
         uses = [step["uses"].split("@")[0] for step in job.get("steps", []) if "uses" in step]
-        if uses != ["actions/checkout", "astral-sh/setup-uv"]:
-            found.append(f"the job uses {uses}, not checkout and setup-uv")
+        if uses != ["actions/checkout", "astral-sh/setup-uv", "actions/setup-node", "oven-sh/setup-bun", "actions/upload-artifact"]:
+            found.append(f"the job uses {uses}, not checkout, setup-uv, setup-node, setup-bun and upload-artifact")
+        envs = [step["env"] for step in job.get("steps", []) if "env" in step]
+        if envs != [{"SCREENSHOT_DIR": "${{ runner.temp }}/observability-evidence"}]:
+            found.append(f"the job sets {envs} in an env, not only SCREENSHOT_DIR")
+        upload = [step for step in job.get("steps", []) if str(step.get("uses", "")).startswith("actions/upload-artifact@")]
+        if len(upload) != 1 or upload[0].get("if") != "always()" or upload[0]["with"].get("path") != "${{ runner.temp }}/observability-evidence":
+            found.append("the artifact upload is not the one evidence directory, always")
     return found
 
 
@@ -102,6 +109,9 @@ def broken(change):
         lambda doc: doc["jobs"]["observability"].update({"permissions": {"id-token": "write"}}),
         lambda doc: doc["jobs"]["observability"].update({"environment": "deploy"}),
         lambda doc: doc["jobs"]["observability"]["steps"].append({"run": "docker build ."}),
+        lambda doc: doc["jobs"]["observability"]["steps"].append({"uses": "some/action@v1"}),
+        lambda doc: doc["jobs"]["observability"]["steps"][-1].update({"if": "success()"}),
+        lambda doc: doc["jobs"]["observability"]["steps"][-1]["with"].update({"path": "."}),
         lambda doc: doc["jobs"].update({"second": {"runs-on": "ubuntu-latest", "steps": []}}),
         lambda doc: on(doc).pop("schedule") and None,
         lambda doc: on(doc).pop("workflow_dispatch") and None,
@@ -109,7 +119,7 @@ def broken(change):
         lambda doc: on(doc)["push"].update({"paths": ["observability/**", "bogus/**"]}),
         lambda doc: doc.update({"name": "observability"}),
     ],
-    ids=["pull_request_target", "a secret", "contents write", "packages write", "an OIDC token", "an environment", "an extra step", "a second job", "no schedule", "no manual run", "a short path list", "a wrong path in place of the rest", "another name"],
+    ids=["pull_request_target", "a secret", "contents write", "packages write", "an OIDC token", "an environment", "an extra step", "an extra action", "an upload only on success", "an upload of the whole checkout", "a second job", "no schedule", "no manual run", "a short path list", "a wrong path in place of the rest", "another name"],
 )
 def test_each_refused_case_fails(change):
     assert broken(change), "the change was not caught"

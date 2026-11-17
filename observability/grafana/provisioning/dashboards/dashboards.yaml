@@ -1,0 +1,11 @@
+# The dashboards Grafana loads from files (#293). The JSON is committed; it is read-only in the UI.
+apiVersion: 1
+
+providers:
+  - name: socboard
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana-dashboards

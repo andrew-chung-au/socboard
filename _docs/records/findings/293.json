@@ -1,0 +1,33 @@
+{
+  "issue": 293,
+  "findings": [
+    {
+      "id": "F-293-1",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/293#issuecomment-6937681624",
+      "commit": "fc56ba5",
+      "category": "test-gap",
+      "summary": "The Grafana provisioning (datasource links, derived field, the dashboard's queries and the screenshot waits) was written from the project's documentation and cannot be run in the sandbox, so the first socboard observability run with the screenshot step is the first check of it."
+    },
+    {
+      "id": "F-293-2",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/293#issuecomment-6937681624",
+      "commit": "fc56ba5",
+      "category": "process",
+      "summary": "Three files beyond the issue's list were added: scripts/observability_secrets.py (the generator the body implies), scripts/observability_up.py (so the refused case for a missing Docker or generator is testable before the Makefile diff lands) and observability/screenshots/manifest.py (the manifest builder and its check)."
+    },
+    {
+      "id": "F-293-3",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/293#issuecomment-6937681624",
+      "commit": "fc56ba5",
+      "category": "docs",
+      "summary": "The collector now turns the kept resource attributes into series labels (resource_to_telemetry_conversion), which the dashboard's environment and version filters need; the contract says metrics have no label beyond them, which still holds, but it changes the series' labels that #292 recorded."
+    },
+    {
+      "id": "F-293-4",
+      "source": "https://github.com/andrew-chung-au/socboard/issues/293#issuecomment-6937681624",
+      "commit": "fc56ba5",
+      "category": "process",
+      "summary": "The screenshots, the artifact and the committed evidence folder need the workflow diff (setup-node, setup-bun, the browser install, SCREENSHOT_DIR and an upload step) applied by the maintainer first; until then check.sh skips the screenshot part."
+    }
+  ]
+}

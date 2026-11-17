@@ -74,10 +74,15 @@ exporters:
     tls:
       insecure: true
   # Remote write sends the histogram's exemplars with the data point.
+  # The resource attributes the allow-list kept (service.name, deployment.environment.name,
+  # service.version) become labels of each series, which the dashboard's environment and version filters
+  # read (#293); the contract says the metrics have no label beyond them.
   prometheusremotewrite:
     endpoint: http://prometheus:9090/api/v1/write
     tls:
       insecure: true
+    resource_to_telemetry_conversion:
+      enabled: true
 
 service:
   extensions: [health_check]

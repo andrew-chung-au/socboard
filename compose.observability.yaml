@@ -1,25 +1,32 @@
-# The observability overlay (#292), layered on compose.yaml:
+# The observability overlay (#292, with Grafana from #293), layered on compose.yaml:
 #
-#     docker compose -f compose.yaml -f compose.observability.yaml up
+#     docker compose --env-file compose.secrets --env-file observability.secrets \
+#         -f compose.yaml -f compose.observability.yaml up
 #
-# It adds the five services that receive, store and route the app's signals (traces, logs and metrics),
-# points the app's exporter at the collector, and publishes each service's port on 127.0.0.1 only, so the
-# runner or the developer can query them and nothing outside the host can. compose.yaml and compose/ do
-# not change: with this file left out of the command, the stack is what it was. Grafana is added by #293;
-# the alert rule is observability/alerts/ (#296); Alertmanager's route to the on-call agent is #297.
+# (`make observability-up` makes both secret files and runs that.) It adds the five services that receive,
+# store and route the app's signals (traces, logs and metrics) and Grafana to look at them, points the
+# app's exporter at the collector, and publishes each service's port on 127.0.0.1 only, so the runner or
+# the developer can query them and nothing outside the host can. compose.yaml and compose/ do not change:
+# with this file left out of the command, the stack is what it was. The alert rule is
+# observability/alerts/ (#296); Alertmanager's route to the on-call agent is #297.
 #
-# Variables (all optional; the first five are ports on 127.0.0.1, the defaults are the services' own):
+# Variables: the ports on 127.0.0.1 are optional, and the defaults are the services' own:
 #   STACK_OTLP_PORT (4318), STACK_OTEL_HEALTH_PORT (13133), STACK_TEMPO_PORT (3200),
-#   STACK_LOKI_PORT (3100), STACK_PROMETHEUS_PORT (9090), STACK_ALERTMANAGER_PORT (9093).
+#   STACK_LOKI_PORT (3100), STACK_PROMETHEUS_PORT (9090), STACK_ALERTMANAGER_PORT (9093),
+#   STACK_GRAFANA_PORT (3000).
+# STACK_GRAFANA_ADMIN_PASSWORD is required (Compose stops, naming it, when it is missing): the secrets
+# script makes it on the first run, into `observability.secrets` (scripts/observability_secrets.py), next
+# to compose.secrets; it is never printed. Anonymous access to Grafana is off.
 # A second stack on the same host needs its own values, as it does for STACK_APP_PORT (#271).
 #
-# Limits: each store keeps 24 hours of data at most, in a named volume whose size is capped (the volumes
-# below are in-memory file systems of fixed size, so a full store cannot fill the host's disk; the data does
-# not survive a host restart, which is right for a stack that runs in CI and on a developer's machine).
-# Those pages are charged to the container that writes them, so each cap is below its service's mem_limit
-# (192 MiB against 256, 256 against 384), and a store that outgrew its cap would fail its writes before it
-# was killed; no run is long enough to show which comes first (checked by tests/test_observability_compose.py). Each service has a memory limit; the five add up to 1344 MiB, and Grafana
-# (#293) has 160 MiB reserved, so the six stay within 1.5 GiB (1536 MiB).
+# Limits: each store keeps 24 hours of data at most, in a named volume whose size is capped. The volumes
+# below are in-memory file systems of fixed size, so a full store cannot fill the host's disk; the data
+# does not survive a host restart, which is right for a stack that runs in CI and on a developer's
+# machine. Those pages are charged to the container that writes them, so each cap is below its service's
+# mem_limit (192 MiB against 256, 256 against 384, 64 against 160), and a store that outgrew its cap would
+# fail its writes before it was killed; no run is long enough to show which comes first (checked by
+# tests/test_observability_compose.py). Each service has a memory limit; the six add up to 1504 MiB, within
+# 1.5 GiB (1536 MiB).
 #
 # Images are pinned by tag and index digest, as compose.yaml does. Each digest was read from the registry
 # on 2026-11-16 (Alertmanager's on 2026-11-17) and pulled and run by `socboard observability` run
@@ -100,6 +107,41 @@ services:
       - 127.0.0.1:${STACK_ALERTMANAGER_PORT:-9093}:9093
     networks: [stack]
 
+  # Grafana (#293): the dashboard and the three datasources are provisioned from files, so a start from
+  # nothing needs no clicks. Its login is the admin user with the generated password; anonymous access and
+  # sign-up are off. Reporting and update checks are off (it makes no call out). Port 3000 on 127.0.0.1 only.
+  grafana:
+    image: grafana/grafana:13.3.1@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf
+    user: "472:472"
+    mem_limit: 160m
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${STACK_GRAFANA_ADMIN_PASSWORD:?STACK_GRAFANA_ADMIN_PASSWORD is required (make observability-up makes it)}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana-dashboards/socboard-alert-to-queue.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana-dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - 127.0.0.1:${STACK_GRAFANA_PORT:-3000}:3000
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+    networks: [stack]
+
   # The app's exporter: the collector's address on the stack network. The SDK's metric export interval
   # is 60 seconds; 5 keeps the drill (#299) near three minutes from the defect to the firing alert.
   # The two operator-set resource attributes are the ones the contract names (section 1).
@@ -134,3 +176,9 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: size=192m,uid=65534,gid=65534
+  grafana-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=64m,uid=472,gid=472

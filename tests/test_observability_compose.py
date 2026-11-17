@@ -20,9 +20,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "compose.observability.yaml"
 BASE = ROOT / "compose.yaml"
-SERVICES = {"otel-collector", "tempo", "loki", "prometheus", "alertmanager"}
-STORE_VOLUMES = {"tempo-data", "loki-data", "prometheus-data"}
-BUDGET_MIB = 1536 - 160  # 1.5 GiB for six services, 160 MiB of it reserved for Grafana (#293)
+SERVICES = {"otel-collector", "tempo", "loki", "prometheus", "alertmanager", "grafana"}
+STORE_VOLUMES = {"tempo-data", "loki-data", "prometheus-data", "grafana-data"}
+BUDGET_MIB = 1536  # 1.5 GiB for the six services (the five of #292 and Grafana of #293)
 IMAGE = re.compile(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}")
 PORT = re.compile(r"127\.0\.0\.1:\$\{STACK_[A-Z_]+_PORT:-\d+\}:\d+")
 MEMORY = re.compile(r"(\d+)([mg])")
@@ -76,7 +76,7 @@ def problems(doc):
             if "docker.sock" in str(volume):
                 found.append(f"{name}: mounts the Docker socket")
     if total > BUDGET_MIB:
-        found.append(f"the five services may use {total} MiB, over the {BUDGET_MIB} MiB left after Grafana's share")
+        found.append(f"the six services may use {total} MiB, over the {BUDGET_MIB} MiB budget")
     volumes = doc.get("volumes") or {}
     if set(volumes) != STORE_VOLUMES:
         found.append(f"the named volumes are {sorted(volumes)}, not {sorted(STORE_VOLUMES)}")
@@ -95,6 +95,13 @@ def problems(doc):
         found.append("app: the metric export interval is not 5 seconds")
     if set(app) - {"environment", "depends_on"}:
         found.append(f"app: the overlay changes more than its environment and start order: {sorted(set(app) - {'environment', 'depends_on'})}")
+    grafana = (services.get("grafana") or {}).get("environment") or {}
+    if str(grafana.get("GF_AUTH_ANONYMOUS_ENABLED")).lower() != "false":
+        found.append("grafana: anonymous access is not switched off")
+    if "${STACK_GRAFANA_ADMIN_PASSWORD:?" not in str(grafana.get("GF_SECURITY_ADMIN_PASSWORD")):
+        found.append("grafana: the admin password is not the required STACK_GRAFANA_ADMIN_PASSWORD (no default, no literal)")
+    if not (services.get("grafana") or {}).get("healthcheck"):
+        found.append("grafana: no healthcheck (make observability-up waits for it)")
     command = " ".join(map(str, (services.get("prometheus") or {}).get("command") or []))
     for flag in ("--web.enable-remote-write-receiver", "--enable-feature=exemplar-storage", "--storage.tsdb.retention.time=24h"):
         if flag not in command:
@@ -118,7 +125,7 @@ def test_the_real_overlay_passes_every_rule():
     ("change", "expected"),
     [
         (lambda d: d["services"].pop("loki"), "adds"),
-        (lambda d: d["services"].update({"grafana": {}}), "adds"),
+        (lambda d: d["services"].update({"kibana": {}}), "adds"),
         (lambda d: d["services"]["tempo"].update({"image": "grafana/tempo:3.1.1"}), "not pinned"),
         (lambda d: d["services"]["tempo"].update({"image": "grafana/tempo@sha256:" + "0" * 64}), "not pinned"),
         (lambda d: d["services"]["tempo"].update({"networks": ["default"]}), "stack network"),
@@ -126,6 +133,10 @@ def test_the_real_overlay_passes_every_rule():
         (lambda d: d["services"]["tempo"].update({"ports": ["0.0.0.0:${STACK_TEMPO_PORT:-3200}:3200"]}), "127.0.0.1"),
         (lambda d: d["services"]["tempo"].update({"ports": ["127.0.0.1:3200:3200"]}), "STACK_*_PORT"),
         (lambda d: d["services"]["tempo"].update({"ports": []}), "127.0.0.1"),
+        (lambda d: d["services"]["grafana"]["environment"].update({"GF_AUTH_ANONYMOUS_ENABLED": "true"}), "anonymous"),
+        (lambda d: d["services"]["grafana"]["environment"].pop("GF_SECURITY_ADMIN_PASSWORD"), "admin password"),
+        (lambda d: d["services"]["grafana"]["environment"].update({"GF_SECURITY_ADMIN_PASSWORD": "admin"}), "admin password"),
+        (lambda d: d["services"]["grafana"].pop("healthcheck"), "healthcheck"),
         (lambda d: d["services"]["tempo"].pop("mem_limit"), "no mem_limit"),
         (lambda d: d["services"]["tempo"].update({"mem_limit": "2g"}), "may use"),
         (lambda d: d["services"]["tempo"].pop("user"), "root"),
@@ -149,16 +160,16 @@ def test_each_refused_case_fails(change, expected):
     assert any(expected in line for line in found), found
 
 
-def test_the_five_services_fit_the_memory_budget_with_grafanas_share():
+def test_the_six_services_fit_the_memory_budget():
     doc = load()
     total = sum(mebibytes(doc["services"][name]["mem_limit"]) for name in SERVICES)
-    assert total + 160 <= 1536
+    assert total == 1504 and total <= 1536
 
 
 def test_each_volume_cap_is_below_its_services_memory_limit():
     doc = load()
     caps = {name: int(re.search(r"size=(\d+)m", volume["driver_opts"]["o"]).group(1)) for name, volume in doc["volumes"].items()}
-    owners = {"tempo-data": "tempo", "loki-data": "loki", "prometheus-data": "prometheus"}
+    owners = {"tempo-data": "tempo", "loki-data": "loki", "prometheus-data": "prometheus", "grafana-data": "grafana"}
     for volume, service in owners.items():
         assert caps[volume] < mebibytes(doc["services"][service]["mem_limit"]), (volume, service)
 
@@ -255,8 +266,9 @@ def port(published, host_ip="127.0.0.1", target=1):
 
 def good_rendering():
     """The shape `docker compose config --format json` gives for the layered stack, with synthetic values."""
-    published = {"otel-collector": ["4318", "13133"], "tempo": ["3200"], "loki": ["3100"], "prometheus": ["9090"], "alertmanager": ["9093"]}
+    published = {"otel-collector": ["4318", "13133"], "tempo": ["3200"], "loki": ["3100"], "prometheus": ["9090"], "alertmanager": ["9093"], "grafana": ["3000"]}
     services = {name: {"ports": [port(p) for p in ports], "networks": {"stack": None}} for name, ports in published.items()}
+    services["grafana"]["environment"] = {"GF_AUTH_ANONYMOUS_ENABLED": "false", "GF_USERS_ALLOW_SIGN_UP": "false", "GF_SECURITY_ADMIN_PASSWORD": "synthetic"}
     services["app"] = {
         "environment": {
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector:4318",
@@ -289,6 +301,11 @@ def test_a_good_rendering_passes_the_overlay_check():
         (lambda c: c["services"]["tempo"].update({"ports": []}), "tempo: publishes no port"),
         (lambda c: c["services"]["loki"].update({"networks": {"stack": None, "default": None}}), "loki: not on the stack network only"),
         (lambda c: c["services"].pop("alertmanager"), "alertmanager: not in the rendered configuration"),
+        (lambda c: c["services"]["grafana"]["environment"].update({"GF_AUTH_ANONYMOUS_ENABLED": "true"}), "grafana: anonymous access is not switched off"),
+        (lambda c: c["services"]["grafana"]["environment"].pop("GF_AUTH_ANONYMOUS_ENABLED"), "grafana: anonymous access is not switched off"),
+        (lambda c: c["services"]["grafana"]["environment"].update({"GF_USERS_ALLOW_SIGN_UP": "true"}), "grafana: sign-up is not switched off"),
+        (lambda c: c["services"]["grafana"]["environment"].pop("GF_SECURITY_ADMIN_PASSWORD"), "grafana: no admin password"),
+        (lambda c: c["services"]["grafana"].update({"ports": [port(3000, host_ip="0.0.0.0")]}), "grafana: a port is not published on 127.0.0.1"),
         (lambda c: c["services"]["app"]["environment"].update({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://example.com"}), "the exporter does not point at the collector"),
         (lambda c: c["services"]["app"]["environment"].update({"OTEL_METRIC_EXPORT_INTERVAL": "60000"}), "5000 milliseconds"),
         (lambda c: c["services"]["app"]["environment"].update({"OTEL_RESOURCE_ATTRIBUTES": "service.version=x"}), "OTEL_RESOURCE_ATTRIBUTES"),
@@ -320,3 +337,87 @@ def test_the_checker_refuses_bad_input_with_exit_2(capsys):
     assert rendered.main([], stdin=io.StringIO("{}")) == 2
     assert rendered.main(["overlay"], stdin=io.StringIO("[]")) == 1  # JSON, but not a configuration: every service is missing
     assert "refused" in capsys.readouterr().err
+
+
+# --- Grafana: provisioning and the dashboard (#293) --------------------------------------------------
+
+GRAFANA = ROOT / "observability" / "grafana"
+DASHBOARD = GRAFANA / "dashboards" / "socboard-alert-to-queue.json"
+
+
+def dashboard():
+    return json.loads(DASHBOARD.read_text(encoding="utf-8"))
+
+
+def all_targets(doc):
+    return [(panel["title"], target) for panel in doc["panels"] for target in panel.get("targets", [])]
+
+
+def test_the_datasources_are_provisioned_with_no_credential_and_link_trace_log_and_exemplar():
+    config = yaml.safe_load((GRAFANA / "provisioning" / "datasources" / "datasources.yaml").read_text(encoding="utf-8"))
+    sources = {source["uid"]: source for source in config["datasources"]}
+    assert set(sources) == {"prometheus", "tempo", "loki"}
+    assert sources["prometheus"]["url"] == "http://prometheus:9090" and sources["tempo"]["url"] == "http://tempo:3200" and sources["loki"]["url"] == "http://loki:3100"
+    for source in sources.values():
+        text = json.dumps(source).lower()
+        assert "password" not in text and "token" not in text and "basicauth" not in text and "secure" not in text, source["uid"]
+        assert source["editable"] is False
+    # A metric exemplar opens its trace; a trace opens its log lines by trace_id; a log line opens its trace.
+    assert sources["prometheus"]["jsonData"]["exemplarTraceIdDestinations"] == [{"name": "trace_id", "datasourceUid": "tempo"}]
+    logs = sources["tempo"]["jsonData"]["tracesToLogsV2"]
+    assert logs["datasourceUid"] == "loki" and 'trace_id="$${__trace.traceId}"' in logs["query"] and 'service_name="socboard"' in logs["query"]
+    derived = sources["loki"]["jsonData"]["derivedFields"][0]
+    assert derived["datasourceUid"] == "tempo" and derived["matcherRegex"] == "trace_id" and derived["url"] == "$${__value.raw}"
+
+
+def test_the_dashboard_provider_reads_the_committed_folder_the_overlay_mounts():
+    provider = yaml.safe_load((GRAFANA / "provisioning" / "dashboards" / "dashboards.yaml").read_text(encoding="utf-8"))["providers"][0]
+    assert provider["options"]["path"] == "/var/lib/grafana-dashboards" and provider["allowUiUpdates"] is False
+    volumes = load()["services"]["grafana"]["volumes"]
+    assert "./observability/grafana/dashboards:/var/lib/grafana-dashboards:ro" in volumes
+    assert "./observability/grafana/provisioning:/etc/grafana/provisioning:ro" in volumes
+
+
+def test_the_dashboard_has_the_panels_the_issue_asks_for():
+    doc = dashboard()
+    assert doc["title"] == "SOCBoard: alert to queue" and doc["uid"] == "socboard-alert-to-queue"
+    titles = [panel["title"] for panel in doc["panels"]]
+    assert len(titles) == len(set(titles)) == 5
+    exprs = {title: [t["expr"] for t in targets] for title, targets in ((panel["title"], panel["targets"]) for panel in doc["panels"])}
+    probe = next(t for t in exprs if t.startswith("Probe: time to queue"))
+    app = next(t for t in exprs if t.startswith("App diagnostic"))
+    for title, metric in ((probe, "socboard_probe_time_to_queue_seconds_bucket"), (app, "socboard_alert_time_to_queue_seconds_bucket")):
+        assert [("histogram_quantile(0.5," in e, "histogram_quantile(0.95," in e, "histogram_quantile(0.99," in e) for e in exprs[title]] == [(True, False, False), (False, True, False), (False, False, True)]
+        assert all(metric in e for e in exprs[title]), title
+    # The 5-second promise is drawn as a line on both quantile panels.
+    for panel in doc["panels"][:2]:
+        defaults = panel["fieldConfig"]["defaults"]
+        assert defaults["custom"]["thresholdsStyle"] == {"mode": "line"} and defaults["unit"] == "s"
+        assert [step["value"] for step in defaults["thresholds"]["steps"]] == [None, 5]
+    assert any("socboard_ingest_alerts_total" in e and "[1m]" in e and "by (outcome)" in e for e in sum(exprs.values(), []))
+    logs = next(panel for panel in doc["panels"] if panel["type"] == "logs")
+    assert logs["datasource"]["uid"] == "loki"
+    assert 'service_name="socboard"' in logs["targets"][0]["expr"] and "alert" in logs["targets"][0]["expr"] and "first_in_queue" in logs["targets"][0]["expr"]
+    assert next(p for p in doc["panels"] if p["type"] == "heatmap")["targets"][0]["exemplar"] is True
+
+
+def test_every_panel_filters_by_environment_and_version_and_every_datasource_is_a_provisioned_uid():
+    doc = dashboard()
+    names = {variable["name"] for variable in doc["templating"]["list"]}
+    assert names == {"environment", "version"}
+    for title, target in all_targets(doc):
+        assert "$environment" in target["expr"] and "$version" in target["expr"], title
+        assert target["datasource"]["uid"] in {"prometheus", "loki"}
+    for panel in doc["panels"]:
+        assert panel["datasource"]["uid"] in {"prometheus", "loki"}
+    assert doc["editable"] is False and doc["refresh"] == ""
+
+
+def test_the_collector_makes_the_resource_attributes_series_labels_for_those_filters():
+    config = yaml.safe_load((ROOT / "observability" / "otel" / "collector.yaml").read_text(encoding="utf-8"))
+    assert config["exporters"]["prometheusremotewrite"]["resource_to_telemetry_conversion"] == {"enabled": True}
+
+
+def test_the_secrets_file_is_ignored_by_git_and_the_image_build():
+    assert "/observability.secrets" in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "observability.secrets" in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()

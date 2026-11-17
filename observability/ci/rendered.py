@@ -1,12 +1,13 @@
-"""Check Docker Compose's rendered configuration of the observability overlay (#292).
+"""Check Docker Compose's rendered configuration of the observability overlay (#292, with Grafana from #293).
 
     docker compose -f compose.yaml -f compose.observability.yaml config --format json | python observability/ci/rendered.py overlay
     docker compose -f compose.yaml config --format json | python observability/ci/rendered.py base
 
-`overlay` reads the layered configuration and exits 1, naming each problem, unless every port of the five
-overlay services is published on 127.0.0.1 with a host port (a port with no host address, or on another one,
-would be open to the network), every one of them is on the `stack` network only, and the app's exporter
-points at the collector with the 5-second metric interval. `base` reads compose.yaml alone and exits 1
+`overlay` reads the layered configuration and exits 1, naming each problem, unless every port of the six
+overlay services (the five stores and Grafana) is published on 127.0.0.1 with a host port (a port with
+no host address, or on another one, would be open to the network), every one of them is on the `stack` network only, Grafana has anonymous
+access and sign-up off and an admin password, and the app's exporter points at the collector with the
+5-second metric interval. `base` reads compose.yaml alone and exits 1
 unless it is still the six services of the app's stack with no OpenTelemetry variable, so leaving the
 overlay out of the command gives the stack as it was. The text checks of the overlay file are in
 tests/test_observability_compose.py; this script is what looks at what Compose actually makes of it, and
@@ -17,7 +18,7 @@ import json
 import sys
 from collections.abc import Mapping
 
-OVERLAY_SERVICES = ("otel-collector", "tempo", "loki", "prometheus", "alertmanager")
+OVERLAY_SERVICES = ("otel-collector", "tempo", "loki", "prometheus", "alertmanager", "grafana")
 BASE_SERVICES = {"db", "db-init", "migrate", "seed", "app", "proxy"}
 LOOPBACK = "127.0.0.1"
 
@@ -38,6 +39,13 @@ def overlay_problems(config: Mapping) -> list[str]:
                 found.append(f"{name}: a port is not published on {LOOPBACK} with a host port: {port}")
         if sorted(service.get("networks") or []) != ["stack"]:
             found.append(f"{name}: not on the stack network only")
+    grafana = (services.get("grafana") or {}).get("environment") or {}
+    if str(grafana.get("GF_AUTH_ANONYMOUS_ENABLED")).lower() != "false":
+        found.append("grafana: anonymous access is not switched off")
+    if str(grafana.get("GF_USERS_ALLOW_SIGN_UP")).lower() != "false":
+        found.append("grafana: sign-up is not switched off")
+    if not grafana.get("GF_SECURITY_ADMIN_PASSWORD"):
+        found.append("grafana: no admin password")
     environment = (services.get("app") or {}).get("environment") or {}
     if environment.get("OTEL_EXPORTER_OTLP_ENDPOINT") != "http://otel-collector:4318":
         found.append("app: the exporter does not point at the collector")
