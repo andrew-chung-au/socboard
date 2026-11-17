@@ -2177,3 +2177,27 @@ def test_prod_logs_after_the_swap_print_no_secret_value(box, restore):
     assert r.code == (9 if restore else 7)
     assert r.out.count("[redacted]") == 10
     assert_safe_prod(r)
+
+
+# --- the human's task file for the first prod deploy (#267) ------------------------------------------------------------------------
+
+
+def prod_task_file():
+    found = sorted((ROOT / "_human-tasks").glob("*-human-task-267-engineer-first-prod-deploy.md"))
+    assert len(found) == 1
+    return found[0].read_text(encoding="utf-8")
+
+
+def test_the_prod_task_file_has_no_inline_secret_one_command_per_block_and_every_result_row_not_checked():
+    text = prod_task_file()
+    for line in text.splitlines():
+        if "--secret-string" in line:
+            assert "--secret-string file://" in line, line
+    blocks = re.findall(r"```\n(.*?)\n```", text, re.S)
+    assert blocks and all("\n" not in block for block in blocks), [b for b in blocks if "\n" in b]
+    assert not re.search(r"(?<![0-9])[0-9]{12}(?![0-9])|(?<![A-Za-z])arn:", text)
+    table = text.split("| Step | Pass or fail | Output or note |")[1].split("## Risk")[0]
+    rows = [line for line in table.splitlines() if line.startswith("|") and not line.startswith("|---")]
+    assert len(rows) == 14 and all(line.split("|")[2].strip() == "NOT CHECKED" for line in rows), rows
+    for needle in ("postgres-prod", "environment=prod", "environment=Prod", "environment=staging", "already deployed", "socboard-prod-app-1", "127.0.0.1:8100", "reboot"):
+        assert needle in table or needle in text, needle
