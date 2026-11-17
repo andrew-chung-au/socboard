@@ -1,0 +1,23 @@
+{
+  "run_id": "44123146917",
+  "run_url": "https://github.com/andrew-chung-au/socboard/actions/runs/44123146917",
+  "commit": "d665893d67a73978e15feb07b22e001f4764dbd9",
+  "files": [
+    {
+      "name": "README.md",
+      "shows": "The drill record: the run, the agent's pull request #381, what each job checked and the result"
+    },
+    {
+      "name": "alert.png",
+      "shows": "Alertmanager with QueueLatencyOverSLO firing since 2026-11-17T16:20:01Z, labels service=socboard and severity=page (drill-evidence artifact, evidence/alert.png)"
+    },
+    {
+      "name": "dashboard.png",
+      "shows": "Grafana's dashboard 'SOCBoard: alert to queue' from 16:00 to 16:21 UTC: with the defect the probe's p50 is about 9 s and its p95 and p99 about 10 s against the 5-second line, every delay in the 8 to 10 s buckets (drill-evidence artifact, evidence/dashboard.png)"
+    },
+    {
+      "name": "incident.json",
+      "shows": "The incident the hand-off wrote when QueueLatencyOverSLO fired, checked fields only (drill-evidence artifact)"
+    }
+  ]
+}
