@@ -69,6 +69,24 @@ class FailingLogExporter(LogRecordExporter):
         return True
 
 
+class ThreadLogExporter(LogRecordExporter):
+    """Remembers the thread of each export call and the bodies it was asked to send."""
+
+    def __init__(self):
+        self.threads = []
+        self.bodies = []
+
+    def export(self, batch):
+        self.threads.append(threading.get_ident())
+        self.bodies.extend(item.log_record.body for item in batch)
+
+    def shutdown(self):
+        pass
+
+    def force_flush(self, timeout_millis=30_000):
+        return True
+
+
 def start(environ, **exporters):
     stream = io.StringIO()
     stop = telemetry.setup(environ, stream=stream, **exporters)
@@ -312,7 +330,7 @@ def test_an_unroutable_endpoint_does_not_slow_create_app_or_a_call(monkeypatch, 
     environ = {
         "SOCBOARD_TOKEN_SECRET": TEST_TOKEN_SECRET,
         "SOCBOARD_DATABASE_URL": sqlite_url(tmp_path / "x.db"),
-        telemetry.ENDPOINT_VARIABLE: "http://10.255.255.1:4318",
+        telemetry.ENDPOINT_VARIABLE: "http://192.0.2.1:4318",  # a documentation address (RFC 5737): never a real host
     }
     started = time.monotonic()
     app = create_app(environ)
@@ -325,6 +343,24 @@ def test_an_unroutable_endpoint_does_not_slow_create_app_or_a_call(monkeypatch, 
     assert response.status_code == 200
     assert elapsed < 1.0  # the exit of the block (the flush) is bounded by the 0.2 second timeouts and is not timed
     assert not telemetry.is_on()
+
+
+def test_a_log_call_exports_nothing_and_the_export_runs_in_a_background_thread(monkeypatch):
+    # The batching processor reads its delay from the environment when it is built. A long delay means
+    # its worker does not wake during the test, so the only export is the one that shutdown forces.
+    monkeypatch.setenv("OTEL_BLRP_SCHEDULE_DELAY", "600000")
+    exporter = ThreadLogExporter()
+    stop, _ = start(ON, span_exporter=InMemorySpanExporter(), log_exporter=exporter, metric_exporter=MemoryMetricExporter())
+    try:
+        logging.getLogger("socboard.ingest").warning("Ingest refused")
+        # SimpleLogRecordProcessor.on_emit calls the exporter in the calling thread, so it would fail here.
+        assert exporter.threads == []
+    finally:
+        stop()  # shutdown joins the worker thread, which exports what is queued
+
+    assert exporter.bodies == ["Ingest refused"]
+    assert len(exporter.threads) == 1
+    assert exporter.threads[0] != threading.get_ident()
 
 
 # --- sampler and spans -------------------------------------------------------------------------

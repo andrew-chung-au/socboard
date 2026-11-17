@@ -243,7 +243,8 @@ def start_span(
     """Start a span of the contract's table as the current one; yields None when telemetry is off.
 
     `headers` (the request's, for the server span) give the parent through `traceparent`. Only the
-    contract's span names and its two attributes are accepted, otherwise `ValueError`. No exception
+    contract's span names and its two attributes are accepted: a name outside the table raises
+    `KeyError`, an attribute or value outside the contract raises `ValueError`. No exception
     or status text is recorded on the span: an exception text could hold request text.
     """
     kind, own_trace = SPANS[name]  # KeyError for a name outside the table
