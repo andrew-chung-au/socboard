@@ -126,6 +126,7 @@ def add_ingest_route(api_router: APIRouter) -> None:
             )
             session.commit()
             telemetry.annotate(span, {telemetry.SEVERITY_ATTRIBUTE: response.severity, telemetry.CASE_ID_ATTRIBUTE: response.id})
+            telemetry.remember_ingest(response.id, span)
             telemetry.count_ingest("accepted")
             telemetry.log_event("alert.ingested")
             return response

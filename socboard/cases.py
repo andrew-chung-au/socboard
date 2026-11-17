@@ -35,6 +35,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from socboard import telemetry
 from socboard.audit import append_audit
 from socboard.auth import ROLE_LEAD, CurrentUser, current_user, forbidden, require_lead
 from socboard.domain import ACTION_CLAIMED, SEVERITIES, STATUS_CLOSED
@@ -128,6 +129,7 @@ def create_cases_router(prefix: str) -> APIRouter:
             )
         ).all()
         cases = [CaseSummary(**_summary_fields(*row)) for row in rows]
+        telemetry.queue_read(cases)  # #291: the first read of each new case; does nothing when telemetry is off
         return QueueResponse(cases=cases, servedAt=datetime.now(UTC))
 
     @router.get(
