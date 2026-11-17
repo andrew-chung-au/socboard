@@ -1,3 +1,5 @@
 # The defect patch keeps unified-diff context lines: an unchanged blank line is a single space.
 # Removing it would break the patch, so the whitespace check is off for this one file.
 defect.patch -whitespace
+# The same holds for the proposed workflow diff: its blank context lines are a single space.
+proposed/workflow-changes.patch -whitespace

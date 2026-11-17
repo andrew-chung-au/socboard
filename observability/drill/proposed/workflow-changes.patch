@@ -1,0 +1,37 @@
+diff --git a/.github/workflows/compose.yml b/.github/workflows/compose.yml
+index 2969fd2..21c4c45 100644
+--- a/.github/workflows/compose.yml
++++ b/.github/workflows/compose.yml
+@@ -8,6 +8,7 @@ permissions:
+ on:
+   push:
+   pull_request:
++    types: [opened, synchronize, reopened, ready_for_review]
+ 
+ jobs:
+   compose:
+diff --git a/.github/workflows/observability.yml b/.github/workflows/observability.yml
+index f62f790..8b374c6 100644
+--- a/.github/workflows/observability.yml
++++ b/.github/workflows/observability.yml
+@@ -36,7 +36,7 @@ on:
+ jobs:
+   observability:
+     runs-on: ubuntu-latest
+-    timeout-minutes: 20
++    timeout-minutes: 30
+     steps:
+       - uses: actions/checkout@v4
+ 
+diff --git a/.github/workflows/verify.yml b/.github/workflows/verify.yml
+index c0dfd2d..1e1b4b7 100644
+--- a/.github/workflows/verify.yml
++++ b/.github/workflows/verify.yml
+@@ -7,6 +7,7 @@ permissions:
+ on:
+   push:
+   pull_request:
++    types: [opened, synchronize, reopened, ready_for_review]
+ 
+ jobs:
+   verify:
