@@ -98,5 +98,15 @@ if [ -n "${SCREENSHOT_DIR:-}" ]; then
   ls -l "$SCREENSHOT_DIR"
 fi
 
+# The on-call drill's planted defect (#299) must still apply to this checkout, and the existing Python
+# suite must still pass with it. It runs on a copy; the workflow's path list names socboard/cases.py, so an
+# edit to it by another lane lands here.
+echo "--- drift check: the drill's defect still applies and the existing suite does not catch it (#299)"
+drift=0
+bash observability/drill/drift.sh || drift=$?
+if [ "$drift" -gt "$proof" ]; then
+  proof=$drift
+fi
+
 # The proof's result is the script's result.
 exit "$proof"
