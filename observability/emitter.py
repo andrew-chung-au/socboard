@@ -15,10 +15,13 @@ The resource is `service.name=socboard` and whatever `OTEL_RESOURCE_ATTRIBUTES` 
 operator-set attributes). Every value is synthetic. The endpoint must be plain `http` on the loopback:
 the emitter never sends anything off the machine.
 
-Exit codes: 0 sent and flushed, 2 a refused argument (before anything is created).
+Exit codes: 0 sent and flushed with no export problem, 1 an export problem (the SDK's own warning or
+error about a failed export, for example a collector that is not there or refuses a request), 2 a refused
+argument (before anything is created).
 """
 
 import argparse
+import logging
 import re
 import secrets
 import sys
@@ -67,6 +70,17 @@ def check_endpoint(text: str) -> str:
         raise Refused("the endpoint must have no path, query or fragment")
     shown = f"[{host}]" if ":" in host else host
     return f"http://{shown}:{port}" if port else f"http://{shown}"
+
+
+class ProblemCounter(logging.Handler):
+    """Counts what the SDK says about a failed export: it logs and carries on, and the exit code must not."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.count = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.count += 1
 
 
 def emit(trace_id: str, endpoint: str, *, metric_reader=None, span_exporter=None, log_exporter=None) -> None:
@@ -140,7 +154,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Refused as refusal:
         print(f"observability emitter: refused: {refusal}", file=sys.stderr)
         return 2
-    emit(trace_id, endpoint)
+    problems = ProblemCounter()
+    sdk_log = logging.getLogger("opentelemetry")
+    sdk_log.addHandler(problems)
+    try:
+        emit(trace_id, endpoint)
+    finally:
+        sdk_log.removeHandler(problems)
+    if problems.count:
+        print(f"emitter: {problems.count} export problem(s) reported by the SDK (the collector at {endpoint} did not take every signal)", file=sys.stderr)
+        return 1
     print(f"emitter: sent trace {trace_id} to {endpoint}")
     return 0
 

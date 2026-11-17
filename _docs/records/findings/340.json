@@ -6,7 +6,7 @@
       "source": "https://github.com/andrew-chung-au/socboard/issues/340#issuecomment-6933791866",
       "commit": "19e96ad",
       "category": "process",
-      "summary": "Landing the workflow also needs socboard observability added to publish.yml's workflow_run list and to TRIGGER_LIST in tests/test_publish_workflow.py, two more protected or CI-lane edits that the issue's body does not list."
+      "summary": "Landing the workflow also needs socboard observability added to publish.yml's workflow_run list and to TRIGGER_LIST in tests/test_publish_workflow.py, two more protected or CI-lane edits that the issue's body does not list. The proposed file is copied, not moved, because its static test reads the proposed copy."
     },
     {
       "id": "F-340-2",

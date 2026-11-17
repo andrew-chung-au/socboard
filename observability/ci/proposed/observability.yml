@@ -4,6 +4,7 @@
 #
 # PROPOSED: this copy lives in observability/ci/proposed/ until the CI lane or the maintainer lands it as
 # .github/workflows/observability.yml (workflows are protected files; an agent does not write them).
+# Copy it, do not move it: tests/test_observability_workflow.py reads this proposed copy.
 # Landing it also needs `socboard observability` added to the trigger list of publish.yml and to
 # TRIGGER_LIST in tests/test_publish_workflow.py: a path-filtered workflow that can run on a push to main
 # must be listed there (tests/workflow_triggers.py, list_problems). It is not added to the gate's

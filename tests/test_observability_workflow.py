@@ -63,7 +63,7 @@ def problems(doc):
     if events != {"push", "pull_request", "workflow_dispatch", "schedule"}:
         found.append(f"the events are {sorted(events)}")
     for event in ("push", "pull_request"):
-        if set((on(doc).get(event) or {}).get("paths") or []) < REQUIRED_PATHS:
+        if not REQUIRED_PATHS <= set((on(doc).get(event) or {}).get("paths") or []):
             found.append(f"{event} does not filter on every required path")
     if not (on(doc).get("schedule") or [{}])[0].get("cron"):
         found.append("there is no nightly schedule")
@@ -106,9 +106,10 @@ def broken(change):
         lambda doc: on(doc).pop("schedule") and None,
         lambda doc: on(doc).pop("workflow_dispatch") and None,
         lambda doc: on(doc)["push"].update({"paths": ["observability/**"]}),
+        lambda doc: on(doc)["push"].update({"paths": ["observability/**", "bogus/**"]}),
         lambda doc: doc.update({"name": "observability"}),
     ],
-    ids=["pull_request_target", "a secret", "contents write", "packages write", "an OIDC token", "an environment", "an extra step", "a second job", "no schedule", "no manual run", "a short path list", "another name"],
+    ids=["pull_request_target", "a secret", "contents write", "packages write", "an OIDC token", "an environment", "an extra step", "a second job", "no schedule", "no manual run", "a short path list", "a wrong path in place of the rest", "another name"],
 )
 def test_each_refused_case_fails(change):
     assert broken(change), "the change was not caught"
@@ -137,8 +138,10 @@ def test_once_landed_it_needs_the_publish_trigger_list_but_not_the_required_list
     workflows = {**real_workflows(), LANDED: doc}
     publish = real_workflows()[OWN]
     listed = set(on(publish)["workflow_run"]["workflows"])
-    assert workflow_triggers.list_problems(workflows, listed, OWN) != []  # today: it is not listed
-    assert workflow_triggers.list_problems(workflows, listed | {NAME}, OWN) == []  # listed: fine
+    # Without its name in publish.yml's list it is a problem; with it, none. `listed - {NAME}` keeps this
+    # true after the landing edit to publish.yml, which adds the name.
+    assert workflow_triggers.list_problems(workflows, listed - {NAME}, OWN) != []
+    assert workflow_triggers.list_problems(workflows, listed | {NAME}, OWN) == []
     assert workflow_triggers.required_problems(workflows, set(gate_module.REQUIRED), OWN) == []  # not required
 
 

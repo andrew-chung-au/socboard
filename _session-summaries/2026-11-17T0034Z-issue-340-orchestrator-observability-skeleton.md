@@ -12,7 +12,9 @@
 - `observability/ci/skeleton/`: a Compose file and four configs for the collector, Tempo 3.1.1, Loki 3.7.10 and Prometheus v3.16.0, images pinned by index digest read from the registry on 2026-11-16, all ports on the loopback.
 - `observability/ci/check.sh`: starts the stack, waits, emits with a random trace id, queries, always stops the stack.
 - `observability/ci/proposed/observability.yml`: the workflow, as a file for the CI lane or the maintainer to land (protected path). Its static test also shows how its triggers read in `tests/workflow_triggers.py` and `scripts/publish_gate.py`.
-- Tests: query (22, fake stores), emitter (16, a fake OTLP collector), workflow (16). Decision record `_docs/decisions/2026-11-17T0034Z-observability-ci-entry-point.md` and its index row.
+- Tests: query (22, fake stores), emitter (17, a fake OTLP collector, including a collector that refuses a signal: exit 1), workflow (16). Decision record `_docs/decisions/2026-11-17T0034Z-observability-ci-entry-point.md` and its index row.
+
+QA's first run (PASS, Lows only) found four small things, fixed before the second QA: the path check used a proper-subset test, one workflow test failed once publish.yml was edited, the emitter exited 0 when the collector refused a signal, and this summary said a scratch install was deleted when it was not yet.
 
 **What I learned:** a path-filtered workflow that can run on a push to `main` has to be in publish.yml's trigger list (a test enforces it), so landing this workflow is three edits for the CI lane, not one.
 

@@ -19,14 +19,19 @@ spec.loader.exec_module(emitter)
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 
 
+class Received(list):
+    answers: list  # statuses to answer with, once each; 200 after that
+
+
 @pytest.fixture
 def collector():
-    received = []
+    received = Received()
+    answers = received.answers = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             received.append((self.path, self.rfile.read(int(self.headers.get("Content-Length") or 0))))
-            self.send_response(200)
+            self.send_response(answers.pop(0) if answers else 200)
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -36,7 +41,8 @@ def collector():
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     threading.Thread(target=lambda: server.serve_forever(poll_interval=0.02), daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_address[1]}", received
+    collector_url = f"http://127.0.0.1:{server.server_address[1]}"
+    yield collector_url, received
     server.shutdown()
     server.server_close()
 
@@ -107,3 +113,11 @@ def test_an_endpoint_that_is_not_the_loopback_over_plain_http_is_refused(endpoin
 def test_the_default_endpoint_is_the_loopback_collector_port():
     assert emitter.check_endpoint(emitter.DEFAULT_ENDPOINT) == "http://127.0.0.1:4318"
     assert emitter.check_endpoint("http://localhost:4318/") == "http://localhost:4318"
+
+
+def test_a_collector_that_refuses_a_signal_makes_the_emitter_exit_1_and_not_say_sent(collector, capsys):
+    endpoint, received = collector
+    received.answers.extend([400, 400, 400])  # a refusal is not retried by the exporter
+    assert emitter.main(["--trace-id", TRACE_ID, "--endpoint", endpoint]) == 1
+    captured = capsys.readouterr()
+    assert "sent trace" not in captured.out and "export problem" in captured.err
