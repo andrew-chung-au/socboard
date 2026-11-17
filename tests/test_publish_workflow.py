@@ -149,7 +149,7 @@ def test_a_publish_job_that_checks_out_or_rebuilds_is_refused():
 
 OWN = ".github/workflows/publish.yml"
 # What the files say today (#235). A renamed or removed workflow fails these before anything else does.
-TRIGGER_LIST = {"socboard verify", "socboard postgres", "socboard image", "socboard compose", "terraform check"}
+TRIGGER_LIST = {"socboard verify", "socboard postgres", "socboard image", "socboard compose", "terraform check", "socboard observability"}
 REQUIRED = {"socboard verify", "socboard postgres", "socboard image", "socboard compose"}
 
 
