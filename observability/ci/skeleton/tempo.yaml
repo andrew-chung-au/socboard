@@ -1,6 +1,6 @@
 # Tempo as one process with local storage (#340), from Tempo's own single-binary example. Traces come
 # in over OTLP/HTTP on 4318 (from the collector) and are read by id on 3200.
-# VERIFY: this config runs on grafana/tempo 3.1.1 with -target=all and no Kafka.
+# Settled: this config runs on grafana/tempo 3.1.1 with -target=all and no Kafka (run 44003479301).
 server:
   http_listen_port: 3200
   log_level: info

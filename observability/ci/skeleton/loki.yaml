@@ -1,6 +1,7 @@
 # Loki as one process with local storage (#340). Structured metadata needs schema v13 on the tsdb index
 # and `allow_structured_metadata`; the native OTLP endpoint stores a log record's trace id as structured
-# metadata, which is what query.py checks. VERIFY: on grafana/loki 3.7.10.
+# metadata, which is what query.py checks. Settled on grafana/loki 3.7.10 by `socboard observability` run
+# 44003479301 (2026-11-17): the trace id came back as structured metadata, not a label.
 auth_enabled: false
 
 server:

@@ -11,8 +11,9 @@ image has no shell for a container health check) and exits 1 naming each one tha
 - Tempo: the trace by id (`/api/traces/<id>`, not a search), which must hold a span `ingest.alert`.
 - Loki: `{service_name="socboard"} | trace_id="<id>"`, where `trace_id` must be structured metadata of
   the log line and not a stream label (a label would make a stream per trace). The request asks Loki
-  to say which is which (`X-Loki-Response-Encoding-Flags: categorize-labels`; `VERIFY:` on the Loki
-  version in the skeleton: when the run shows another shape, the check fails and says so).
+  to say which is which (`X-Loki-Response-Encoding-Flags: categorize-labels`; settled on Loki 3.7.10, run 44003479301:
+  the metadata is returned apart from the labels; another version that returns another shape makes the
+  check fail and say so).
 - Prometheus: the exemplar API for `socboard_alert_time_to_queue_seconds_bucket`, where one exemplar
   must carry this trace id.
 
